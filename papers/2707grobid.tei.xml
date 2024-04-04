@@ -1,0 +1,898 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:50+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">JavaScript for Extending Low-latency In-memory Key-value Stores</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tian</forename><surname>Zhang</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Utah</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ryan</forename><surname>Stutsman</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Utah</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">JavaScript for Extending Low-latency In-memory Key-value Stores</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Large scale in-memory key-value stores like RAMCloud can perform millions of operations per second per server with a few microseconds of access latency. However, these systems often only provide simple feature sets, and the lack of extensibility is an obstacle for building higher-level services. We evaluate the possibility of using JavaScript for shipping computation to data and for extending database functionality by comparing against other possible approaches. Microbenchmarks are promising; the V8 JavaScript runtime provides near native performance with reduced isolation costs when compared with native code and hardware-based protections. We conclude with initial thoughts on how this technology can be deployed for fast procedures that operate on in-memory data, that maximize gains from JIT, and that exploit the kernel-bypass DMA capabilities of modern network cards.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Research has led to in-memory key-value stores that scale to hundreds of machines that each perform millions of operations per second with sub-5 µs access times <ref type="bibr" target="#b8">[9,</ref><ref type="bibr" target="#b23">25]</ref>. These systems achieve high performance with a combination of DRAM, RDMA, and simple feature sets. These systems are evolving high-level features like recovery <ref type="bibr" target="#b9">[10,</ref><ref type="bibr" target="#b22">24]</ref>, ordered indexes <ref type="bibr" target="#b13">[15]</ref>, and transactions <ref type="bibr" target="#b9">[10,</ref><ref type="bibr" target="#b15">17]</ref>, but they still lack general mechanisms to support client-supplied logic.</p><p>Even with conventional key-value stores, the lack of extensibility has led to numerous ad-hoc and custom stores, each designed to support a specific application. For example, Facebook's TAO extends memcached to support its social graph data model <ref type="bibr" target="#b4">[5]</ref>. Other systems incorporate elements of SQL <ref type="bibr" target="#b26">[28]</ref>, multi-attribute accesses support for Location Aware Services <ref type="bibr" target="#b21">[23]</ref>, application-specific actions <ref type="bibr" target="#b11">[12]</ref>, value-based access methods <ref type="bibr" target="#b25">[27]</ref>, and consistent multi-key access <ref type="bibr" target="#b6">[7]</ref> on top of key-value stores. In industry, even the popular Redis <ref type="bibr" target="#b0">[1]</ref> key-value store, internally supports several data structures and has added loadable module support.</p><p>As we sought to use RAMCloud as a platform for building other higher-level services, its lack of extensibility was a key limitation. Applications with inter-record dependencies were latency-bound. For example, when fetching one record and using the returned value to fetch another, even RAMCloud's 5 µs round trip time was too high. Clients suffer waiting for responses from the storage server. This is exacerbated by the fact that 5 µs is hard for the client to hide with conventional multithreading; it is long enough that spinning to wait for a response dramatically limits throughput, but it is short enough that context switching to a another thread and back wastes most of the gains <ref type="bibr" target="#b1">[2]</ref>. Throughput-bound applications suffered as well; RAMCloud's simplistic (get/put) operations prevented pushing down operations like projection, selection, and aggregation, which forced massive overheads to transmit large results to apply client-side filtering.</p><p>There are many well-known models for shipping computation to servers but unique properties of how RAMCloud uses hardware and the types of applications it is likely to host were a mismatch with existing approaches. Looking at existing models for loading user code into RAMCloud servers, we considered five key criteria.</p><p>(Near) Native Performance. RAMCloud is fast, since all data is in DRAM; it uses kernel bypass networking, and it continuously polls the network card (NIC). Servers can dispatch an operation in 1.9 µs <ref type="bibr" target="#b23">[25]</ref>. Any slowdown would be immediately apparent to applications and would cut into RAMCloud's primary value. Roughly, two categories of operations capture our performance concerns. The first are compute-bound operations, and the second are memory-bound operations that traverse data structures or that filter or project records. Low Invocation Overhead. In aggregate, a single RAMCloud server might invoke millions of stored procedures per second. If invoking a procedure added a few cache misses (about 100 ns each) to the 1.9 µs dispatch cost, it could reduce server throughput by 10% or more. Runtime Reconfigurable. Low-latency DRAM-based storage is expensive. Many applications and users are likely to share a single, large multi-tenant deployment. Consequently, it is impossible to take the system offline to install new user-provided procedures as some distributed in-memory stores require <ref type="bibr" target="#b0">[1,</ref><ref type="bibr" target="#b8">9]</ref>. Inexpensive Isolation. A single cluster may host thousands of tenants' procedures. Not only must procedure invocation be inexpensive, it must also allow rapid and efficient switching between protection domains. For example, conventional OS and hardware based isolation  <ref type="table">Table 1</ref>: Strengths and weaknesses of different approaches for hosting user-supplied logic within an in-memory database.</p><formula xml:id="formula_0">SQL ✓ ✓ ✓ With ⊲⊳ ✓ DB Supplied Native/C++ ✗ ✗ Hardware ✗ Difficult ✓ JavaScript ✓ ✓ ✓ ✓ ✓ ✓</formula><p>mechanisms are too expensive. On our hardware, a minimal context switch to another process and back takes 2.2 µs, which would double the time it takes for a server to process a basic RAMCloud operation. Low Installation Overhead. Ideally, applications would be able to install and remove procedures with very little overhead. Expensive procedure compilation times limit the ability of applications to install and run "one-shot" procedures.</p><p>We considered several approaches to hosting usersupplied code in low-latency in-memory key-value stores, and we characterize the tradeoffs made by each. Since the high performance of DRAM exposes any overheads in query execution, we initially expected that native code execution with lightweight hardware protections would be essential to the design. However, as we went along we kept coming back to the question: why not JavaScript?</p><p>Just-in-time (JIT) compilation means JavaScript has the potential to deliver near native performance. Isolation is a concern in browsers as well, so runtimes also expose protection domains and allow the host process to switch between them without special instructions or expensive traps. And, JIT makes JavaScript functions easy to install at runtime. An added bonus stems from the fact that JavaScript is the lingua franca of web development; pushing compute to storage via JavaScript is popular in many low performance stores, since it unifies the frontend, business logic, and storage programming languages <ref type="bibr" target="#b19">[21]</ref>.</p><p>JIT also provides an alternative way of running procedures written in C++ by compiling them to asm.js, a subset of JavaScript that maximizes the efficiency of the underlying JIT output <ref type="bibr" target="#b5">[6]</ref>. Asm.js code loads fast, runs fast, and it retains the isolation benefits of the JavaScript runtime. Those who care most about performance can implement procedures in C++ to achieve better performance than vanilla JavaScript.</p><p>Can JIT bring these benefits to RAMCloud? The key questions are whether a) JavaScript can provide nearnative speed for data-intensive loads, b) transitions between database logic and user logic are fast, and c) "context switches" between isolated runtimes are fast.</p><p>In this work, we take initial steps to answer these questions. First, we describe different approaches that could be used to push client logic into in-memory key-value stores, and we discuss their tradeoffs. Second, we perform several microbenchmarks to gage the suitability of the V8 JavaScript runtime <ref type="bibr">[13]</ref> as a stored procedure runtime for RAMCloud. We find several simple procedures we try incur about a 2-10% slowdown versus native C++ code but that the cost of entering/exiting the runtime is 11.4-72× faster for JavaScript; compared to the cost of invoking native code isolated at the hardware or process level, JavaScript is a strong fit for many types of applications.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">The Candidates</head><p>Shipping computation to data is a long-studied area, but low-latency stores work at odds with existing approaches. A key aspect of scale-out analytics frameworks like MapReduce <ref type="bibr" target="#b7">[8]</ref> and Spark <ref type="bibr" target="#b28">[30]</ref> is packaging and shipping code to bulk data to minimize communication costs. In these systems queries are massive, so latency is not a consideration. For example, these frameworks can take minutes before any actual data processing begins <ref type="bibr" target="#b7">[8]</ref>. <ref type="table">Table 1</ref> summarizes the tradeoffs of different approaches for stored procedures; more details are given about each approach below. The left columns characterize the cost of installing new procedures, entering/exiting procedures, and context switch between procedures in different protection domains. The right columns characterize the fit of each approach for different types of procedures. The first type are procedures that "chase" data dependencies. For example, user profiles in a users table might be indexed by user-id and each profile might contain the user-ids of friends. Given a user-id, a procedure might return all of the profiles of the friends of that user with a single request, avoiding extra round trips to the key-value store. Such procedures are short and require fast runtime entry/exit to be efficient. Other data-intensive procedures may process many values, and compute-bound procedures may perform expensive functions on the data before returning results. These types of procedures are sensitive to runtime overhead and compiler optimizations.</p><p>SQL. SQL is a declarative query language used with both analytics (OLAP) and transaction processing (OLTP) workloads that also supports use as a stored procedure language. SQL may be the single most widely used approach to ship computation to data storage. In-memory databases focused on combined analytic and transactional workloads have placed tremendous pressure on high performance SQL, resulting in approaches that infuse JIT and compiler technology into conventional SQL query processing <ref type="bibr" target="#b10">[11,</ref><ref type="bibr" target="#b20">22]</ref>. JIT blurs the line between the database and user code; queries run fast, and calls back-and-forth between the database and user logic are inexpensive. SQL is type safe, so it also facilitates lightweight isolation. Overall, the SQL's main drawback is that it is declarative. For most workloads, this is a benefit, since the database can use runtime information for query optimization; however, this also limits its generality. For example, implementing new database functionality, new operators, or complex algorithms in SQL is difficult and inefficient.</p><p>C++/Native Code. Using native code in low-latency inmemory stores is attractive. It works well for computebound tasks, and, seemingly, it should work well for dataintensive tasks too. The challenge with native code is preventing bugs from crashing the database and protecting against malicious procedures. We considered several approaches including running procedures in separate processes, software fault isolation, and techniques that abuse hardware virtualization features ( §3.2). These techniques show little slow down while running code, but they greatly increase the cost of control transfer between user-supplied code and database code. For example, process-based isolation means procedure invocation requires an OS context switch (thousands of nanoseconds) both on entry and exit. In RAMCloud, many operations take less than 2 µs, so even just invocation costs dramatically impact performance. Worse, a single procedure call may access millions or billions of records (for example, selections, projections, or aggregations); if a procedure called into the database for each record, it would be prohibitive.</p><p>JavaScript. JavaScript has the potential to overcome these limitations. It is safe and sandboxed, it doesn't require hardware protections that impede domain switches, and JIT can make compute-bound tasks fast. To see if JavaScript will work well, we explore its overheads through a series of microbenchmarks.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Microbenchmarks</head><p>Experiments are run on an Intel Xeon E5-2630 v3 (Haswell) at 2.40 GHz with 64 GB of DDR4 running at 2133 MHz (an Emulab <ref type="bibr" target="#b24">[26,</ref><ref type="bibr" target="#b27">29]</ref> Dell D430) with Ubuntu Linux.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Installation, Invocation &amp; Entry/Exit Costs</head><p>Each procedure mechanism incurs three forms of invocation overhead: the cost to compile/install a procedure, the cost to invoke the procedure, and the cost for the procedure to invoke database functionality. We do not consider garbage collection costs, since short-lived invocations will not be interrupted, which can support an inexpen-   sive, stack-like allocation strategy. To better understand these costs, we first test a no-op JavaScript procedure (function () {}) invoked from a C++ host processs.</p><p>Creating a new context in the V8 runtime takes 889 µs, which takes 17% longer than forking a separate process for isolation. This is a one time cost that has little impact as long as tenants can reuse contexts from call to call. Conversely, invoking the JavaScript procedure from C++ takes 196 ns; whereas, invoking a procedure in another hardware-protected process takes 2×1,121 ns ( §3.2). So, JavaScript is 11.4× faster on this key metric.</p><p>More importantly, procedures must be able to invoke database routines to access data; a no-op C++ function can be called from JavaScript in just 31 ns. This is critical for functions that touch millions or billions of records scattered across gigabytes of RAM. Hardware protection would be 72× slower than using JavaScript, since it requires thousands of cycles per record access.</p><p>For example, <ref type="figure" target="#fig_0">Figure 1</ref> shows a simple procedure that fetches one value based on the contents of another. In addition to the cost of procedure invocation, this procedure must call into the database and back twice. Using processes for isolation requires six OS context switches (entry and exit for the procedure and two gets) at 1,121 ns for a total of 6.7 µs. Boundary crossing overheads alone increase the time it would take to process such a request by 26× compared to using JavaScript, which only requires 258 ns (196 ns for invocation and 31 ns for each database routine).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Isolation</head><p>In V8, many applications can safely share a single runtime instance; to do this, each application allocates its own context, which is passed to the runtime on invocation <ref type="bibr" target="#b12">[14]</ref>. Hosts of V8 can multiplex applications by switching between contexts, just as conventional protection is implemented in the OS as process context switch. We compared the cost of a V8 context switch to other approaches; the results are shown in <ref type="table" target="#tab_2">Table 2</ref>. The time shown is the time taken to cross a protection domain boundary to enter a (no-op) tenant procedure starting from the C++ host process. A V8 context switch is just 8.7% of the cost of conventional a process context switch.</p><p>We also explored exotic approaches to hardware protection to lower costs. One approach is sthreads <ref type="bibr" target="#b3">[4]</ref>, which provide fork-like isolation with thread-like context switch costs. Its costs were carefully minimized by using Dune <ref type="bibr" target="#b2">[3]</ref> to give the sandbox direct control over kernel state via hardware virtualization support. Even with these aggressive optimizations, V8 context switch time is comparable to sthread context switch time. We also tried VMFUNC, an Intel virtualization instruction that lets VMs swap their underlying extended page tables (physical-to-machine page mappings) without kernel or hyper calls. Alone, it is insufficient for sandboxing, but others have used it to isolate untrusted code <ref type="bibr" target="#b16">[18]</ref>. On our hardware, VMFUNC alone takes 138 ns even without the needed functionality for isolation and correct execution, already making it nearly as costly as sthreads.</p><p>The low context switch cost of V8 is attractive for our target environment where we expect large numbers of tenants to share the database system. V8 will allow more tenants, and it will allow more of them to be active at a time at a lower cost.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">Memory and Compute-bound Procedures</head><p>Procedures suffer overheads at runtime entry/exit, but with JavaScript they also suffer overhead as they run. For example, the JIT compiler doesn't optimize as aggressively as a conventional C++ compiler; it includes overheads from garbage collection; and the lack of strong typing increases the number of branches needed, since all member accesses must be prepared to deal with objects of differing type. A full analysis of all of the types of procedures RAMCloud should support is challenging; here, we illustrate with some simple examples. <ref type="figure" target="#fig_1">Figure 2</ref> shows the results. Each plot shows the performance of a procedure written in both C++ and JavaScript that operates over a relation and performs logic equivalent to a small SQL query. Each query processes 1 GB of records that each consist of 16 32-bit integers consecutive in memory. The selectivity (x-axis) of each query is varied by changing the number of values in the relation that match the predicate A &lt; x. Q1 is limited by scan speed; it performs little compute and outputs one value. Q2 performs little compute, but it outputs a percentage of the values given on the x-axis. Q3 is similar to Q2 but reads more fields from each record. Q4 performs three floating point pow operations and is compute bound.</p><p>In Q1, Q2, and Q3 suffer most when selectivity is 50%. This is a well-known phenomenon for selection scans <ref type="bibr" target="#b29">[31]</ref>; at 50% branch prediction breaks down and thwarts CPU speculation. It is reassuring that JavaScript implementations exhibit this behavior, since it shows they are efficient enough to exhibit performance that is attributable low-level architectural issues. On average JavaScript is 18%, 27%, and 39% slower for Q1, Q2, and Q3, respectively. These functions are mostly memorybound with Q2 and Q3 being more so. Q4 is compute bound and is 2.2× faster in JavaScript than the native version which relies on glibc's pow implementation. <ref type="figure" target="#fig_1">Figure 2</ref> contains a third line that represents the performance of each of the queries when they are written in C++, compiled to asm.js, and run inside V8. On average asm.js is just 10%, 2%, 7%, and 5% slower for each query respectively. Notice, Q4's performance degrades to match the original C++ performance; this is because the slower pow from glibc is compiled in. These results suggest that asm.js may be sufficient for applications that need the highest performance. More exploration is needed to determine how fragile these results are, especially for more complex operations.</p><p>There are two key takeaways from our analysis:</p><p>1. Procedure invocation and interactions between JavaScript and the host database process are 11.4× and 72× faster than using native code and hardwarebased protections. Short and data-intensive procedures will benefit from JavaScript.  <ref type="figure">Figure 3</ref>: A core dispatches incoming requests to a worker core that runs the requested procedure with V8. The procedure fetches and filters a gather list of records that it passes to the NIC, which issues zero-copy DMA requests for the records.</p><p>2. V8 with asm.js is only 2-10% slower than native code, so compute-bound workloads are okay thanks to aggressive compiler optimization. V8 is harder on CPU branch prediction than native code.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Design for Efficiency</head><p>Our initial experiments are encouraging; careful embedding of JavaScript into RAMCloud promises to accelerate many of the applications we would like to build on top of it. They have also clarified that how we embed the runtime will impact its performance. <ref type="figure">Figure 3</ref> gives an overview of how we envision V8 can be embedded into a low-latency request processing flow while minimizing data copying, maximizing JIT optimization opportunities, and using modern kernel-bypass networking. Five key features drive its design.</p><p>Leverage JavaScript Types and JIT. Database state must be protected. With native code it would be impossible to provide fine-grained direct access to database records unless tenant state were strictly partitioned among memory pages. With JavaScript, the database can safely return pointers to records and rely on the runtime to enforce access boundaries. As a result, JavaScript stored procedures can avoid extra memcpy overhead and can work with records directly where they live. To do this, RAMCloud will export new scatter-gather list abstractions to JavaScript similar to mbufs <ref type="bibr" target="#b18">[20]</ref>. A major advantage of this approach is that the JavaScript runtime is aware of references, so the JIT can optimize around the underlying types of the records and fields being exposed to it. For example, the JIT will be able to fully exploit instruction-level parallelism and low-level hardware features like SIMD instructions when processing database records as a result.</p><p>Minimize Data Movement. This also leads to a second powerful optimization: since many procedures will manifest as a set of transformations on these scatter-gather lists, JavaScript procedures will be able to pass them to the database which can forward them directly to the network card for zero-copy DMA <ref type="bibr" target="#b14">[16]</ref>. That is, JavaScript routines will be able to transmit results to clients that the CPU has never touched. For example, this can result in significant savings for operations that select wide records using a small number of subfields. Exploit Semantics for Garbage Collection. In a lowlatency store, procedures are invoked as part of a requestresponse cycle and most complete quickly. This can be exploited to eliminate garbage collection except in the cases where a procedure runs for long periods. Eliminating garbage collection improves performance and significantly improves jitter <ref type="bibr" target="#b17">[19]</ref>. Expose Database Abstractions. JavaScript procedures will have access to the full capabilities of the RAMCloud process in which they are embedded. Using RAMCloud's recovery logging facilities, it should be possible to implement interesting functionalities; for example, JavaScript procedures may be able to implement transactions, indexes, triggers, and pub/sub callbacks. Fast Protection Domain Switch. Finally, tenant runtime state can be kept lightweight, so each server should be able to efficiently manage tens of thousands of tenants. We are also considering allowing tenant JavaScript runtime state to be made persistent using RAMCloud's fast remote replication protocol.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Conclusions and Looking Forward</head><p>Developing new systems and applications on RAMCloud, we have repeatedly run into the need to push computation into storage servers. The low latency and low overhead of in-memory storage and fast networking led us to think native code was the right approach to extending the storage nodes. However, we kept coming back to JavaScript.</p><p>After an initial analysis of its costs and overheads, it still seems promising. Its low invocation and isolation costs combined with safe, direct client access to fine-grained database state make it appealing. Our next goal is to embed V8 into the RAMCloud server; to develop a smart API for procedures that exposes rich, low-level database functionality; and to begin experimenting with realistic and large-scale applications.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Discussion Topics</head><p>Setting out to build a stored procedure system for RAMCloud, we initially expected native code and novel hardware isolation mechanisms might be needed for high performance. After our initial assessment, we are no longer convinced that is the best route. JavaScript/V8 now seems to be a strong isolation mechanism that is ubiquitous, well-optimized, and can still even support fast languages like C/C++ (through asm.js).</p><p>The first key point of discussion this idea raises is whether JavaScript is a good model for pushing computation to low-latency in-memory storage. More generally, is an extensible low-latency in-memory key-value store a useful building block? If such system were available, what interesting applications could be built with it and benefit from it? We have some specific applications in mind. For example, distributed concurrency control operations, relational algebra operators, materialized view maintenance, partitioned bulk data processing as in MapReduce, and custom data models like Facebook's TAO can all be implemented as extensions.</p><p>Secondly, for now we are optimistic about V8, but JavaScript/V8 performance is likely to be more fragile than approaches that rely on hardware protection. We saw this ourselves in our microbenchmarks. One key question that must be assessed for JavaScript to be successful in a low-latency multi-tenant store is what types of procedures are likely to perform poorly in V8? Are those cases prohibitive?</p><p>Thirdly, a point of discussion this idea is likely to surface is how much fast kernel-bypass networking and inmemory data change the picture. JavaScript for databases/stored procedures is not new, but the constants have all changed. For example, we believe this puts pressure on the boundaries between the host environment and the JavaScript runtime that are less pronounced in other systems. We are eager to understand where this creates interesting challenges and where this combination simply results in straightforward engineering issues.</p><p>Finally, we are still seeking a better understanding of other isolation approaches, particularly for latency sensitive and short operations, to see if we have missed obvious, promising comparisons. For example, other software fault isolation techniques like Native Client could also make sense, but so far V8 has been promising enough that we have focused our exploration there.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: The chase procedure requires six runtime crossings.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: C++ and JavaScript procedures running simple queries over 1 GB of 64 B records.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_2" validated="false"><head>Table 2 :</head><label>2</label><figDesc></figDesc><table>Installation and context switch cost; 1. VMFUNC only 
+includes the cost of the instruction, not the full context switch; 
+2. sthread times are from [3]. 
+
+</table></figure>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgments</head><p>This material is based upon work supported by the National Science Foundation under Grant No. CNS-1566175. Any opinions, findings, and conclusions or recommendations expressed in this material are those of the author(s) and do not necessarily reflect the views of the National Science Foundation.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Redis</surname></persName>
+		</author>
+		<ptr target="http://redis.io/.7/24/2015" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Barroso</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Marty</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Patterson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Ranganathan</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Attack of the Killer Microseconds. Communications of the ACM</title>
+		<imprint>
+			<biblScope unit="volume">60</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="48" to="54" />
+			<date type="published" when="2017-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">Dune: Safe Userlevel Access to Privileged CPU Features</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Belay</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Bittau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Mashtizadeh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Terei</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Mazières</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Kozyrakis</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Presented as part of the 10th USENIX Symposium on Operating Systems Design and Implementation (OSDI 12)</title>
+		<meeting><address><addrLine>Hollywood, CA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX</publisher>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="335" to="348" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Wedge: Splitting Applications into Reducedprivilege Compartments</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Bittau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Marchenko</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Handley</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Karp</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 5th USENIX Symposium on Networked Systems Design and Implementation, NSDI&apos;08</title>
+		<meeting>the 5th USENIX Symposium on Networked Systems Design and Implementation, NSDI&apos;08<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2008" />
+			<biblScope unit="page" from="309" to="322" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">TAO: Facebook&apos;s Distributed Data Store for the Social Graph</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Bronson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Amsden</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Cabrera</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Chakka</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Dimov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Ding</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Ferris</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Giardullo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Kulkarni</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Marchukov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Petrov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Puzar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><forename type="middle">J</forename><surname>Song</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Venkataramani</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Presented as part of the 2013 USENIX Annual Technical Conference (USENIX ATC 13)</title>
+		<meeting><address><addrLine>San Jose, CA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX</publisher>
+			<date type="published" when="2013" />
+			<biblScope unit="page" from="49" to="60" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Herman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Wagner</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Zakai</surname></persName>
+		</author>
+		<ptr target="http://asmjs.org/spec/latest" />
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">G-store: a scalable data store for transactional multi key access in the cloud</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Das</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Agrawal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">El</forename><surname>Abbadi</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 1st ACM symposium on Cloud computing</title>
+		<meeting>the 1st ACM symposium on Cloud computing</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="163" to="174" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">MapReduce: Simplified Data Processing on Large Clusters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Dean</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Ghemawat</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 6th Conference on Symposium on Opearting Systems Design &amp; Implementation</title>
+		<meeting>the 6th Conference on Symposium on Opearting Systems Design &amp; Implementation<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2004" />
+			<biblScope unit="volume">6</biblScope>
+			<biblScope unit="page" from="10" to="10" />
+		</imprint>
+	</monogr>
+	<note>OSDI&apos;04</note>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">FaRM: Fast Remote Memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Dragojevi´cdragojevi´c</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Narayanan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Castro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O</forename><surname>Hodson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">11th USENIX Symposium on Networked Systems Design and Implementation (NSDI 14)</title>
+		<meeting><address><addrLine>Seattle, WA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2014-04" />
+			<biblScope unit="page" from="401" to="414" />
+		</imprint>
+	</monogr>
+	<note>USENIX Association</note>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">No compromises: distributed transactions with consistency, availability, and performance</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Dragojevi´cdragojevi´c</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Narayanan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">B</forename><surname>Nightingale</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Renzelmann</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Shamis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Badam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Castro</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP</title>
+		<imprint>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="85" to="100" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Compilation in the Microsoft SQL Server Hekaton Engine</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Freedman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Ismert</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Larson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Data Engineering Bulletin</title>
+		<imprint>
+			<biblScope unit="volume">37</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="22" to="30" />
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Comet: An active distributed key-value store</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Geambasu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">A</forename><surname>Levy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Kohno</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Krishnamurthy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">M</forename><surname>Levy</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI</title>
+		<imprint>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="323" to="336" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Google</forename><surname>Inc</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Embedder&amp;apos;s Guide</surname></persName>
+		</author>
+		<ptr target="http://github.com/v8/v8/wiki/Embedder%27s-Guide" />
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">SLIK: Scalable Low-Latency Indexes for a Key-Value Store</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Kejriwal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Gopalan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Gupta</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Jia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Ousterhout</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2016 USENIX Annual Technical Conference (USENIX ATC 16)</title>
+		<meeting><address><addrLine>Denver, CO</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2016-06" />
+			<biblScope unit="page" from="57" to="70" />
+		</imprint>
+	</monogr>
+<note type="report_type">USENIX Association</note>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">To Copy or Not to Copy: Making In-Memory Databases Fast on Modern NICs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Kesavan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Ricci</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Stutsman</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 4th VLDB Workshop on In-Memory Data Management and Analytics, IMDM &apos;16</title>
+		<meeting>the 4th VLDB Workshop on In-Memory Data Management and Analytics, IMDM &apos;16</meeting>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Implementing linearizability at large scale and low latency</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">J</forename><surname>Park</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Kejriwal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Matsushita</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Ousterhout</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 25th Symposium on Operating Systems Principles, SOSP &apos;15</title>
+		<meeting>the 25th Symposium on Operating Systems Principles, SOSP &apos;15<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="71" to="86" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">Thwarting memory disclosure with efficient hypervisor-enforced intra-domain isolation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Zhou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Xia</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 22nd ACM SIGSAC Conference on Computer and Communications Security</title>
+		<meeting>the 22nd ACM SIGSAC Conference on Computer and Communications Security</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="1607" to="1619" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Trash Day: Coordinating Garbage Collection in Distributed Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Maas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Harris</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Asanovi´casanovi´c</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Kubiatowicz</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">15th Workshop on Hot Topics in Operating Systems (HotOS XV)</title>
+		<meeting><address><addrLine>Switzerland</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<monogr>
+		<title level="m" type="main">Watson. The Design and Implementation of the FreeBSD Operating System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">K</forename><surname>Mckusick</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">V</forename><surname>Neville-Neil</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">N</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2014" />
+			<publisher>Pearson Education</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<monogr>
+		<title level="m" type="main">MongoDB for GIANT Ideas | MongoDB</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Inc</forename><surname>Mongodb</surname></persName>
+		</author>
+		<ptr target="http://www.mongodb.com" />
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Efficiently Compiling Efficient Query Plans for Modern Hardware</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Neumann</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the VLDB Endowment</title>
+		<meeting>the VLDB Endowment</meeting>
+		<imprint>
+			<date type="published" when="2011" />
+			<biblScope unit="volume">4</biblScope>
+			<biblScope unit="page" from="539" to="550" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">Md-hbase: A scalable multi-dimensional data infrastructure for location aware services</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Nishimura</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Das</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Agrawal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">El</forename><surname>Abbadi</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">12th IEEE International Conference on</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2011" />
+			<biblScope unit="volume">1</biblScope>
+			<biblScope unit="page" from="7" to="16" />
+		</imprint>
+	</monogr>
+	<note>Mobile Data Management (MDM)</note>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Fast Crash Recovery in RAMCloud</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Ongaro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">M</forename><surname>Rumble</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Stutsman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Ousterhout</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Rosenblum</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Twenty-Third ACM Symposium on Operating Systems Principles</title>
+		<meeting>the Twenty-Third ACM Symposium on Operating Systems Principles</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2011" />
+			<biblScope unit="page" from="29" to="41" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">The RAMCloud Storage System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Ousterhout</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Gopalan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Gupta</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Kejriwal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Montazeri</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Ongaro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">J</forename><surname>Park</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Qin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Rosenblum</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Rumble</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Stutsman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Yang</surname></persName>
+		</author>
+		<idno>7:1-7:55</idno>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Computer Systems</title>
+		<imprint>
+			<biblScope unit="volume">33</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<date type="published" when="2015-08" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<monogr>
+		<title level="m" type="main">Introducing CloudLab: Scientific Infrastructure for Advancing Cloud Architecturesand Applications. ; login</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Ricci</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Eide</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="volume">39</biblScope>
+			<biblScope unit="page" from="36" to="38" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<monogr>
+		<title level="m" type="main">Write-optimized indexing for log-structured keyvalue stores</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Tang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Iyengar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Tan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Fong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Liu</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+		<respStmt>
+			<orgName>Georgia Institute of Technology</orgName>
+		</respStmt>
+	</monogr>
+<note type="report_type">Technical report</note>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<monogr>
+				<ptr target="http://cassandra.apache.org/" />
+		<title level="m">The Apache Software Foundation. Apache Cassandra</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<analytic>
+		<title level="a" type="main">An integrated experimental environment for distributed systems and networks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>White</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Lepreau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Stoller</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Ricci</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Guruprasad</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Newbold</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Hibler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Barb</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Joglekar</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the Fifth Symposium on Operating Systems Design and Implementation</title>
+		<meeting>of the Fifth Symposium on Operating Systems Design and Implementation</meeting>
+		<imprint>
+			<date type="published" when="2002" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Resilient Distributed Datasets: A Fault-Tolerant Abstraction for In-Memory Cluster Computing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Zaharia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Chowdhury</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Das</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Dave</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Ma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Mccauly</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">J</forename><surname>Franklin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Shenker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Stoica</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Presented as part of the 9th USENIX Symposium on Networked Systems Design and Implementation (NSDI 12)</title>
+		<meeting><address><addrLine>San Jose, CA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX</publisher>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="15" to="28" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<analytic>
+		<title level="a" type="main">Selection on Modern CPUs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Zeuch</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J.-C</forename><surname>Freytag</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 3rd VLDB Workshop on In-Memory Data Management and Analytics, IMDM &apos;15</title>
+		<meeting>the 3rd VLDB Workshop on In-Memory Data Management and Analytics, IMDM &apos;15<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2015" />
+			<biblScope unit="volume">5</biblScope>
+			<biblScope unit="page" from="1" to="5" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

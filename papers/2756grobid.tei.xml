@@ -1,0 +1,976 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:51+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Auto-sizing for Stream Processing Applications at LinkedIn</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rayman</forename><forename type="middle">Preet</forename><surname>Singh</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">LinkedIn Corp</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bharath</forename><surname>Kumarasubramanian</surname></persName>
+							<email>bkumarasubramanian@linkedin.com</email>
+							<affiliation key="aff0">
+								<orgName type="institution">LinkedIn Corp</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Prateek</forename><surname>Maheshwari</surname></persName>
+							<email>pmaheshwari@linkedin.com</email>
+							<affiliation key="aff0">
+								<orgName type="institution">LinkedIn Corp</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Samarth</forename><surname>Shetty</surname></persName>
+							<email>sshetty@linkedin.com</email>
+							<affiliation key="aff0">
+								<orgName type="institution">LinkedIn Corp</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Auto-sizing for Stream Processing Applications at LinkedIn</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Stream processing as a platform-as-a-service (PaaS) offering is used at LinkedIn to host thousands of business-critical applications. This requires service owners to manage applications&apos; resource sizing and tuning. Unfortunately, applications have diverged from their conventional model of a directed acyclic graph (DAG) of operators and incorporate multiple other func-tionalities, which presents numerous challenges for sizing. We present a controller that dynamically controls applications&apos; resource sizing while accounting for diverse functionalities, load variations, and service dependencies, to maximize cluster utilization and minimize cost. We discuss the challenges and opportunities in designing such a controller.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Stream processing systems such as Spark Streaming <ref type="bibr" target="#b36">[39]</ref>, Flink <ref type="bibr" target="#b1">[3]</ref>, Heron <ref type="bibr" target="#b28">[31]</ref>, Samza <ref type="bibr" target="#b32">[35]</ref>, and Puma <ref type="bibr" target="#b20">[23]</ref> are widely employed in the industry to cater to a wide variety of realtime data processing applications <ref type="bibr" target="#b1">[3,</ref><ref type="bibr" target="#b20">23,</ref><ref type="bibr" target="#b28">31,</ref><ref type="bibr" target="#b32">35]</ref>. Examples of such applications at LinkedIn include those that serve user-notifications <ref type="bibr" target="#b32">[35]</ref>, monitor service latencies <ref type="bibr" target="#b32">[35]</ref>, detect fraud/abuse <ref type="bibr" target="#b9">[11]</ref>, and many others <ref type="bibr" target="#b32">[35]</ref>.</p><p>At LinkedIn stream processing is offered using the platform as a service (PaaS) model to application developers, data scientists, and other users. This allows for increased development agility because users focus solely on devising their applications, while the service bears the onus of maintaining scalability, availability, resource efficiency, security, isolation, fairness, and other properties for the applications. LinkedIn's stream processing service today hosts thousands of such applications, processing millions of messages per second and hundreds of gigabytes of data per second.</p><p>This approach requires the service to manage the applications' resource sizing, such as, the amount of memory and CPU assigned, and other tuning, such as, the level of parallelism, heap memory allocations, and other parameters <ref type="bibr" target="#b17">[20]</ref>. In doing so, the service aims to meet the applications' throughput and latency requirements in the face of input load variations, variations in the performance characteristics of applications' dependencies such as Key-Value, blob storage, or other web services, environmental variations such as network latency increases, application and hardware evolution, while maximizing cluster utilization and minimizing cost.</p><p>While over-allocation of resources to applications (or oversizing) can help tolerate input load increases, it leads to lower resource utilization and higher cost. Similarly, under-sizing leads to decreased throughput and/or increased latency, or worse, result in processing stalls causing high tail-latency. The solution therefore, similar to other cloud services, lies in dynamically sizing applications <ref type="bibr" target="#b27">[30,</ref><ref type="bibr" target="#b30">33,</ref><ref type="bibr" target="#b31">34,</ref><ref type="bibr" target="#b33">36]</ref>. Note that, such sizing decisions are different from those required for resource placements, which are typically delegated to clusterwide resource schedulers like YARN <ref type="bibr" target="#b2">[4]</ref>, <ref type="bibr">Kubernetes [13]</ref>, or Mesos <ref type="bibr" target="#b26">[29]</ref> that bear the onus of managing isolation, fairness, and fragmentation of cluster resources <ref type="bibr" target="#b22">[25,</ref><ref type="bibr" target="#b25">28]</ref>.</p><p>Existing work on scaling controllers for stream processing systems focuses on scaling parallelism for meeting applications' latency and throughput goals <ref type="bibr" target="#b17">[20,</ref><ref type="bibr" target="#b23">26,</ref><ref type="bibr" target="#b24">27,</ref><ref type="bibr" target="#b27">30,</ref><ref type="bibr" target="#b29">32,</ref><ref type="bibr" target="#b31">34,</ref><ref type="bibr" target="#b35">38]</ref> while modeling applications as a DAG of operators. However, as we detail in Sections 2 and 3, production stream applications have diverged from this model in multiple ways causing them to have heterogeneous performance characteristics. For example, applications use remote services, maintain state, use user-defined functions and external frameworks <ref type="bibr" target="#b8">[10,</ref><ref type="bibr" target="#b15">18]</ref>, and combine different functionalities. Consequently, only tuning applications' parallelism without taking into account other sizing parameters, service dependencies, and environmental variables, typically leads to under-sized applications causing lowered throughput, increased latencies, and processing stalls.</p><p>We analyze the wide variety of production stream processing applications at LinkedIn, and formulate the key challenges in building a controller that right sizes production stream applications (Sec 3). To explore these challenges concretely, we prototype Sage, an auto-sizing controller for continuousoperator stream processing systems like Samza <ref type="bibr" target="#b32">[35]</ref> and Flink <ref type="bibr" target="#b1">[3]</ref>. Sage is a work-in-progress that uses a rule-based approach to make sizing decisions about production applications, while accounting for applications' heterogeneous performance characteristics, their dependency on other services, and correlations in their use of CPU and memory resources.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Background and Related Work</head><p>Stream processing systems can broadly be classified into two types -(i) bulk-synchronous parallel (BSP) <ref type="bibr" target="#b34">[37]</ref> systems such as Spark Streaming <ref type="bibr" target="#b36">[39]</ref> and Google-Dataflow <ref type="bibr" target="#b16">[19]</ref>, and (ii) long-running or continuous operator (CO) <ref type="bibr" target="#b34">[37]</ref> such as Apache Flink <ref type="bibr" target="#b1">[3]</ref> or Apache Samza <ref type="bibr" target="#b4">[6,</ref><ref type="bibr" target="#b32">35]</ref>. BSP systems convert streams into micro-batches (e.g., based on time) that are scheduled for processing by the underlying processing framework. In contrast, CO systems host long-running computations that directly consume streams from Kafka <ref type="bibr" target="#b3">[5]</ref>, EventHub <ref type="bibr">[14]</ref>, and other sources. Both types of systems rely on input checkpoints for fault tolerance and offer comparable correctness guarantees (e.g., at least-once <ref type="bibr" target="#b32">[35]</ref>, exactly once <ref type="bibr" target="#b19">[22]</ref>). However, CO systems provide lower latency <ref type="bibr" target="#b34">[37]</ref>, in our experience are relatively easier to operate in production.</p><p>Multi-tenant CO systems typically use cluster-managers to manage the allocation of cluster resources to applications. Examples of such cluster-managers include Kubernetes <ref type="bibr" target="#b11">[13]</ref>, Borg <ref type="bibr" target="#b33">[36]</ref>, YARN <ref type="bibr" target="#b2">[4]</ref>, and Mesos <ref type="bibr" target="#b26">[29]</ref>. Applications are allocated resources in equal-sized units called containers, with each container mapping to a subset of memory and CPU of a host's resources. Applications bear the onus of requesting the appropriate amount of resources, such as, the number of containers, container memory and CPU-cores size. In addition, applications also specify certain other parameters such as heap and native memory allocation (for Java applications), paralellism-related parameters <ref type="bibr" target="#b27">[30]</ref>, and other parameters required by the underlying CO system <ref type="bibr" target="#b17">[20]</ref>. We collectively refer to these parameters as sizing parameters.</p><p>Existing work on resource sizing for stream applications models them as combinations of well-known operators (such as, map, filter, join, etc) organized as a DAG, and use the model to tune their parallelism <ref type="bibr" target="#b17">[20,</ref><ref type="bibr" target="#b23">26,</ref><ref type="bibr" target="#b24">27,</ref><ref type="bibr" target="#b27">30,</ref><ref type="bibr" target="#b29">32,</ref><ref type="bibr" target="#b31">34,</ref><ref type="bibr" target="#b35">38]</ref>, e.g., using linear throughput models <ref type="bibr" target="#b31">[34]</ref>. However, as <ref type="figure" target="#fig_0">Figures 1  and 2</ref> show, stream applications have evolved beyond this DAG to have multiple additional functionalities. As described in Sec 3, applications are heterogenous in their combination of these functionalities, due to which tuning is required for all their sizing parameters in addition to parallelism. Other work <ref type="bibr" target="#b24">[27,</ref><ref type="bibr" target="#b29">32]</ref> uses queuing theory to tune parallelism but assumes specific distributions of arrival rates and service times, e.g, Poisson, exponential. However, applications can have significantly different distributions (e.g., multi-modal, heavytailed) as shown in <ref type="figure" target="#fig_2">Figures 3 and 4</ref> for selected representative applications. Therefore such model-based approaches have limited applicability for our application workloads.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Challenges and Requirements</head><p>Stream processing applications are conventionally modeled as a DAG of operators with predictable latency and throughput characteristics <ref type="bibr" target="#b23">[26,</ref><ref type="bibr" target="#b31">34,</ref><ref type="bibr" target="#b35">38]</ref>. However, applications have   evolved from this model in many ways, due to which their resource footprint, performance, and workload characteristics vary significantly and present the following challenges.</p><p>Applications using remote services <ref type="figure" target="#fig_0">Figure 1</ref> shows the different components of a stream application. For processing an input tuple, in addition to their operator DAG, applications may invoke operations on a remote KV-storage, blob-storage, or other services (either synchronously or asynchronously). For example, an application processing user-profile update streams, may invoke services that control user-notifications, detect suspicious content, monitor duplicates in streams, update metadata related to user interactions, etc. For efficiency, applications may buffer reads/writes to batch them. Moreover, applications may maintain local state (such as for counters and windows) using persistent stores like RocksDB <ref type="bibr" target="#b12">[15]</ref>, which may be replicated to remote storage <ref type="bibr" target="#b32">[35]</ref>.</p><p>The service-time and throughput of such an application depends on input load variations (illustrated in <ref type="figure" target="#fig_4">Figure 5</ref>) and on variations in the latency and error-rates (or retries) of   the remote service. Latency and error-rate increases can last from a few seconds to several minutes. The controller should therefore be able to differentiate such scenarios, because while scaling up parallelism may reduce backlog caused due to input load increase, it may be ineffective, wasteful and even detrimental <ref type="bibr" target="#b31">[34]</ref> in case of a faltering remote service. <ref type="figure" target="#fig_3">Figure 4</ref> shows the service-time of an application using remote services (labeled App 1) compared to that using only an operator DAG (App 2) comprised of the partition-by, map, flat-map, send-to and merge operators. App 1 shows a relatively high variance in its service time due to its dependence on a remote service. Heterogeneous applications <ref type="figure" target="#fig_1">Figure 2</ref> illustrates the number of applications that use combinations of different functionalities. Observe that, applications vary widely in their use of different stream processing semantics, functionalities and capabilities. For example, applications invoking remote services (denoted Remote), employing conventional operators (denoted Op-PartitionBy, Op-Map, Op-Join, and so on), often use user-defined functions to process input (denoted Input-UDF) as part of their DAG, maintain state, and often also replicate the state to a remote storage service.</p><p>Applications can be configured to process sequential input out-of-order to improve throughput. They can also periodically execute UDFs exclusive of input processing (denoted Periodic-UDF <ref type="bibr" target="#b13">[16]</ref> in <ref type="figure" target="#fig_1">Figure 2</ref>), for example, to detect duplicates/anomalies in buffered input, produced windowed output, update or prune state, or invoke a remote service.</p><p>Applications often control input checkpoint boundaries instead of using periodic checkpointing (denoted Appcheckpoint), for example, to synchronize checkpoints with remote service calls. Lastly, some applications load and use other frameworks/libraries like TensorFlow <ref type="bibr" target="#b15">[18]</ref>, DL4j <ref type="bibr" target="#b8">[10]</ref> (denoted Ext-frameworks in <ref type="figure" target="#fig_1">Figure 2</ref>).</p><p>The heterogeneity among applications alters their resource demands and their service time characteristics, as compared to operator-DAG applications. <ref type="figure" target="#fig_5">Figure 6</ref> shows the average memory used and message throughput of the applications, measured over a random 20 minute interval. Observe that, two applications with similar throughput have significantly different memory footprint. Similarly, applications with similar memory footprint yield significantly different throughput. Moreover, as shown in <ref type="figure" target="#fig_6">Figure 7</ref>, applications also vary significantly in the number of input streams, the size of state for stateful applications, and median service time.</p><p>Correlations in resource use Stream applications run continuously under variable input load, that is, variable input message-rate or input byte-rate or both. Therefore, they have inherent dependencies between their resource footprint, their throughput and service time characteristics. For instance, an application under-sized on CPU, may exhibit increased input buffering thus leading to increased memory use, lowered throughput and backlog buildup. In case of Java-based systems like Flink <ref type="bibr" target="#b1">[3]</ref> and Samza <ref type="bibr" target="#b4">[6]</ref>, an application under-sized on heap memory may exhibit frequent GC runs, thus leading to increased service times, reduced throughput and increased CPU utilization. Therefore, an autosizing controller should account for such correlations when making sizing decisions.</p><p>Given these challenges, we formulate the following requirements for an autosizing controller.</p><p>• Right size It should generate parameter values for an application's memory, CPU, heap/native allocation, threadpool sizes, and other parameters, such that, (i) the latency and throughput of the application meet the specified upper and lower bounds, respectively, and (ii) the overallocation of cluster resources to the application is bounded.</p><p>• Sizing time It should minimize the time taken to reach right size values for an application.</p><p>• Operational ease The controller's actions should be interpretable, allowing reliability-engineers to understand and manually modify sizing if required. Similarly, it should minimize issuing actions that cause processing stalls, throughput drops, latency increases, for example, it should not employ an undo-action strategy <ref type="bibr" target="#b23">[26]</ref>.</p><p>• Other Requirements It should scale to a large number of applications, be fault-tolerant and resource efficient. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Sage Auto-sizing Controller</head><p>Design approach One approach for an auto-sizing controller for streaming applications is to treat applications as blackboxes and define independent rules for tuning of each resource. This is akin to VM-count based auto-scaling provided by cloud services like Azure-VMSS <ref type="bibr" target="#b6">[8]</ref> and AWS-EC2 <ref type="bibr" target="#b7">[9]</ref>. This approach however, (i) disregards tuning application parallelism (Sec 2), and (ii) does not account for correlations in resource use of applications (Sec 3), and can consequently exhibit increased sizing time and oscillations <ref type="bibr" target="#b27">[30,</ref><ref type="bibr" target="#b31">34]</ref>. In contrast, optimization-based approaches rely on (a) profiling applications using trial-runs to generate models <ref type="bibr" target="#b17">[20,</ref><ref type="bibr" target="#b18">21,</ref><ref type="bibr" target="#b25">28,</ref><ref type="bibr" target="#b31">34]</ref>, (b) assumptions about the optimization problem (e.g., convexity <ref type="bibr" target="#b18">[21]</ref>), and (c) additional parameter-tuning, such as, for step-sizes <ref type="bibr" target="#b17">[20]</ref>, termination criterion <ref type="bibr" target="#b17">[20]</ref>. They lack the interpretability of the first approach and do not account for dynamic changes of an application's service dependencies and that in the environment such as network latencies.</p><p>Therefore, in designing Sage, we choose a gray-box approach that relies on a pre-defined set of rules tailored to streaming applications -thus providing operational ease, navigates cyclic-dependencies in resource use of applications, while reusing existing work on tuning parallelism (Sec 2).</p><p>Sage components <ref type="figure" target="#fig_7">Figure 8</ref> shows the different Sage components and its use for Samza <ref type="bibr" target="#b4">[6]</ref> applications. Each application comprises of a master container that requests resources from the cluster-manager, and manages membership of dataprocessing containers that process a subset of inputs data streams' shards <ref type="bibr" target="#b4">[6]</ref>. Sage comprises of components typical to a feedback-based controller. The data collector receives and aggregates metrics from applications, concerning resource use, container failures, and input backlog. The resizer converts sizing decisions issued by policies, to a sizing action -a change to one or more sizing parameters, while accounting for cluster capacity, cluster fragmentation, resource quotas, and resource limits of a single host. For example, a policy may decide to set an application's memory to 100 GB, the resizer maps it to 25 4GB containers. Similarly, a policy's decision to set parallelism to 2000 threads, is mapped to 125 containers with 16 threads each (determined by number of cores per host). Each sizing decision and action is recorded in a durable, time-ordered, per-application action log, allowing offline auditing and use by policies.</p><p>Policy engine Our approach involves encapsulating strate- gies for sizing a specific resource into a policy. Policies are applied periodically to each application in a priority order tailored for CO stream systems (detailed below). Each policy yields at most one sizing decision which is converted to an action using the resizer. Sage currently applies a policy to an application only if (a) no higher priority policy has yielded a sizing decision, and (b) there is no action in-flight for that application. The priority order allows simple design and implementation of an individual policy because, when invoked, it can rely on the policies above it in the priority order to hold. For example, a policy that increases an application's parallelism can assume that the application is not bottlenecked on CPU. Moreover, serializing sizing actions means Sage alters one resource at a time per application. This allows actions to be easily interpreted, audited, and altered by operators if needed, at the cost of a minimal increase in sizing time.</p><p>Tuning memory before CPU &amp; parallelism Applications can be assigned a memory size using heuristics and models based on their operator DAG. However, as detailed in Sec 3, in addition to their operator-DAGs, applications require memory for other data processing, and are likely to experience memory pressure. An application under memory pressure will typically exhibit high latency and frequent processingstalls, for example, due to frequent GC occurrences (in Javabased applications), or increased disk-IO in applications using RocksDB <ref type="bibr" target="#b32">[35]</ref> for hosting state.</p><p>Increasing the parallelism of such an application would increase the service rate and the amount of memory required for the increased rate. Consequently, the amount of memory available to buffer input decreases, thus limiting the application's throughput and resulting in backlog increases. Now, since CO systems use bounded input buffers, increasing applications' memory allocations alleviates high latency and processingstalls due to memory pressure. Sage therefore assigns a higher priority to memory policies than CPU and parallelism.</p><p>For Java-based systems, memory tuning can be optimized further by assigning a higher priority to a heap-allocation policy than that for total memory. This allows tuning heap allocation before increasing the total memory budget of the application, for example, by ensuring upper bounds on heaputilization, GC time, and frequency. <ref type="table">Table 1</ref> lists the different policies, the priority order, and the metrics they use. Policies are divided into scale-up and scale-down categories.</p><p>Bounded backlog increase rates The CPU scale-up policy (P3) alleviates CPU-time bottlenecks by increasing the application's CPU allocation. However, assigning it a higher priority than a parallelism scale-up policy (P4), allows the later to assume that, if an application has a throughput bottleneck then it is not due to memory or CPU under sizing. This allows for a simple policy implementation which monitors for monotonic increases in a sliding window of an backlog values and suitably increases the total thread-count for the application. The window size controls bounds the maximum rate at which an application's backlog can increase, the degree of overallocation and sizing time the policy incurs. The threadcount assignment to different operators and UDFs is further optimized using the three-steps-calculation strategy <ref type="bibr" target="#b27">[30]</ref>.</p><p>Applications using remote services For such applications, the policy correlates the backlog window values with the services' latency and throughput values (typically published by the services). This is because, in addition to a parallelism bottleneck, backlogs can also result from throughput drops or latency increases of a remote service <ref type="bibr" target="#b31">[34]</ref>. Time-lagged cross-correlation with pre-configured lag and threshold values are used to measure correlation. Parallelism is increased only in case of non-correlated backlog increases. We are currently investigating other ways of determining correlations <ref type="bibr" target="#b21">[24]</ref>.</p><p>Safe scaledown Scale-down policies work similar to scaleup, and aim to reclaim resources from applications without impacting their performance characteristics. These policies aim to avoid reliance on remedial actions issued by scale-up policies, and hence avoid oscillations due to repeated successive scale-down and scale-up actions. Similarly, they minimize the number of scale-down steps to reduce sizing time; hence do not use additive-decrease strategies.</p><p>Reclaiming heap-allocation presents a memory-CPU tradeoff. Assigning relatively low values for heap memory causes frequent GC, increased CPU use, and may increase latencies beyond application requirements. Therefore, to scale-down the heap allocation with a single safe action, Sage currently relies on the heap-committed metric <ref type="bibr" target="#b10">[12]</ref>. This metric measures the amount of heap allocated by the JVM to account for live objects and additional space for bookkeeping and GC. By bounding the heap-allocation using heap-committed, the policy minimizes the impact of scale-down actions on the application's existing characteristics, minimizes requiring remedial actions at the cost of over allocation. Alternative policies may employ reinforcement-learning based strategies, such as those in <ref type="bibr" target="#b33">[36]</ref> for batch and "serving" workloads. Sage's memory scale down policy aims to lower bound the allocated and used memory sizes, using the maximum memory-used and heap-committed <ref type="bibr" target="#b10">[12]</ref> metrics. This is because due to zero-page optimizations <ref type="bibr" target="#b14">[1]</ref> by the kernel, heapcommitted metric may be higher than the resident set size. The policy computes a likely resident size, assuming the heapcommitted is a part of the application's resident set, which is then used to size the application's memory. The scale-down policies work analogous to their scale-up counterparts.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Current Implementation</head><p>The Sage prototype is implemented in Java as a Samza application, using an Input-UDF for data collector that indexes metrics into sliding-windows stored using Samza's state API <ref type="bibr" target="#b32">[35]</ref> (one store per metric). Since state updates are idempotent using an at-least-once semantics suffices. Likewise, the policy engine is implemented as a periodic-UDF <ref type="bibr" target="#b13">[16]</ref> that is executed exclusive of input. Policies P1-P3 use a multiplicative increase for its respective resource. Sage scales horizontally by partitioning the input streams by applications' name.</p><p>We have enabled Sage on selected production applications at LinkedIn running on Apache YARN <ref type="bibr" target="#b2">[4]</ref> clusters. Sage incurs an average sizing time of approx. 40 minutes (across applications including scale-up and down), with the rightsize at most 14% over-sized as compared to a hand-tuned optimal size. It incurs atmost one action for heap and total memory scale-down each, does not exhibit oscillations, and has prevented tens of occurrences of processing stalls. In contrast, an operator may spend several minutes or hours when hand-tuning complex applications.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Conclusion</head><p>Stream processing systems like Flink <ref type="bibr" target="#b1">[3]</ref> and Samza <ref type="bibr" target="#b4">[6,</ref><ref type="bibr" target="#b32">35]</ref> provide low latency but rely on appropriate resource sizing for applications. However, applications have diverged from their conventional model of a DAG of operators, which pose multiple challenges for their resource sizing. Sage is an autosizing controller that dynamically controls applications' resource sizing while accounting for input load variations, applications' service dependencies, and environmental variables, while maximizing cluster utilization and minimizing cost.</p><p>Stream-processing is offered as a PaaS service at many web companies <ref type="bibr" target="#b5">[7,</ref><ref type="bibr" target="#b32">35]</ref>, and we expect commercial cloud providers to provide such services in the near future. Adoption of programming models like Apache Beam <ref type="bibr" target="#b0">[2]</ref> and SQL <ref type="bibr" target="#b5">[7,</ref><ref type="bibr" target="#b14">17]</ref> by streaming systems has allowed applications to evolve in novel ways beyond a DAG of operators, and utilize new frameworks and capabilities, as we have tried to demonstrate from our analysis of production stream processing applications at LinkedIn. However, without appropriate resource sizing, applications typically run into throughput and latency issues, failures, and processing stalls, regardless of the type of streaming system -BSP or CO. In case of CO systems the onus of sizing is on the applications while in case of BSP systems the onus is on the scheduler <ref type="bibr" target="#b34">[37]</ref>.</p><p>The problem of sizing requires navigating multiple resource, performance, operability, and cost trade-offs. Consequently there are multiple possible solution approaches. Sage presents a rule-based solution in this spectrum, that allows us to trade-off a bounded amount of cost for operational ease. Sage brings multiple other practical benefits. For example, Sage stabilizes new applications to run at production scale, allows developers to roll-out new features in existing applications without performing a scaling/tuning exercise, and handles unforeseen traffic increases, such as, due to feature popularity surges, socio-economic events, etc (as shown in <ref type="figure" target="#fig_4">Figure 5</ref>). Our preliminary results necessitate evaluating Sage using a number of metrics such as, convergence time, the level of under or over-sizing as compared to hand-tuned optimal sizes, and Sage's resource footprint -which we plan to address in future work.</p><p>At the same time, our work presents a number of open questions. For example, the problem of formulating strategies for dynamic resource sizing that reduce sizing time by using learned models of applications, preventing oscillations, bounding the over and under use of resources, and accounting for variables like network latency and throughput. Similarly, the problem of formulating a framework for sizing stream applications that is provably safe -does not require remedial actions, non-oscillatory, and accurate, in the face of load and environmental variations remains open. We plan to address these problems in future work. We hope that our analysis of production applications, the challenges they bring, and our work on Sage throws light on current production stream applications and the trade-offs in hosting them over a PaaS service, and proves valuable for other work in this area.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: Overview of a sample stream processing application.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: Number of stream applications (normalized) that combine different functionalities, measured two functionalities at a time.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: CDF of arrival rate for a selected set of production applications.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: CDF of service time for a selected set of production applications.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_4"><head>Figure 5 :</head><label>5</label><figDesc>Figure 5: Time series of arrival rates for selected applications (App 1-3 above, App-4 below) for a random 1-week period.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_5"><head>Figure 6 :</head><label>6</label><figDesc>Figure 6: Applications' memory footprint (in MB) vs. throughput (in messages/sec).</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_6"><head>Figure 7 :</head><label>7</label><figDesc>Figure 7: Distribution of median service time (ms), number of inputs, and state size (MB) across applications at LinkedIn.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_7"><head>Figure 8 :</head><label>8</label><figDesc>Figure 8: Sage design overview.</figDesc></figure>
+		</body>
+		<back>
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Apache</forename><surname>Beam</surname></persName>
+		</author>
+		<ptr target="https://beam.apache.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Apache</forename><surname>Flink</surname></persName>
+		</author>
+		<ptr target="https://flink.apache.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Apache</forename><surname>Hadoop</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yarn</forename></persName>
+		</author>
+		<ptr target="https://hadoop.apache.org/docs/current/hadoop-yarn/hadoop-yarn-site/YARN.html" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Apache</forename><surname>Kafka</surname></persName>
+		</author>
+		<ptr target="https://kafka.apache.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Apache</forename><surname>Samza</surname></persName>
+		</author>
+		<ptr target="http://samza.apache.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title level="m" type="main">Uber Engineering&apos;s Open Source Streaming Analytics Platform</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Athenax</surname></persName>
+		</author>
+		<ptr target="https://eng.uber.com/athenax/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<monogr>
+		<title level="m" type="main">Autoscale with Azure virtual machine scale sets</title>
+		<ptr target="https://docs.microsoft.com/en-us/azure/virtual-machine-scale-sets/virtual-machine-scale-sets-autoscale-overview" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Aws Auto</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Scaling</surname></persName>
+		</author>
+		<ptr target="https://aws.amazon.com/autoscaling/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<monogr>
+				<ptr target="https://deeplearning4j.org/" />
+		<title level="m">Deep Learning for Java (DL4J</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<monogr>
+		<title level="m" type="main">Defending Against Abuse at LinkedIn&apos;s Scale</title>
+		<ptr target="https://engineering.linkedin.com/blog/2018/12/defending-against-abuse-at-linkedins-scale" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Java Memory Usage</surname></persName>
+		</author>
+		<ptr target="https://docs.oracle.com/javase/7/docs/api/java/lang/management/MemoryUsage.html" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Kubernetes</surname></persName>
+		</author>
+		<ptr target="https://kubernetes.io/" />
+		<imprint>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<monogr>
+		<title level="m" type="main">RocksDB: Persistent Key-Value Store for Fast Storage Environments</title>
+		<ptr target="https://rocksdb.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Api</forename><surname>Samza Periodic Window</surname></persName>
+		</author>
+		<ptr target="https://samza.apache.org/learn/documentation/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sql</forename><surname>Samza</surname></persName>
+		</author>
+		<ptr target="https://samza.apache.org/learn/documentation/latest/api/samza-sql.html" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Tensorflow: A system for large-scale machine learning</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Martín</forename><surname>Abadi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Paul</forename><surname>Barham</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jianmin</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhifeng</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andy</forename><surname>Davis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeffrey</forename><surname>Dean</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matthieu</forename><surname>Devin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanjay</forename><surname>Ghemawat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Geoffrey</forename><surname>Irving</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Isard</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">12th {USENIX} Symposium on Operating Systems Design and Implementation ({OSDI} 16)</title>
+		<imprint>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="265" to="283" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<monogr>
+		<title level="m" type="main">The dataflow model: a practical approach to balancing correctness, latency, and cost in massivescale, unbounded, out-of-order data processing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tyler</forename><surname>Akidau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><surname>Bradshaw</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Craig</forename><surname>Chambers</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Slava</forename><surname>Chernyak</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Rafael</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Reuven</forename><surname>Fernández-Moctezuma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sam</forename><surname>Lax</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Daniel</forename><surname>Mcveety</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Frances</forename><surname>Mills</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eric</forename><surname>Perry</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Schmidt</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Towards automatic parameter tuning of stream processing systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Muhammad</forename><surname>Bilal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Marco</forename><surname>Canini</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2017 Symposium on Cloud Computing</title>
+		<meeting>the 2017 Symposium on Cloud Computing</meeting>
+		<imprint>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="189" to="200" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Pacora: Performance aware convex optimization for resource allocation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Sarah</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Bird</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Smith</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 3rd USENIX Workshop on Hot Topics in Parallelism (HotPar)</title>
+		<meeting>the 3rd USENIX Workshop on Hot Topics in Parallelism (HotPar)</meeting>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">State management in apache flink R : consistent stateful distributed stream processing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Paris</forename><surname>Carbone</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stephan</forename><surname>Ewen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gyula</forename><surname>Fóra</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Seif</forename><surname>Haridi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stefan</forename><surname>Richter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kostas</forename><surname>Tzoumas</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the VLDB Endowment</title>
+		<meeting>the VLDB Endowment</meeting>
+		<imprint>
+			<date type="published" when="2017" />
+			<biblScope unit="volume">10</biblScope>
+			<biblScope unit="page" from="1718" to="1729" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Realtime data processing at facebook</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jerry</forename><surname>Guoqiang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Janet</forename><forename type="middle">L</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shridhar</forename><surname>Wiener</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Anshul</forename><surname>Iyer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ran</forename><surname>Jaiswal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nikhil</forename><surname>Lei</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wei</forename><surname>Simha</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kevin</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tim</forename><surname>Wilfong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Serhat</forename><surname>Williamson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Yilmaz</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2016 International Conference on Management of Data</title>
+		<meeting>the 2016 International Conference on Management of Data</meeting>
+		<imprint>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="1087" to="1098" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">Dangers and uses of cross-correlation in analyzing time series in perception, performance, movement, and neuroscience: The importance of constructing transfer function autoregressive models</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Roger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Dean</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>William</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Dunsmuir</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Behavior research methods</title>
+		<imprint>
+			<biblScope unit="volume">48</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="783" to="802" />
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Quasar: resource-efficient and qos-aware cluster management</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Christina</forename><surname>Delimitrou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Christos</forename><surname>Kozyrakis</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM SIGPLAN Notices</title>
+		<imprint>
+			<biblScope unit="volume">49</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="127" to="144" />
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Dhalion: self-regulating stream processing in heron</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Avrilia</forename><surname>Floratou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ashvin</forename><surname>Agrawal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bill</forename><surname>Graham</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sriram</forename><surname>Rao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Karthik</forename><surname>Ramasamy</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the VLDB Endowment</title>
+		<meeting>the VLDB Endowment</meeting>
+		<imprint>
+			<date type="published" when="2017" />
+			<biblScope unit="volume">10</biblScope>
+			<biblScope unit="page" from="1825" to="1836" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">Drs: Autoscaling for real-time stream analytics</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><forename type="middle">J</forename><surname>Tom</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jianbing</forename><surname>Fu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Ding</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">B</forename><surname>Richard</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Marianne</forename><surname>Ma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yin</forename><surname>Winslett</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhenjie</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Zhang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE/ACM Transactions on Networking</title>
+		<imprint>
+			<biblScope unit="volume">25</biblScope>
+			<biblScope unit="issue">6</biblScope>
+			<biblScope unit="page" from="3338" to="3352" />
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">Configuring distributed computations using response surfaces</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Adem Efe Gencer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Bindel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Emin Gün</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robbert</forename><surname>Sirer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Van Renesse</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 16th Annual Middleware Conference</title>
+		<meeting>the 16th Annual Middleware Conference</meeting>
+		<imprint>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="235" to="246" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">Mesos: A platform for finegrained resource sharing in the data center</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Benjamin</forename><surname>Hindman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andy</forename><surname>Konwinski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matei</forename><surname>Zaharia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ali</forename><surname>Ghodsi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Anthony</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Randy</forename><forename type="middle">H</forename><surname>Joseph</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Scott</forename><surname>Katz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ion</forename><surname>Shenker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Stoica</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">NSDI</title>
+		<imprint>
+			<date type="published" when="2011" />
+			<biblScope unit="volume">11</biblScope>
+			<biblScope unit="page" from="22" to="22" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<analytic>
+		<title level="a" type="main">Three steps is all you need: fast, accurate, automatic scaling decisions for distributed streaming dataflows</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vasiliki</forename><surname>Kalavri</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><surname>Liagouris</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Moritz</forename><surname>Hoffmann</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Desislava</forename><surname>Dimitrova</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matthew</forename><surname>Forshaw</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Timothy</forename><surname>Roscoe</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">13th {USENIX} Symposium on Operating Systems Design and Implementation ({OSDI} 18)</title>
+		<imprint>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="783" to="798" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Twitter heron: Stream processing at scale</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanjeev</forename><surname>Kulkarni</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nikunj</forename><surname>Bhagat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Maosong</forename><surname>Fu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vikas</forename><surname>Kedigehalli</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Christopher</forename><surname>Kellogg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sailesh</forename><surname>Mittal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Jignesh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Karthik</forename><surname>Patel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Siddarth</forename><surname>Ramasamy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Taneja</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2015 ACM SIGMOD International Conference on Management of Data</title>
+		<meeting>the 2015 ACM SIGMOD International Conference on Management of Data</meeting>
+		<imprint>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="239" to="250" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<analytic>
+		<title level="a" type="main">Elastic stream processing with latency guarantees</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Björn</forename><surname>Lohrmann</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Peter</forename><surname>Janacik</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Odej</forename><surname>Kao</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2015 IEEE 35th International Conference on Distributed Computing Systems</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="399" to="410" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">A review of auto-scaling techniques for elastic applications in cloud environments</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tania</forename><surname>Lorido-Botran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jose</forename><surname>Miguel-Alonso</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jose A</forename><surname>Lozano</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Journal of grid computing</title>
+		<imprint>
+			<biblScope unit="volume">12</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="559" to="592" />
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<analytic>
+		<title level="a" type="main">Turbine: Facebook&apos;s service management platform for stream processing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yuan</forename><surname>Mei</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Luwei</forename><surname>Cheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vanish</forename><surname>Talwar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Michael</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gabriela</forename><surname>Levin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nikhil</forename><surname>Jacques-Silva</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Anirban</forename><surname>Simha</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Brian</forename><surname>Banerjee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tim</forename><surname>Smith</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Serhat</forename><surname>Williamson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Yilmaz</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Traffic</title>
+		<imprint>
+			<biblScope unit="volume">40</biblScope>
+			<biblScope unit="page">80</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kartik</forename><surname>Shadi A Noghabi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yi</forename><surname>Paramasivam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Navina</forename><surname>Pan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jon</forename><surname>Ramesh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Indranil</forename><surname>Bringhurst</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Roy H</forename><surname>Gupta</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Campbell</surname></persName>
+		</author>
+		<title level="m">Samza: stateful scalable stream processing at linkedin. Proceedings of the VLDB Endowment</title>
+		<imprint>
+			<date type="published" when="2017" />
+			<biblScope unit="volume">10</biblScope>
+			<biblScope unit="page" from="1634" to="1645" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Krzysztof</forename><surname>Rzadca</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pawel</forename><surname>Findeisen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jacek</forename><surname>Swiderski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Przemyslaw</forename><surname>Zych</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Przemyslaw</forename><surname>Broniek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jarek</forename><surname>Kusmierek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pawel</forename><surname>Nowak</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Beata</forename><surname>Strack</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Piotr</forename><surname>Witusowski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steven</forename><surname>Hand</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2020" />
+		</imprint>
+	</monogr>
+	<note>workload autoscaling at google</note>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<analytic>
+		<title level="a" type="main">Drizzle: Fast and adaptable stream processing at scale</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shivaram</forename><surname>Venkataraman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aurojit</forename><surname>Panda</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kay</forename><surname>Ousterhout</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Armbrust</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ali</forename><surname>Ghodsi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Michael</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Benjamin</forename><surname>Franklin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ion</forename><surname>Recht</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Stoica</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 26th Symposium on Operating Systems Principles</title>
+		<meeting>the 26th Symposium on Operating Systems Principles</meeting>
+		<imprint>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="374" to="389" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<analytic>
+		<title level="a" type="main">Stela: Enabling stream processing systems to scale-in and scaleout on-demand</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Le</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Boyang</forename><surname>Peng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Indranil</forename><surname>Gupta</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2016 IEEE International Conference on Cloud Engineering (IC2E)</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="22" to="31" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b36">
+	<monogr>
+		<title level="m" type="main">Discretized streams: an efficient and fault-tolerant model for stream processing on large clusters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matei</forename><surname>Zaharia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tathagata</forename><surname>Das</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Haoyuan</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Scott</forename><surname>Shenker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ion</forename><surname>Stoica</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+	<note>Presented as part of the</note>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

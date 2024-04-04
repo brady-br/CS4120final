@@ -1,0 +1,869 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:09+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Dynamic Reconfiguration of Primary/Backup Clusters</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alexander</forename><surname>Shraer</surname></persName>
+							<email>shralex@yahoo-inc.com</email>
+							<affiliation key="aff0">
+								<orgName type="department" key="dep1">Yahoo! Research</orgName>
+								<orgName type="department" key="dep2">Yahoo! Research</orgName>
+								<orgName type="institution">Microsoft Research</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Benjamin</forename><surname>Reed</surname></persName>
+							<email>breed@yahoo-inc.com</email>
+							<affiliation key="aff0">
+								<orgName type="department" key="dep1">Yahoo! Research</orgName>
+								<orgName type="department" key="dep2">Yahoo! Research</orgName>
+								<orgName type="institution">Microsoft Research</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dahlia</forename><surname>Malkhi</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department" key="dep1">Yahoo! Research</orgName>
+								<orgName type="department" key="dep2">Yahoo! Research</orgName>
+								<orgName type="institution">Microsoft Research</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Flavio</forename><surname>Junqueira</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department" key="dep1">Yahoo! Research</orgName>
+								<orgName type="department" key="dep2">Yahoo! Research</orgName>
+								<orgName type="institution">Microsoft Research</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Dynamic Reconfiguration of Primary/Backup Clusters</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Dynamically changing (reconfiguring) the membership of a replicated distributed system while preserving data consistency and system availability is a challenging problem. In this paper, we show that reconfiguration can be simplified by taking advantage of certain properties commonly provided by Primary/Backup systems. We describe a new reconfiguration protocol, recently implemented in Apache Zookeeper. It fully automates configuration changes and minimizes any interruption in service to clients while maintaining data consistency. By lever-aging the properties already provided by Zookeeper our protocol is considerably simpler than state of the art.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>The ability to reconfigure systems is critical to cope with the dynamics of deployed applications. Servers permanently crash or become obsolete, user load fluctuates over time, new features impose different constraints; these are all reasons to reconfigure an application to use a different group of servers, and to shift roles and balance within a service. We refer to this ability of a system to dynamically adapt to a changing set of machines or processes as elasticity.</p><p>Cloud computing has intensified the need for elastic long lived distributed systems. For example, some applications such as sports and shopping are seasonal with heavy workload bursts during championship games or peak shopping days. Such workloads mean that elasticity is not a matter of slowly growing a cluster; it may mean that a cluster grows by an order of magnitude only to shrink by the same order of magnitude shortly after.</p><p>Unfortunately, at the back-end of today's cloud services, one frequently finds a coordination service which itself is not elastic, such as ZooKeeper <ref type="bibr" target="#b11">[12]</ref>. Companies such as Facebook, LinkedIn, Netflix, Twitter, Yahoo!, and many others, use Zookeeper to track failures and configuration changes of distributed applications; application developers just need to react to events sent to them by the coordination service. However, Zookeeper users have been asking repeatedly since 2008 to facilitate reconfiguration of the service itself, and thus far, the road to elasticity has been error prone and hazardous: Presently, servers cannot be added to or removed from a running ZooKeeper cluster and similarly no other configuration parameter (such as server roles, network addresses and ports, or the quorum system) can be changed dynamically. A cluster can be taken down, reconfigured, and restarted, but (as we explain further in Section 2) this process is manually intensive, error prone and hard to execute correctly even for expert ZooKeeper users. Data corruption and split-brain 1 caused by misconfiguration of Zookeeper has happened in production 2 . In fact, configuration errors are a primary cause of failures in production systems <ref type="bibr" target="#b21">[22]</ref>. Furthermore, service interruptions are currently inevitable during reconfigurations. These negative side-effects cause operators to avoid reconfigurations as much as possible. In fact, operators often prefer to over-provision a Zookeeper cluster than to reconfigure it with changing load. Over-provisioning (such as adding many more replicas) wastes resources and adds to the management overhead.</p><p>Our work provides a reconfiguration capability using ZooKeeper as our primary case-study. Our experience with ZooKeeper in production over the past years has lead us to the following requirements: first, ZooKeeper is a mature product that we do not want to destabilize; a solution to the dynamic reconfiguration problem should not require major changes, such as limiting concurrency or introducing additional system components. Second, as many Zookeeper-based systems are online, service disruptions during a reconfiguration should be minimized and happen only in rare circumstances. Third, even if there are failures during reconfiguration, data integrity, consistency or service availability must not be compromised, for instance, split-brain or loss of service due to partial configuration propagation should never be possible. Finally, we must support a vast number of clients who seamlessly migrate between configurations.</p><p>We use the Zookeeper service itself for reconfiguration, but we ruled out several straw-man approaches. First, we could have used an external coordination ser-vice, such as another ZooKeeper cluster, to coordinate the reconfiguration, but this would simply push the reconfiguration problems to another system and add extra management complexity. Another na¨ıvena¨ıve solution would be to store configuration information as a replicated object in Zookeeper. When a ZooKeeper server instance comes up, it looks at its replica of the state to obtain the configuration from the designated object. While this solution is simple and elegant, it is prone to inconsistencies. Some replicas may be behind others, which means they could have different configuration states. In a fixed configuration, a consistent view of the system can be obtained by contacting a quorum of the servers. A reconfiguration, however, changes the set of servers and therefore guaranteeing a consistent view requires additional care. Consequently, reading the configuration from an object in Zookeeper may lead to unavailability or, even worse, corrupt data and split-brain.</p><p>Indeed, dynamically reconfiguring a replicated distributed system while preserving data consistency and system availability is a challenging problem. We found, however, that high-level properties provided by Zookeeper simplify this task. Specifically, ZooKeeper employs a primary/backup replication scheme where a single dynamically elected primary executes all operations that change the state of the service and broadcasts state-updates to backups. This method of operation requires that replicas apply state changes according to the order of primaries over time, guaranteeing a property called primary order <ref type="bibr" target="#b12">[13]</ref>. Interestingly, this property is preserved by many other primary/backup systems, such as Chubby <ref type="bibr" target="#b4">[5]</ref>, GFS <ref type="bibr" target="#b7">[8]</ref>, <ref type="bibr">Boxwood [19]</ref>, PacificA <ref type="bibr" target="#b20">[21]</ref> and Chain-Replication <ref type="bibr" target="#b19">[20]</ref> (see Section 6). These systems, however, resort to an external service for reconfiguration. In this work we show that leveraging primary order simplifies reconfiguration. By exploiting primary order we are able to implement reconfiguration without using an external service and with minimal changes to ZooKeeper (in fact, reconfigurations are pipelined with other operations and treated similarly) while guaranteeing minimal disruption to the operation of a running system. We believe that our methods may be applied to efficiently reconfigure any Primary/Backup system satisfying primary order.</p><p>Previous reconfiguration approaches, such as the one proposed by Lamport <ref type="bibr" target="#b14">[15]</ref>, may violate primary order, cause service disruption during reconfiguration, as well as impose a bound on the concurrent processing of all operations due to uncertainty created by the ability to reconfigure (see Section 2). Similar to our approach, FRAPPE <ref type="bibr" target="#b3">[4]</ref> imposes no such bounds, but requires rollback support and complex management of speculative execution paths, not needed in our solution.</p><p>Our reconfiguration protocol also encompasses the clients. As the service configuration changes, clients should stay connected to the service. Literature rarely mentions the client side of reconfiguration, usually stating the need for a name-service (such as DNS), which is of course necessary. However, its also crucial to re-balance client connections across new configuration servers and at the same time prevent unnecessary client migration which may overload servers, severely degrading performance. We propose a probabilistic loadbalancing scheme to move as few clients as possible and still maintain an even distribution of clients across servers. When clients detect a change, they each apply a migration policy in a distributed fashion to decide whether to move to a new server, and if so, which server they should move to. In summary, this paper makes the following contributions:</p><p>• An observation that primary order allows for simple and efficient dynamic reconfiguration.</p><p>• A new reconfiguration protocol for Primary/Backup replication systems preserving primary order. Unlike all previous reconfiguration protocols, our new algorithm does not limit concurrency, does not require client operations to be stopped during reconfigurations, and does not incur a complicated management overhead or any added complexity to normal client operation.</p><p>• A decentralized, client-driven protocol that rebalances client connections across servers in the presence of service reconfiguration. The protocol achieves a proven uniform distribution of clients across servers while minimizing client migration.</p><p>• Implementation of our reconfiguration and loadbalancing protocols in Zookeeper (being contributed to Zookeeper codebase) and analysis of their performance.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Background</head><p>This section provides the necessary background on ZooKeeper, its way of implementing the primary/backup approach, and the challenges of reconfiguration.</p><p>Zookeeper. Zookeeper totally orders all writes to its database. In addition, to enable some of the most common use-cases, it executes requests of every client in FIFO order. Zookeeper uses a primary/backup scheme in which the primary executes all write operations and broadcasts state changes to the backups using an atomic broadcast protocol called Zab <ref type="bibr" target="#b12">[13]</ref>. ZooKeeper replicas process read requests locally. <ref type="figure" target="#fig_0">Figure 1</ref> shows a write operation received by a primary. The primary executes the write and broadcasts a state change that corresponds to the result of the execution to the backups. Zab uses quo- a backup receives the request, w; 2. the backup forwards w to the primary; 3. the primary broadcasts the new state change, c, that resulted from the execution of w.</p><p>rums to commit state changes. As long as a quorum of servers are available, Zab can broadcast messages and ZooKeeper remains available.</p><p>Primary/Backup replication a la Zab. Zab is very similar to Paxos <ref type="bibr" target="#b14">[15]</ref>, with one crucial difference -the agreement is reached on full history prefixes rather than on individual operations. This difference allows Zab to preserve primary order, which may be violated by Paxos (as shown in <ref type="bibr" target="#b12">[13]</ref>). We now present an overview of the protocol executed by the primary. Note that the protocol in this section is abstract and excludes many details irrelevant to this paper. The protocol has two parts, each involving an interaction with a quorum: A startup procedure, which is performed only once, and through which a new leader 3 determines the latest state of the system 4 ; and a steady-state procedure for committing updates, which is executed in a loop.</p><p>Zab refers to the period of time that a leader is active as an epoch. Because there is only one leader active at a time, these epochs form a sequence, and each new epoch can be assigned a monotonically increasing integer called the epoch number. Specifically, each backup maintains two epoch identifiers: the highest epoch that it received from any primary in a startup phase, e prepare , and the highest epoch of a primary whose history it adopted in steady-state, e accept .</p><p>Startup: A candidate leader b chooses a unique epoch e and sends a PREPARE message to the backups. A backup receiving a PREPARE message acts as follows:</p><p>• If e ≥ e prepare , it records the newly seen epoch by setting e prepare to e and then responds with an ACK message back to the candidate.</p><p>• The ACK includes a history prefix H consisting <ref type="bibr" target="#b2">3</ref> For the sake of readers familiar with Zookeeper and its terminology, in the context of Zookeeper and Zab we use the term "leader" for "primary" and "follower" for "backup" (with no difference in meaning). <ref type="bibr" target="#b3">4</ref> Zab contains a preparatory step that optimistically chooses a candidate-leader that already has the up-to-date history, eliminating the need to copy the latest history from one of the backups during startup. of state-updates previously acknowledged by the backup, as well as the epoch e accept .</p><p>When b collects a quorum of ACK messages, it adopts a history H received with the highest e accept value, breaking ties by preferring a longer H.</p><p>Steady-state: For every client request op, the primary b applies op to its update history H and sends an ACCEPT message to the backups containing e and the adopted history H; in practice, only a delta-increment of H is sent each time. When a backup receives an ACCEPT message, if e ≥ e prepare , it adopts H and sets both e prepare and e accept to e. It then sends an acknowledgment back to b. Once a quorum of followers have acknowledged the AC-CEPT message, and hence the history prefix, b commits it by sending a COMMIT message to the backups.</p><p>Primary order. Because the primary server broadcasts state changes, Zab must ensure that they are received in order. Specifically, if state change c is received by a backup from a primary, all changes that precede c from that primary must also have been received by the backup. Zab refers to this ordering guarantee as local primary order. The local primary order property, however, is not sufficient to guarantee order when primaries can crash. It is also necessary that a new primary replacing a previous primary guarantees that once it broadcasts new updates, it has received all changes of previous primaries that have been delivered or that will be delivered. The new primary must guarantee that no state changes from previous primaries succeed its own state changes in the order of delivered state changes. Zab refers to this ordering guarantee as global primary order.</p><p>The term primary order refers to an ordering that satisfies both local and global primary orders. While the discussion above has been in the context of ZooKeeper and Zab, any primary/backup system in which a primary executes operations and broadcasts state changes to backups will need primary order. The importance of this property has already been highlighted in <ref type="bibr" target="#b12">[13,</ref><ref type="bibr" target="#b2">3]</ref>. Here, we further exploit this property to simplify system reconfiguration.</p><p>Configurations in Zookeeper. A ZooKeeper deployment currently uses a static configuration S for both clients and servers, which comprises a set of servers, with network address information, and a quorum system. Each server can be defined as a participant, in which case it participates in Zab as a primary or as backup, or an observer, which means that it does not participate in Zab and only learns of state updates once they are committed. For consistent operation each server needs to have the same configuration S, and clients need to have a configuration that includes some subset of S.</p><p>Performing changes to a ZooKeeper configuration is currently a tricky task. Suppose, for example, that we are to add three new servers to a cluster of two servers. The two original members of the cluster hold the latest state, so we want one of them to be elected leader of the new cluster. If one of the three new servers is elected leader, the data stored by the two original members will be lost. (This could happen if the three new servers start up, form a quorum, and elect a leader before the two older servers start up.) Currently, membership changes are done using a "rolling restart" -a procedure whereby servers are shut down and restarted in a particular order so that any quorum of the currently running servers includes at least one server with the latest state. To preserve this invariant, some reconfigurations (in particular, the ones in which quorums from the old and the new configurations do not intersect) require restarting servers multiple times. Service interruptions are unavoidable, as all servers must be restarted at least once. Rolling restart is manually intensive, error prone, and hard to execute correctly even for expert ZooKeeper users (especially if failures happen during reconfiguration). Furthermore, this procedure gives no insight on how clients can discover or react to membership changes.</p><p>The protocol we propose in this paper overcomes such problems and enables dynamic changes to the configuration without restarting servers or interrupting the service.</p><p>Reconfiguring a state-machine. Primary/backup replication is a special instance of a more general problem, state-machine replication (SMR). With SMR, all replicas start from the same state and process the same sequence of operations. Agreement on each operation in the sequence is reached using a consensus protocol such as Paxos <ref type="bibr" target="#b14">[15]</ref>. Similarly to our algorithm, most existing SMR approaches use the state-machine itself to change system configuration, that is, the reconfiguration is interjected as any other operation in the sequence of statemachine commands <ref type="bibr" target="#b15">[16]</ref>. The details of implementing this in a real system are complex, as pointed out in a keynote describing the implementation of Paxos developed at Google <ref type="bibr" target="#b5">[6]</ref>. One of the core difficulties is that a reconfiguration is very different from other SMR commands, in that it changes the consensus algorithm used to agree on the subsequent operations in the sequence.</p><p>To better understand the issue, notice that in SMR there is no dependency among operations and thus separate consensus decisions are made for the different "slots" in the history sequence. Thus, if operations 1 through 100 are proposed by some server, it is possible that first operation 1 is committed, then 80, then 20, and so on. It is also possible that an operation proposed by a different server is chosen for slot number 2. Suppose now that a server proposes reconfiguration for slot 50. If the proposal achieves a consensus decision, it is most natural to expect that it changes the set of servers that need to execute the consensus algorithm on subsequent slots (51 and onward). Unfortunately, above we stated that we already committed slot number 80 using the current configuration; this could lead to inconsistency (a split brain scenario). We must therefore delay the consensus decisions on a slot until we know the configuration in which it should be executed, i.e., after all previous slots have been decided. As a remedy, Lamport proposed to execute the configuration change α slots in the future, which then allows the consensus algorithms on slots n through n + α − 1 to execute simultaneously with slot n. In this manner, we can maintain a 'pipeline' of operations, albeit bounded by α.</p><p>Thus, standard SMR reconfiguration approaches limit the concurrent processing of all operations, because of the uncertainty introduced by the ability to reconfigure. We use a different approach that overcomes this limitation by exploiting primary order. Our reconfiguration algorithm speculatively executes any number of operations concurrently.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Primary/Backup Reconfiguration</head><p>We start with a high level description of our reconfiguration protocol. In general, in order for the system to correctly move from a configuration S to a configuration S we must take the following steps <ref type="bibr" target="#b2">[3]</ref>, illustrated in 1. persist information about S on stable storage at a quorum of S (more precisely, a consensus decision must be reached in S regarding the "move" to S );</p><p>2. deactivate S, that is, make sure that no further operations can be committed in S;</p><p>3. identify and transfer all committed (and potentially committed) state from S to S , persisting it on stable storage at a quorum of S (a consensus decision in S regarding its initial state).</p><p>4. activate S , so that it can independently operate and process client operations.</p><formula xml:id="formula_0">D E A B C</formula><p>Step 1: Write new configuration to stable storage</p><p>Step 2: Deactivate current configuration</p><p>Step 3: Transfer state</p><formula xml:id="formula_1">D E A B C</formula><p>Step Note that steps 1 and 2 are necessary to avoid split brain. Steps 3 and 4 make sure that no state is lost when moving to S . The division into four steps is logical and somewhat arbitrary -some of these steps are often executed together.</p><p>In a primary/backup system many of the steps above can be simplified by taking advantage of properties already provided by the system. In such systems, the primary is the only one executing operations, producing state-updates which are relative to its current state. Thus, each state-update only makes sense in the context of all previous updates. For this reason, such systems reach agreement on the prefix of updates and not on individual operations. In other words, a new update can be committed only after all previous updates commit. This does not, however, limit concurrency: a primary can execute and send out any number of state-updates speculatively to the backups, however updates are always committed in order and an uncommitted suffix of updates may later be revoked from a backup's log if the primary fails without persisting the update to a sufficient number of replicas (a quorum). Reconfiguration fits this framework wellwe interject a configuration update operation, cop, in the stream of normal state-updates, which causes a reconfiguration after previously scheduled updates are committed (in state-machine terminology, α = 1). Thus, a reconfiguration is persisted to stable storage in the old configuration S just like any other operation in S (this corresponds to step 1 above). At the same time, there is no need to explicitly deactivate S -step 2 follows from the speculative nature of the execution. Just like with any other state-update, the primary may execute any number of subsequent operations, speculatively assuming that cop commits. Primary order then makes sure that such operations are committed only after the entire prefix up to the operation (including the configuration change cop) is committed, i.e., they can only be committed in the new configuration as required by step 2.</p><p>Since the primary is the only one executing operations, its local log includes all state changes that may have been committed; hence, in step 3 there is no need to copy state from other servers. Moreover, we start state transfer ahead of time, to avoid delaying the primary's pipeline. When processing the reconfiguration operation cop, the primary only makes sure that state transfer is complete, namely that a quorum of S has persisted all operations scheduled up to and including cop. Finally, in step 4, the primary activates S .</p><p>If the primary of S fails during reconfiguration, a candidate primary in S must discover possible decisions made in step 1. If a new configuration S is discovered at this stage, the candidate primary must first take steps to commit the stream of commands up to (and including) the operation proposing S , and then it must repeat steps 2-4 in order to transition to S . Unlike the original primary, the new candidate primary needs to perform a startup-phase in S and discover the potential actions of a previous primary in S as well. This presented an interesting challenge in the Zab realm, since a primary in Zab usually has the most up-to-date prefix of commands, and enforces it on the backups. However, a new primary elected from S might have a staler state compared to servers in S . We must therefore make sure that no committed updates are lost without introducing significant changes to Zab. Below (in Section 3.1), we describe the solution we chose for this pragmatic issue and the Activation Property it induces.</p><p>We now dive into the details of our protocol. Due to space limitations, we omit the formal proofs here and focus on the intuition behind our algorithm.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Stable primary</head><p>We start by discussing the simpler case, where the primary P of the current configuration S does not fail and continues to lead the next configuration. <ref type="figure">Figure 3</ref> depicts the flow of the protocol.</p><p>pre-step: In order to overlap state-transfer with normal activity, backups in S connect to the current primary, who initializes their state by transferring its currently committed prefix of updates H. With Zab, such statetransfer happens automatically once backups connect to the primary, and they continue receiving from P all subsequent commands (e.g., op 1 and op 2 in <ref type="figure">Figure 3</ref>), making the transition to S smooth. step 1: The primary p schedules cop, the reconfiguration command, at the tail of the normal stream of updates. It sends an ACCEPT message containing cop to all the backups connected to it (a backup may belong to S and/or to S ) and waits for acknowledgments. Consensus on the next configuration is reached once a quorum of S acknowledges cop. step 2: The primary does not stall operations it receives after cop. Instead, they are executed immediately and scheduled after cop. In principle, all updates following cop are the responsibility of S . step 3: Transfer of commands has already been initiated in the pre-step; now, p waits for acknowledgement for cop and the history of commands which precede it from a quorum of S . step 4: Once cop is acknowledged by both S and S , the primary commits cop and activates S by sending an ACTIVATE message to backups. Similarly to an ACCEPT, ACTIVATE includes the primary's epoch e and processed by a backup only if e is greater or equal to this backup's e prepare .  <ref type="figure">Figure 3</ref>: Reconfiguration with a stable primary P .</p><p>As mentioned earlier, in order to be compatible with Zookeeper's existing mechanism for recovery from leader failure, we guarantee an additional property:</p><p>Activation Property. before ACTIVATE is received by a quorum of S , all updates that may have been committed are persisted to stable storage by a quorum of S.</p><p>To guarantee it, we make a change in step 2: step 2': an update scheduled after cop and before the activation message for S is sent can be committed by a primary in S only once a quorum of both S and S acknowledge the update (of course, we also require all preceding updates to be committed). Updates scheduled after the ACTIVATE message for S is sent, need only be persisted to stable storage by a quorum of S in order to be committed.</p><p>Since the current primary is stable, it becomes the primary of S , and it may skip the startup-phase of a new primary (described in Section 2), since in this case it knows that no updates were committed in S .</p><p>Cascading reconfigurations. Even before ACTIVATE is sent for a configuration S , another reconfiguration operation cop proposing a configuration S may be scheduled by the primary (see <ref type="figure" target="#fig_2">Figure 4</ref> below). For example, if we reconfigure to remove a faulty member, and meanwhile detect another failure, we can evict the additional member without ever going through the intermediate step. We streamline cascading reconfigurations by skipping the activation of S .</p><p>In the following example, updates u 1 through u 4 are sent by the primary speculatively, before any of them commits, while u 5 is scheduled after all previous updates are committed and the activation message for the last proposed configuration (S ) is sent out. S S, S' S, S' S, S'' S, S'' u 5 7 S''</p><p>Figure 4: Cascading reconfigurations Notice that for a given update, only the last active and the last proposed configuration (at the time this update is scheduled) are involved in the protocol steps for that update. Once there is a sufficient window of time between reconfigurations that allows state-transfer to the last proposed configuration to complete, the primary activates that configuration. We note that currently the described extension of the protocol to support multiple concurrent reconfigurations is not being integrated into Zookeeper; for simplicity, a reconfiguration request is rejected if another reconfiguration is currently in progress. (The issuing client may resubmit the reconfiguration request after the current reconfiguration operation completes.)</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Primary failure or replacement</head><p>Until now, we assumed that the primary does not fail during the transition to S and continues as the primary of S . It remains to ensure that when it is removed or fails, safety is still guaranteed. First, consider the case that the current primary in S needs to be replaced. There are many reasons why we may want to replace a primary, e.g., the current primary may not be in S , its new role in S might not allow it to continue leading, or even if the IP address or port it uses for communication with the backups needs to change as part of the reconfiguration.</p><p>Our framework easily accommodates this variation: The old primary can still execute operations scheduled after cop and send them out to connected backups but it does not commit these operations, as these logically belong in S . It is the responsibility of a new primary elected in S to commit these operations. As an optimization, we explicitly include in an ACTIVATE message the identity of a designated, initial primary for S (this is one of the backups in S , which has acknowledged the longest prefix of operations, including at least cop). As before, this primary does not need to execute the startupphase in S since we know that no primary previously existed in S . Obviously, if that default primary fails to form a quorum, we fall-back to the normal primary election in S .</p><p>Likewise, the case of a primary failure after S has been activated is handled as a normal Zab leader reelection.</p><p>An attempted reconfiguration might not even reach a quorum of backups in S, in which case it may disappear from the system like any other failed command.</p><p>We are left with the interesting case when a primarycandidate b in S discovers a pending attempt for a consensus on cop(S ) by the previous primary. This can mean either that cop was already decided, or simply that some backup in the quorum of b heard cop from p. As for any other command in the prefix b learns, it must first commit cop in S (achieving the consensus decision required in step 1). However, executing cop requires additional work, and b must follow the reconfiguration steps to implement it.</p><p>The only deviation from the original primary's protocol is that b must follow the startup-phase of a new primary (Section 2) in both S and S . In order to do so, b connects to the servers in S . When connecting to a server b in S , b finds out whether b knows of the activation of S (or a later configuration). If S has been activated, servers in S may know of newer updates unknown to b, hence b should not attempt to perform state transfer (otherwise it may cause newer updates to be truncated). Instead, b restarts primary re-election in S (and in particular connects to an already elected primary in S if such primary exists). Otherwise, b implicitly initiates statetransfer to b (much like its predecessor did). This includes at least all updates up to cop but may also include updates scheduled by the previous primary after cop.</p><p>This leads us to a subtle issue resulting from our desire to introduce as few changes as possible to the existing implementation of leader recovery in Zookeeper. Recall that the stream of updates by the previous primary may continue past cop, and so backups in S may have a longer history of commands than b. In Zookeeper, connecting to b would cause them to truncate their history. This is exactly why we chose to preserve the Activation Property. If b succeeds to connect to a quorum of S without learning of the activation of S , we know that all updates that may have been committed are stored at a quorum of S. Thus, b will find all such updates once completing the startup-phase in S; in fact, in Zookeeper the candidate b is chosen (by preliminary selection) as the most up-to-date backup in S (that can communicate with a quorum of S), so it will already have the full prefix and no actual transfer of updates is needed during the startup-phase.</p><p>Finally, note that b might discover more than a single future reconfiguration while performing its startup-phase in S. For example, it may see that both S and S were proposed. b may in this case skip S and run the startupphase in S and S , after which it activates S .</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">Progress guarantees</head><p>As in <ref type="bibr" target="#b1">[2]</ref>, the fault model represents a dynamic interplay between the execution of reconfiguration operations and the "adversary": The triggering of a reconfiguration event from S to S marks a first transition. Until this event, a quorum of S is required to remain alive in order for progress to be guaranteed. After it, both a quorum of S and of S are required to remain alive. The completion of a reconfiguration is generally not known to the participants in the system. In our protocol, it occurs when the following conditions are met: (a) a quorum of S receives and processes the ACTIVATE message for S , and (b) all operations scheduled before S is activated by a primary are committed. The former condition indicates that S can independently process new operations, while the latter indicates that all previous operations, including those scheduled while the reconfiguration was in progress, are committed (it is required due to the Activation Property and step 2'). Neither conditions are externally visible to a client or operator submitting the reconfiguration command. However, there is an easy way to make sure that both condition are met: after the reconfiguration completes at the client, it can submit a no-op update operation; once it commits, we know that both conditions (a) and (b) are satisfied (the no-op update can be automatically submitted by the client-side library). An alternative way to achieve this is to introduce another round to the reconfiguration protocol (which, for simplicity and compatibility with Zab, we decided to avoid). Either way, once (a) and (b) are satisfied, the fault model transitions for the second time: only a quorum of S is required to survive from now on. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Reconfiguring the Clients</head><p>Once servers are able to reconfigure themselves we are left with two problems at the client. First, clients need to learn about new servers to be able to connect to them. This is especially important if servers that a client was using have been removed from the configuration or failed. Second, we need to rebalance the load on the servers. ZooKeeper clients use long-lived connections and only change the server they are connected to if it has failed. This means that new servers added to a configuration will not take on new load until new clients start or other servers fail. We can solve the first problem using DNS and by having clients subscribe to configuration changes (see Section 5) in Zookeeper. For lack of space here we concentrate on the second problem. <ref type="figure" target="#fig_4">Figure 5</ref> shows a balanced service with configuration S that is about to move to S . There are 30 clients in the system and each of the three servers in S serves 10 of the clients. When we change to S we would like to make sure the new system is also load-balanced. In this example this means that each server should service 6 clients. We would also like to move as few clients as possible since session reestablishment puts load on both the clients and the servers and increases latency for client requests issued while the reestablishment is in process. A final goal is to accomplish the load balance using only logic at the clients so as not to burden the servers.</p><p>We denote by M the set of servers that are in both configurations, S ∩ S . Machines that are in the old configuration S but not in the new configuration we will label O, that is, O = S \ M . Machines that are in the new configuration S but not in the old configuration are labeled N , that is, N = S \ M . Denote the total number of clients by C. The number of clients connected to server i in S is denoted by l(i, S).</p><p>In general, for a server i ∈ S , the expected number of clients that connect to i in S , E(l(i, S')) is the number of clients connected to it in S plus the number of clients migrating from other servers in S to i (we denote a move from server j to server i by j → i and a move to any of the servers in a set G by j → G) minus the number of clients migrating from i to other servers in S :</p><formula xml:id="formula_2">E(l(i, S )) = l(i, S) + j∈S∧j =i l(j, S) * P r(j → i) − l(i, S) j∈S ∧j =i P r(i → j)</formula><p>We solve for the probabilities assuming that the load was uniform across all servers in S and requiring that the expected load remains uniform in S (in the example of <ref type="figure" target="#fig_4">Figure 5</ref>, we require that E(l(i, S )) = 6). Intuitively, the probability of a client switching to a different server depends on whether the cluster size increases or shrinks, and by how much. We have two cases to consider:</p><p>Case 1: |S| &lt; |S | Since the number of servers is increasing, load must move off from all servers. For a server i ∈ M we get: E(l(i, S )) = l(i, S) − l(i, S) * P r(i → N ). We can substitute l(i, S) = C/|S| since load was balanced in S, and E(l(i, S )) = C/|S | since this is what we would like to achieve. This gives: Rule 1. If |S| &lt; |S | and a client is connected to M , then with probability 1 − |S|/|S | the client disconnects from its server and then connects to a random server in N . That is, the choice among the servers in N is made uniformly at random.</p><p>Notice that clients connected to servers in O should move only to N as servers in M have too many clients to begin with. Rule 2. If |S| &lt; |S | and a client is connected to O, then the client moves to a random server in N .</p><p>Case 2: |S| ≥ |S | Since the number of servers decreases or stays the same, the load on each server in S will be greater or equal to the load on each server in S. Thus, a server in M will not need to decrease load: Rule 3. If |S| ≥ |S | and a client is connected to a server in M , it should remain connected.</p><p>The total collective load in S on all servers in M is the load on M in S plus the expected number of clients that move to M from O:</p><formula xml:id="formula_3">|M |C |S | = |M |C |S| + |O|C |S| * P r(i → M |i ∈ O)</formula><p>We thus get our last rule:</p><p>Rule 4. If |S| ≥ |S | and a client is connected to a server in O, it moves to a random server in M with probability</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>|M |(|S|−|S |) |S ||O|</head><p>; otherwise, moves to a random server in N .</p><p>By having each client independently apply these rules, we achieve uniform load in a distributed fashion.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Implementation and Evaluation</head><p>We implemented our server and client-side protocols in Apache Zookeeper. To this end we updated the serverside library of ZooKeeper (written in Java) as well as the two client libraries (written in Java and in C). We added a reconfig command to the API that changes the configuration, a config command that retrieves the current configuration and additionally allows users to subscribe for configuration changes and finally the updateserver-list command that triggers the client migration algorithm described in Section 4. We support two reconfiguration modes. The first is incremental -it allows adding and removing servers to the current configuration. The second type of reconfiguration is non-incremental, which means that the user specifies the new configuration. This method allows changing the quorum system dynamically. We allow adding and removing servers as well as changing server roles. We also support dynamically changing the different network addresses and ports used by the system. In the remainder of this section we evaluate the impact of reconfigurations on Zookeeper clients. We focus on the effect on throughput and latency of normal operations as well as on load balancing.</p><p>We performed our evaluation on a cluster of 50 servers. Each server has one Xeon dual-core 2.13GHz processor, 4GB of RAM, gigabit ethernet, and two SATA hard drives. The servers run RHEL 5.3 using the ext3 file system. We use the 1.6 version of Sun's JVM.</p><p>We used the Java server configured to log to one dedicated disk and take snapshots on another. Our benchmark client uses the asynchronous Java client API, and each client is allowed up to 100 outstanding requests. Each request consists of a read or write of 1K of data (typical operation size). We focus on read and write operations as the performance of all the operations that modify the state is approximately the same, and the performance of non state modifying operations is approximately the same. When measuring throughput, clients send counts of the number of completed operations every 300ms and we sample every 3s. Finally, note that state-transfer is always performed ahead of time and a reconfig operation simply completes it, thus our measurements do not depend on the size of the Zookeeper database.</p><p>Throughput. We first measure the effect of dynamic reconfigurations on throughput of normal operations. To this end, we used 250 simultaneous clients executing on 35 machines, up to 11 of which are dedicated to run Zookeeper servers (typical installations have 3-7 servers, so 11 is larger than a typical setting). <ref type="figure" target="#fig_6">Figure 6</ref> shows the throughput in a saturated state as it changes over time. We show measurements for workloads with 100%, 50%, 30% and 15% write operations. The ensemble is initially composed of 7 servers. The following reconfiguration events are marked on the <ref type="figure">figure:</ref> (1) a randomly chosen follower is removed; (2) the follower is added back to the ensemble; (3) the leader is removed; (4) former leader is added back to the ensemble as a follower; (5) a randomly chosen follower is removed, and (6) the follower is added back to the ensemble.   Unsurprisingly, removing the leader has the most significant effect on throughput. In Zookeeper, any leader change (e.g., due to the failure of the previous leader) always renders the system temporarily unavailable, and a reconfiguration removing the leader is no different in that respect. Note that in Zookeeper, each follower is connected only to one leader. Thus, when the leader changes, followers disconnect from the old leader and only after a new leader is established can submit further operations. While this explains why write operations cannot be executed in the transition period (and the throughput drop for a 100% write workload), the reasons for disabling any read activity during leader election (which causes the throughput drop for read intensive workloads) are more subtle. One of the reasons is that Zookeeper guarantees that all operations complete in the order they were invoked. Thus, even asynchronous invocations by the same thread have a well defined order known in advance to the programmer. Keeping this in mind, consider a read operation that follows a write by the same client (not necessarily to the same data item). The read will only be able to complete after the write, whereas writes await the establishment of a new leader 5 .</p><p>The throughput quickly returns to normal after a leader crash or removal. Notice that read intensive workloads are more sensitive to removal and addition of followers. This is due to the effect of client migration to other followers for load balancing (we explore load-balancing further in Section 5.1). Still, the change in throughput with such reconfigurations is insignificant compared to normal fluctuations of system throughput. The reason is the in-order completion property of Zookeeper mentioned above; writes, which are broadcasted by the leader to followers, determine the throughput of the system. More precisely, the network interface of the leader is the bottleneck. Zookeeper uses a single IP address for leader-follower communication. The throughput of the system therefore depends on the number of servers connected to the leader, not the number of followers in the ensemble. Note, however, that removing or adding a server from the cluster using the reconfig command does not necessarily change the number of connections. Although a removal excludes a server from participating in Zab voting it does not necessarily disconnect the follower from the leader; an administrator might want to first allow clients to gracefully migrate to other followers and only then disconnect a removed follower or shut it down. In addition, removing a follower is sometimes necessary as an intermediate step when changing its role in the protocol (for example, in some situations when converting an observer to a follower). <ref type="figure" target="#fig_8">Figure 7</ref> illustrates this point. It shows two executions, with 30% writes, 250 clients and 11 servers initially in the cluster. There are two reconfiguration events, each removes multiple servers from the cluster. In one execution, the removed servers are turned off while in the other (similarly to <ref type="figure" target="#fig_6">Figure 6</ref>) removed followers maintain their connections to the leader. The graph shows that disconnecting the servers indeed increases system throughput. This shows, that over-provisioning a cluster by adding more replicas (even if those replicas are observers) can be detrimental to Zookeeper throughput. A better strategy is to reconfigure the system dynamically with changing load.   Latency. Next, we focus on the effect of reconfiguration on the latency of other requests. We measured the average latency of write operations performed by a single client connected to Zookeeper; the writes are submitted in batches of 100 operations, after all previously submitted writes complete. Initially, the cluster contains seven replicas and writes have an average latency of 10.8ms 6 .</p><p>We then measured the impact of removing replicas on latency. A client submits a reconfiguration request to re-6 the average latencies presented here are taken over 150 executions or the described experiment and lie within 0.3ms of the real average with 95% confidence move four randomly chosen followers which is immediately followed by a second write batch. If we use the reconfiguration procedure described in Section 3, we get an average latency again of 10.8ms. However, if we stall the request pipeline during the reconfiguration, the average latency increases to 15.2ms.</p><p>With three replicas, our average write latency is 10.5ms. The client then requests to add back four replicas, followed by another write batch. Using our approach write latency is at 11.4ms and jumps to 18.1ms if we stall the pipeline.</p><p>Leader removal. Finally, we investigate the effect of reconfigurations removing the leader. Note that a server can never be added to a cluster as leader as we always prioritize the current leader. <ref type="figure" target="#fig_9">Figure 8</ref> shows the advantage of designating a new leader when removing the current one, and thus avoiding leader election. It depicts the average time to recover from a leader crash versus the average time to regain system availability following the removal of the leader. The average is taken on 10 executions. We can see that designating a default leader saves up to 1sec, depending on the cluster size. As cluster size increases, leader election takes longer while using a default leader takes constant time regardless of the cluster size. Nevertheless, as the figure shows, cluster size always affects total leader recovery time, as it includes synchronizing state with a quorum of followers. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1">Load Balancing</head><p>In this section, we would like to evaluate our approach for load balancing clients as part of configuration changes. To this end, we experiment with a cluster of nine servers and 1000 clients. Clients subscribe to configuration changes using the config command and update their list of servers using the update-server-list command when notified of a change. In order to avoid mass migration of clients at the same time, each client waits for a random period of time between 0 and 5sec. The graphs presented below include four reconfiguration events: (1) remove one random server; (2) remove two random servers; (3) remove one random server and add the three previously removed servers, and (4) add the server removed in step 3.</p><p>We evaluate load balancing by measuring the minimum and maximum number of clients connected to any of the servers and compare it to the average (number of clients divided by the current number of servers). When the client connections are balanced across the servers, the minimum and maximum are close to the average, i.e., there are no overloaded or under-utilized servers.</p><p>Baseline. Our first baseline is the current implementation of load balancing in Zookeeper. The only measure of load is currently the number of clients connected to each server, and Zookeeper is trying to keep the number of connections the same for all servers. To this end, each client creates a random permutation of the list of servers and connects to the first server on its list. If that server fails, it moves on to the next server on the list and so on (in round robin). This approach works reasonably well when system membership is fixed, and can easily accommodate server removals. It does not, however, provide means for incorporating a new server added to the cluster. In order to account for additions in this scheme, we replace the client's list with a new list of servers. The client maintains its connection unless its current server is not in the new list. <ref type="figure" target="#fig_10">Figure 9</ref> shows that load is balanced well as long as we perform removals (steps 1 and 2), however when servers are added in steps 3 and 4 the newly added servers are under-utilized. In the beginning of step 3 there are six servers in the system, thus approximately 166 clients are connected to every server. When we remove a server and add three new ones in step 3, the clients connected to the removed server migrate to a random server in the new configuration. Thus, every server out of the eight servers in the new configuration gets an expected 21 additional clients (the newly added servers will only have these clients, as no other clients disconnect from their servers). In step 4 we add back the last server, however no clients migrate to this server. Although all clients find out about the change and update their lists, no client disconnects from its server as it is still part of the system. To mitigate the problem illustrated in <ref type="figure" target="#fig_10">Figure 9</ref> we could of course disconnect all clients and re-connect them to randomly chosen servers in the new configuration. This, however, creates excessive migration and unnecessary loss of throughput. Ideally, we would like the number of migrating clients to be proportional to the change in membership. If only a single server is removed (or added), only clients that were (or should be) connected to that server should need to migrate.</p><p>Consistent Hashing. A natural way to achieve such limited migration, which we use as a second baseline, is to associate each client with a server using consistent hashing <ref type="bibr" target="#b13">[14]</ref>. Client and server identifiers are randomly mapped to points in an m-bit space, which can be seen as circular (i.e., 0 follows 2 m − 1). Each client is then associated with the server that immediately follows it in the circle. If a server is removed, only the clients that are associated with it will need to migrate by connecting to the next server on the circle. Similarly, if a new server is added a client migrates to it only if the new server was inserted between the client and the server to which it is currently connected. In order to improve load balancing, each server is sometimes hashed k times (usually k is chosen to be in the order of log(N ), where N is the number of servers). To evaluated the approach, we implemented it in Zookeeper. <ref type="figure" target="#fig_0">Figure 10</ref> shows measurements for k = 1, k = 5 and k = 20. We used MD5 hashing to create random identifiers for clients and servers (m = 128). We can see that higher values of k achieve better load balancing. Note, however, that load-balancing in consistent hashing is uniform only with "high probability", which depends on N and k. In the case of Zookeeper, where 3-7 servers (N ) are usually used, the values of N and k are not high enough to achieve reasonable load balancing.</p><p>Probabilistic Load Balancing. Finally, <ref type="figure" target="#fig_0">Figure 11</ref> shows measurements of load-balancing with the approach we have implemented in Zookeeper as outlined in Section 4. Unlike consistent hashing, in this approach every client makes a probabilistic decision whether and where to migrate, such that the expected number of clients per server is the same for every server. As we can see from the figure the difference in number of clients between the server with the most clients and the least clients is very small. Using our simple case-based probabilistic load balancing we are able to achieve very close to optimal load-balance using logic entirely at the client.  Figure 10: Load balancing using consistent hashing, with k = 1 (left), k = 5 (middle), and k = 20 (right). Figure 11: Load balancing using our method (Section 4).</p><p>implementing Paxos (such as Chubby and Boxwood) have one outstanding decree at-a-time, which in fact achieves primary-order. This is done primarily to simplify implementation and recovery <ref type="bibr" target="#b18">[19]</ref>. Unlike such approaches, we do not limit the the concurrent processing of operations. Unlike systems such as RAMBO <ref type="bibr" target="#b8">[9]</ref>, Boxwood <ref type="bibr" target="#b18">[19]</ref>, GFS <ref type="bibr" target="#b7">[8]</ref>, Chubby <ref type="bibr" target="#b4">[5]</ref>, chain replication <ref type="bibr" target="#b19">[20]</ref> and PacificA <ref type="bibr" target="#b20">[21]</ref> that use an external reconfiguration service, we use the system itself as the reconfiguration engine, exploiting the primary order property to streamline reconfigurations with other operations. Zookeeper is often used by other systems for the exact same purpose, and thus relying on another system for reconfiguring Zookeeper would simply push the problem further as well as introduce additional management overhead. An additional difference from RAMBO is that in our design, every backup has a single "active" configuration in which it operates, unlike in RAMBO where servers maintain a set of possible configurations, and operate in all of them simultaneously. Finally, RAMBO and several other reconfigurable systems (see <ref type="bibr" target="#b0">[1]</ref> for a survey), are designed for reconfiguring read/write storage, whereas Zookeeper provides developers with arbitrary functionality, i.e., a universal object via consensus <ref type="bibr" target="#b9">[10]</ref>; the read/write reconfiguration problem is conceptually different <ref type="bibr" target="#b1">[2]</ref> than the one we address in this paper.</p><p>SMART <ref type="bibr" target="#b17">[18]</ref> is perhaps the most practical implementation of Paxos <ref type="bibr" target="#b14">[15]</ref> SMR published in detail. SMART uses Lamport's α parameter to bound the number of operations that may be executed concurrently (see Section 2). In addition, SMART uses configuration-specific replicas: if the cluster consists of replicas A, B, and C and we are replacing C with D, SMART runs two replicas of A and two of B, one in the new configuration and one in the old, each running its own instance of the replication protocol. An important design consideration in our work has been to introduce minimal changes to Zookeeper, as it is used in production by many commercial companies. Dynamically creating additional Zookeeper replicas just for the purpose of reconfiguration adds an implementation and management overhead that would not be acceptable to Zookeeper users. Unlike SMART, we do not limit concurrency or require any additional resources to reconfigure.</p><p>FRAPPE <ref type="bibr" target="#b3">[4]</ref> proposes a different solution. Each server in FRAPPE works with a set of possible configurations, similarly to RAMBO. If a reconfiguration is proposed for history slot n, any number of operations can be proposed after n, however their completion is speculative -users are aware that even though these operations commit they may later be rolled back if a different operation is chosen for slot n. This requires servers to maintain a speculative execution tree, each branch corresponding to an assumption on the decision on some reconfiguration for a particular history slot. In case the reconfiguration is chosen for slot n and once state transfer is complete, the speculative operations become permanently committed and the corresponding tree-branch is merged into the "trunk". Otherwise, the branch is simply abandoned. Similarly to SMART and FRAPPE, we do not require any intersection between the memberships of consecutive configurations. The algorithm presented in this paper processes updates speculatively, similar to FRAPPE. However, our algorithm does not require servers to work with or explicitly manage multiple configurations and it does not expose speculative operation completions to the clients.</p><p>Group communication systems that provide virtual synchrony <ref type="bibr" target="#b6">[7,</ref><ref type="bibr" target="#b2">3]</ref> are perhaps closer to Zookeeper than Paxos-style replicated state machines. In such systems, a group of processes may exchange messages with others in the group, and the membership of the group (called a view) may change. Virtual synchrony guarantees that all processes transferring from one view to the next agree on the set of messages received in the previous view. Note that they do not necessarily agree on the order of messages, and processes that did not participate in the previous view do not have to deliver these messages. Still, virtual synchrony is similar to primary order in the sense that it does not allow messages sent in different configurations to interleave just as primary order does not allow messages sent by different leaders to interleave. Unlike state-machine replication systems, which remain available as long as a quorum of the processes are alive, group communication systems must react to every failure by removing the faulty process from the view. While this reconfiguration is in progress, client operations are not processed. Other systems, such as Harp <ref type="bibr" target="#b16">[17]</ref> and Echo <ref type="bibr" target="#b10">[11]</ref> follow similar methodology, stopping all client operations during reconfigurations. Conversely, our design (similarly to state-machine replication systems) tolerates failures as long as a quorum of the replicas remains available, and allows executing client operations while reconfiguration and state-transfer are in progress.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Conclusions</head><p>Reconfiguration is hard in general. It becomes especially hard when reconfiguring the configuration service. While intuitively it seems simple, care must be taken to address all failure cases and execution orderings.</p><p>Our reconfiguration protocol builds on properties of Primary/Backup systems to achieve high performance reconfigurations without imposing a bound on concurrent processing of operations or stalling them, and without the high management price of previous proposals.</p><p>The load balancing algorithm for distributing clients across servers in a new configuration involves decisions made locally at the client in a completely distributed fashion. We guarantee uniform expected load while moving a minimum number of clients between servers.</p><p>We implemented our protocols in an existing opensource primary/backup system, and are currently working on integrating it into production. This involved simple changes, mostly to the commit and recovery operations of Zookeeper. Our evaluation shows that there are minimal disruptions in both throughput and latency using our approach.</p><p>While the methods described in this paper were implemented in the context of ZooKeeper, the primary order property we have taken advantage of is commonly provided by Primary/Backup systems.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: The processing of a write request by a primary. 1.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 2 :</head><label>2</label><figDesc></figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>4 :</head><label>4</label><figDesc>Figure 2: The generic approach to reconfiguration: adding servers D and E to a cluster of three servers A, B and C.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_4"><head>Figure 5 :</head><label>5</label><figDesc>Figure 5: A balanced service (10 clients are connected to each server) about to move to a new configuration S .</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_6"><head>Figure 6 :</head><label>6</label><figDesc>Figure 6: Throughput during configuration changes.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_8"><head>Figure 7 :</head><label>7</label><figDesc>Figure 7: Throughput during configuration changes. Initially there are 11 servers in the cluster. The workload includes 30% writes. Configuration changes: (1) four followers are removed, (2) two additional followers are removed.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_9"><head>Figure 8 :</head><label>8</label><figDesc>Figure 8: Unavailability following leader removal or crash.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_10"><head>Figure 9 :</head><label>9</label><figDesc>Figure 9: Baseline load balancing.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="false"><head>S = {P, B1, B2} New configuration S' = {P, B3, B4}</head><label></label><figDesc></figDesc><table>ACK Op 1,2 
+
+ACK Op 1,2 
+
+COMMIT 
+Op 1,2 
+
+COMMIT 
+Op 1,2 
+
+COMMIT 
+Op 1,2 
+
+COMMIT 
+Op 1,2 
+
+New configuration 
+obtains history 
+
+P 
+
+B 1 
+
+B 2 
+
+B 3 
+
+B 4 
+
+Primary sends 
+new configuration 
+
+Quorums from previous and new 
+configurations acknowledge Op 1 , 
+
+Op 2 , and COP 
+
+Primary activates 
+new configuration 
+
+Current config COMMIT COP 
+ACTIVATE 
+
+COMMIT COP 
+ACTIVATE 
+
+COMMIT COP 
+ACTIVATE 
+
+COMMIT COP 
+ACTIVATE 
+
+ACK COP 
+
+ACK COP 
+
+ACK Op 1,2 
+
+ACK Op 1,2 
+
+ACK COP 
+
+ACK COP 
+COP 
+
+COP 
+
+COP 
+
+COP 
+
+Op 2 
+
+Op 2 
+
+Op 2 
+
+Op 2 
+
+Op 1 
+
+Op 1 
+
+Op 1 
+
+Op 1 
+
+ACK 
+
+ACK 
+
+H? 
+
+H? 
+
+H 
+
+H 
+
+</table></figure>
+
+			<note place="foot" n="1"> In a split-brain scenario, servers form multiple groups, each independently processing client requests, hence causing contradictory state changes to occur. 2 http://search-hadoop.com/m/ek5ej2dOQsB</note>
+
+			<note place="foot" n="5"> In Zookeeper 3.4, each operation is blocked until every operation (not necessarily by the same client) previously submitted to the same follower completes; this is not necessary to guarantee the in-order completion semantics and may therefore change in the future.</note>
+
+			<note place="foot" n="6"> Related Work Primary order is commonly guaranteed by Primary/Backup replication systems, e.g., Chubby [5], GFS [8], Boxwood [19], PacificA [21], chain replication [20], Harp [17] and Echo [11]. Although Paxos does not guarantee primary order [13], some systems</note>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgments</head><p>We would like to thank Marshall McMullen for his valuable contributions to this project. We thank the Zookeeper open source community and in particular to Vishal Kher, Mahadev Konar, Rakesh Radhakrishnan and Raghu Shastry for their support, helpful discussions, comments and thorough reviews of this work. Finally, we would like to thank the anonymous reviewers and our shepherd, Christopher Small, for their comments.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">Reconfiguring replicated atomic storage: A tutorial</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aguilera</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">K</forename><surname>Keidar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Malkhi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Martin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J.-P</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shraer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Bulletin of the EATCS</title>
+		<imprint>
+			<biblScope unit="volume">102</biblScope>
+			<biblScope unit="page" from="84" to="108" />
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Dynamic atomic storage without consensus</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aguilera</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">K</forename><surname>Keidar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Malkhi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shraer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">J. ACM</title>
+		<imprint>
+			<biblScope unit="volume">58</biblScope>
+			<biblScope unit="page">7</biblScope>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">Virtually synchronous methodology for dynamic service replication</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Birman</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Malkhi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Van Renesse</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">MSR</title>
+		<imprint>
+			<date type="published" when="2010-11" />
+		</imprint>
+	</monogr>
+<note type="report_type">Tech. Rep. 151</note>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Frappé : Fast replication platform for elastic services</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bortnikov</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Chockler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Perelman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Roytman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Shachor</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shnayderman</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM LADIS</title>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">The chubby lock service for loosely-coupled distributed systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Burrows</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI</title>
+		<imprint>
+			<date type="published" when="2006" />
+			<biblScope unit="page" from="335" to="350" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Paxos made live: an engineering perspective</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chandra</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">D</forename><surname>Griesemer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Redstone</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">PODC</title>
+		<imprint>
+			<date type="published" when="2007" />
+			<biblScope unit="page" from="398" to="407" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Group communication specifications: a comprehensive study</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chockler</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Keidar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vitenberg</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Comput. Surv</title>
+		<imprint>
+			<biblScope unit="volume">33</biblScope>
+			<biblScope unit="page" from="427" to="469" />
+			<date type="published" when="2001" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">The google file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ghemawat</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Gobioff</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Leung</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S.-T</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP</title>
+		<imprint>
+			<date type="published" when="2003" />
+			<biblScope unit="page" from="29" to="43" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Rambo: a robust, reconfigurable atomic memory service for dynamic networks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gilbert</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Lynch</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><forename type="middle">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shvartsman</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Distributed Computing</title>
+		<imprint>
+			<biblScope unit="volume">23</biblScope>
+			<biblScope unit="page" from="225" to="272" />
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Wait-free synchronization</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Herlihy</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Trans. Program. Lang. Syst</title>
+		<imprint>
+			<biblScope unit="volume">13</biblScope>
+			<biblScope unit="page" from="124" to="149" />
+			<date type="published" when="1991" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Granularity and semantic level of replication in the echo distributed file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hisgen</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Birrell</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Jerian</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Mann</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Schroeder</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Swart</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the IEEE Workshop on the Management of Replicated Data</title>
+		<meeting>the IEEE Workshop on the Management of Replicated Data</meeting>
+		<imprint>
+			<date type="published" when="1990-11" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Zookeeper: Wait-free coordination for internet-scale systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hunt</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Konar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Junqueira</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><forename type="middle">P</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Reed</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX Annual Technology Conference</title>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Zab: High-performance broadcast for primary-backup systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Junqueira</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><forename type="middle">P</forename><surname>Reed</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">C</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Serafini</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">DSN</title>
+		<imprint>
+			<date type="published" when="2011" />
+			<biblScope unit="page" from="245" to="256" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Consistent hashing and random trees: Distributed caching protocols for relieving hot spots on the world wide web</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Karger</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">R</forename><surname>Lehman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Leighton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><forename type="middle">T</forename><surname>Panigrahy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Levine</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lewin</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">STOC</title>
+		<imprint>
+			<date type="published" when="1997" />
+			<biblScope unit="page" from="654" to="663" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">The part-time parliament</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lamport</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Trans. Comput. Syst</title>
+		<imprint>
+			<biblScope unit="volume">16</biblScope>
+			<biblScope unit="page" from="133" to="169" />
+			<date type="published" when="1998" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Reconfiguring a state machine</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lamport</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Malkhi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhou</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">SIGACT News</title>
+		<imprint>
+			<biblScope unit="volume">41</biblScope>
+			<biblScope unit="page" from="63" to="73" />
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">Replication in the harp file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Liskov</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Ghemawat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Gruber</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Johnson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Shrira</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Williams</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP</title>
+		<imprint>
+			<date type="published" when="1991" />
+			<biblScope unit="page" from="226" to="238" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">The smart way to migrate replicated stateful services</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lorch</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">R</forename><surname>Adya</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Bolosky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">J</forename><surname>Chaiken</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Douceur</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">R</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Howell</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">EuroSys</title>
+		<imprint>
+			<date type="published" when="2006" />
+			<biblScope unit="page" from="103" to="115" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Boxwood: Abstractions as the foundation for storage infrastructure</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Maccormick</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Murphy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Najork</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Thekkath</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhou</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI</title>
+		<imprint>
+			<date type="published" when="2004" />
+			<biblScope unit="page" from="105" to="120" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Chain replication for supporting high throughput and availability</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Van Renesse</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><forename type="middle">B</forename><surname>Schneider</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI</title>
+		<imprint>
+			<date type="published" when="2004" />
+			<biblScope unit="page" from="91" to="104" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Replication in log-based distributed storage systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wei</forename><surname>Lin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yang</forename><surname>Mao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">Z</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhou</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Pacifica</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Tech. Rep. MSR-TR</title>
+		<imprint>
+			<date type="published" when="2008-02-25" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">An empirical study on configuration errors in commercial and open source systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yin</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Ma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Zheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Zhou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Bairavasundaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">N</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pasupathy</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP</title>
+		<imprint>
+			<date type="published" when="2011" />
+			<biblScope unit="page" from="159" to="172" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

@@ -1,0 +1,1037 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:57+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">A Tale of Two Abstractions: The Case for Object Space</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Daniel</forename><surname>Bittman</surname></persName>
+							<email>dbittman@ucsc.edu</email>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Santa</forename><surname>Cruz</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Peter</forename><forename type="middle">Alvaro</forename><surname>Uc</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Santa</forename><surname>Cruz</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Darrell</forename><forename type="middle">D E</forename><surname>Long</surname></persName>
+							<email>darrell@ucsc.edu</email>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Santa</forename><surname>Cruz</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ethan</forename><forename type="middle">L</forename><surname>Miller</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Santa</forename><surname>Cruz</surname></persName>
+						</author>
+						<title level="a" type="main">A Tale of Two Abstractions: The Case for Object Space</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>The increasing availability of byte-addressable non-volatile memory on the system bus provides an opportunity to dramatically simplify application interaction with persistent data. However, software and hardware leverage different abstractions: software operating on persistent data structures requires &quot;global&quot; pointers that remain valid after a process terminates, while hardware requires that a diverse set of devices all have the same mappings they need for bulk transfers to and from memory, and that they be able to do so for a potentially heterogeneous memory system. Both abstractions must be implemented in a way that is efficient using existing hardware. We propose to abstract physical memory into an object space, which maps objects to physical memory, while providing applications with a way to refer to data that may have a lifetime longer than the processes accessing it. This approach reduces the coordination required for access to multiple types of memory while improving hardware security and enabling more hardware autonomy. We describe how we can use existing hardware support to implement these abstractions, both for applications and for the OS and devices, and show that the performance penalty for this approach is minimal.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Byte-addressable non-volatile memory (BNVM) on the memory bus will soon be commonplace in computer systems <ref type="bibr" target="#b0">[1,</ref><ref type="bibr" target="#b4">5,</ref><ref type="bibr" target="#b10">11]</ref>. While consistency, data structures, optimization, and file systems have been considered <ref type="bibr" target="#b6">[7,</ref><ref type="bibr" target="#b7">8,</ref><ref type="bibr" target="#b9">10,</ref><ref type="bibr" target="#b15">16,</ref><ref type="bibr" target="#b16">17,</ref><ref type="bibr" target="#b22">23,</ref><ref type="bibr" target="#b23">24,</ref><ref type="bibr" target="#b24">25,</ref><ref type="bibr" target="#b32">33,</ref><ref type="bibr" target="#b34">35,</ref><ref type="bibr" target="#b35">36]</ref>, there are two significant avenues of research that have not been as thoroughly explored: first, the effect of persistence on the programming models we currently use, and second, the effect of increasing heterogeneity of the physical address space on OS mediation of increasingly autonomous hardware devices, the software running on them, and their access to physical memory.</p><p>The direct access nature of BNVM enables low-latency, memory-style access to persistent data, in which memorystyle data structures may have indefinitely long lifetimes.</p><p>Virtual addresses are the wrong abstraction to facilitate the creation of such structures as programs need to refer to data with a persistent pointer that encodes an offset within an object (a segment of memory). These objects, identified by a unique ID, contain data with similar access semantics, access control, and lifetime. If these identifiers are never recycled, a persistent pointer of the form object, offset will always remain valid, allowing persistent data structures to maintain pointers that outlive a single process's virtual address space.</p><p>In contrast, a hardware view of BNVM has different needsthe hardware need not care about persistence and data relationships. Instead, it needs to coordinate access to objects in physical memory, as requested by applications, while storing and loading to and from memory in an environment where pages of memory could move between the different types of physical memory in the physical address space. This coordination problem, arising from the need to move data in physical memory, means hardware and CPUs must operate on a abstract view of memory above physical addresses.</p><p>To address these two different, but related, needs, we propose that systems support two new abstractions for object access and mapping: a global object space and a logical object space. The global object space contains all objects (potentially across multiple systems), allowing persistent pointers to refer to data with long lifetimes and giving software the ability to operate directly on persistent structures. The logical object space is an abstraction over physical memory that contains the working set of actively used objects local to one system. Hardware devices then issue loads and stores to memory by addressing a location within an object instead of physical addresses directly, giving hardware the ability to operate more autonomously with little kernel participation in the system's memory management. We implement these abstractions in part by repurposing virtualization hardware to provide abstraction over physical memory-an ability that is underused outside of full-system virtualization. These two abstractions both allow programmers to easily build applications that manipulate persistent data structures and facilitate OS and hardware management of the underlying memory.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">BNVM Abstractions</head><p>The challenges introduced by BNVM in mapping virtual addresses to physical addresses are the different lifetimes of data with respect to the references to that data and the heterogeneity of physical memory. Software and hardware have different requirements for this mapping, in the following respects:</p><p>Latency. Prior persistent data access schemes relied on system calls to operate on persistent storage. BNVM's lowlatency can no longer tolerate the cost of those system calls. Instead, programs must have direct access to persistent data via load/store instructions. Similarly, hardware must be able to transfer data to and from BNVM using DMA. In-memory data structures. Direct access to persistent memory removes the loading and unloading cost, but we must also remove the cost of data serialization: since persistent data is located in-memory, programs can operate on data as in-memory data structures using standard programming techniques. This change is not an issue for hardware, which treats data as a "bag of bits". Data lifetime. If persistent data is stored as in-memory data structures, then applications need a way to refer to data such that references have the same lifetime as the referenced data, a requirement that fundamentally arises from the need for to construct references that encode the relationships between data. Applications can store persistent pointers that encode a more persistent name for data than an ephemeral virtual address. Again, hardware has no such requirement, since it neither constructs nor interprets relationships between data. Devices that need to consider data relationships do so in software running atop the hardware. Mappings. Both software and hardware must have a way of translating a persistent pointer into a physical address. This mapping may change frequently as the OS changes allocation of physical pages to data (e.g., to persist a piece of data). Hardware need only know how to access data in memory for a single operation. In contrast, software must have longer-term mappings, and must be able to support data shared between threads, potentially mapped into the threads in different places. Memory heterogeneity. Hardware and the operating system must know about different types of memory, e.g. DRAM and BNVM. Software need only know how to allocate from the different types, and should not deal with other differences. Hardware, however, will need to know when data is moved between memory types if it wishes to correctly emit loads and stores requested by software.</p><p>Our design must support appropriate abstractions for both software and hardware, facilitating the use of persistent pointers to long-lived data for applications while providing hardware and the OS with the ability to move data in, out of, and around physical memory, preferably only using existing hardware functionality. We first abstract memory into objects, where related data with similar access semantics (e.g., an entire B-tree, where all nodes are subject to the same access control, etc.) are placed in a single object and identified by a globally unique ID. IDs are formed via hashing, partitioned allocation, or other methods that prevent collisions of IDs across machines with high probability.</p><p>We propose two abstractions to provide effective access to objects for both hardware and software: a global object space, which facilitates persistent pointers (discussed below), and a logical object space, which allows hardware to address data without needing knowledge of the data's physical location. We split these abstractions and consider them different because of the different requirements discussed above; software must worry about reference lifetime, whereas hardware's access to objects is disconnected from persistence. On the other hand, today's hardware must worry about physical location of data, which (with BNVM) is now more likely to change over time.</p><p>Note that we are not considering issues of consistency. These have been studied extensively <ref type="bibr" target="#b6">[7,</ref><ref type="bibr" target="#b7">8,</ref><ref type="bibr" target="#b9">10,</ref><ref type="bibr" target="#b16">17,</ref><ref type="bibr" target="#b22">23,</ref><ref type="bibr" target="#b23">24,</ref><ref type="bibr" target="#b24">25,</ref><ref type="bibr" target="#b32">33]</ref>, and are orthogonal to the semantic challenges we discuss here. Our work on the global object space does not prescribe a particular solution to consistency, and the logical address space need not be persisted due to its nature as an abstraction over physical space only.</p><p>Persistent Pointers Applications running on BNVM must have a way to create pointers that outlast a process's virtual address space and are valid in other virtual address spaces. Previous single address space operating systems (SASOSes) <ref type="bibr" target="#b5">[6,</ref><ref type="bibr" target="#b13">14,</ref><ref type="bibr" target="#b26">27,</ref><ref type="bibr" target="#b29">30]</ref> provided this functionality by having a single virtual address space for all processes. However, this approach has several problems. First, the virtual address space must be large, since a global-scale system could require more than a 64-bit address space, especially if the space is allocated sparsely. Second, a SASOS requires a great deal of coordination, since each process shares the same virtual address space, even if there is no actual data sharing between processes-a problem that is compounded when coordinating access to data across multiple machines <ref type="bibr" target="#b13">[14,</ref><ref type="bibr" target="#b28">29]</ref>.</p><p>The use of a global object space constructed of all objects allows a persistent pointer, a object_id, offset tuple, to refer to any addressable location. An object then need only be mapped into an individual process's virtual address space, and references to that object are simply implemented as object base + offset. The virtual address an object is mapped to is per-process, arbitrary, has no bearing on persistent pointers, and exists solely to provide access to the object efficiently with current hardware. This approach, a type of fat pointer <ref type="bibr" target="#b21">[22]</ref>, is similar to segmentation <ref type="bibr" target="#b2">[3,</ref><ref type="bibr" target="#b8">9]</ref>, and can easily be implemented with segment registers, though this feature is being removed from current ISAs. Unlike segmentation in Multics and elsewhere, persistent pointers allow inter-object references to be stored in an object and be usable by another process with no knowledge of the creating process. Persistent pointers also remove the need for different processes to come to a global agreement on which objects occupy which slots in a process's segment table. As a result, persistent pointers are always valid, assuming that the object to which they point has not been deleted, and facilitate references within a truly global address space that can cross machine boundaries.</p><p>Implementing persistent pointers efficiently and flexibly is a key concern for a BNVM system: persistent pointers should be no larger than existing pointers and should be easy to support on current CPUs. A naïve implementation would require very large pointers, since unique object identifiers (OIDs) would be 64-128 bits with an offset of at least 40 bits.</p><p>To address this, we use an additional level of indirection. Each object X has a Foreign Object <ref type="table">Table (</ref>FOT) listing the objects to which X points, providing support for long object identifiers and flexible naming while allowing all pointers in X to remain 64 bits. A persistent pointer in X is represented as Z, offset, where Z is an index into the FOT. Persistent pointers where Z = 0 refer to locations in X, while Z &gt; 0 refers to locations in other objects. If offset is a 40 bit value, each object can support direct references to 2 24 −1 foreign objects. Since each object has its own FOT, any thread that references an object can easily perform the translation from persistent pointer to a virtual memory reference; preliminary measurements of the performance are discussed in Section 4. Our model, unlike some existing and previous models <ref type="bibr" target="#b14">[15,</ref><ref type="bibr" target="#b25">26,</ref><ref type="bibr" target="#b27">28,</ref><ref type="bibr" target="#b33">34]</ref>, can be implemented efficiently without additional hardware support, does not increase pointer size, allows a per-object view of the global object space, and yields little change to common, in-memory programming semantics.</p><p>Programming Models Made Easier The direct access to persistent data and the memory-like structuring of data make current programming tasks easier; programmers no longer need to concern themselves with two programming domains of volatile and persistent data, nor do they need to worry about explicit movement of data and transforming data between a "persistent" form and an "in-memory" form. These access models also invert the traditional systems programming model. Instead of structuring computation in a process-centric manner, persistent data references and objects let us build our programs around data, a design goal known to all (programming is all about data) but realized by few, since traditional persistent data access requires significant overhead in terms of programming complexity and OS involvement. Of course, ease of use is key <ref type="bibr" target="#b18">[19]</ref>. Providing a standardized, system-wide persistent pointer mechanism is vital, as it presents hardware and compiler vendors with a fixed-target for building persistent pointer support and taking the burden off of programmers.</p><p>Hardware and Memory The interface presented to hardware must enable interaction with a heterogeneous memory system and support the abstraction of an object space rather than a collection of flat memory spaces. Unlike applications, hardware has no need for creating long-lived pointers to locations within objects. Rather, hardware must have the ability to transfer large chunks of objects to, from, and around memory, and must be able to manage different types of memory, preferably in a way that is largely transparent to applications.</p><p>Requiring hardware to access a global object space through a object, offset tuple is unnecessary overhead and complexity-hardware need only ever access the "working set" of objects currently undergoing computation. Thus, our design abstracts the view from hardware of physical memory into a logical object space, an address space that maps contiguous objects within it to physical memory pages, managed by the operating system. This solves the heterogeneity problem by allowing hardware to refer to data within objects instead of physical addresses, whose lifetimes are much smaller than the objects, and doesn't require hardware to emit (likely large) addresses for the global address space.</p><p>While SASOSes are not a viable solution to the problem of persistent pointers, they are a solution to implementing the logical object space. Hardware, and the CPU, are directly connected, reducing the cost of invalidation and coordination of an address space. Additionally, this address space is intermediate and hidden from programs-a virtual address is translated to the logical object space, after which the address is translated to a physical location (shown in <ref type="figure">Figure 1</ref>). This translation for applications (after the virtual address translation) and that of hardware is the same, reducing the management complexity for the OS, discussed in Section 3.</p><p>Object Space Implementation The logical object space abstraction relies on a single system-wide mapping maintained by the OS which all devices use for accessing memory. The address space is organized by breaking up the flat address space into an array of fixed-size object slots, each of which may be fully or partially occupied by an object. Objects need only be in the map if they are in active use, and the position in the map need not reflect an object's actual identifier nor its location in physical memory (which need not be contiguous).</p><p>When an object is needed, it is mapped into a new slot, and hardware can then access the object through its location in the space. Objects may be removed to make room, a process which can occur lazily in the background to remove potential invalidation costs from the critical path. Objects need not be moved in this space-if an object needs to have data moved from one type of physical memory to another, we can update the mappings, and any hardware or software that accesses that object automatically accesses the new physical location. There are further optimizations that can be made to fit the logical object space into a smaller virtual address space.</p><p>It is critical that the object space abstraction be implementable on existing hardware-a new model for memory space organization will never be adopted if it requires significant hardware changes. Fortunately, as described in Section 4, the IOMMU and extended page tables originally implemented to support virtualization can be used to support an object space for hardware as well as for software, and can do so more efficiently than existing use of these features.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Implications for OS Design</head><p>The operating system's primary role is to manage the two abstractions, providing hardware with an effective means to access objects and providing applications with an effective means to store and access persistent data, while meeting the requirements we discussed earlier. For example, the low-latency requirement discussed in Section 2 requires removing the kernel from the critical path for I/O; thus the kernel need not contain much in the way of persistent data access services and abstractions, and instead relies more heavily on userspace.</p><p>The OS in this approach is split, much like an Exokernel <ref type="bibr" target="#b3">[4,</ref><ref type="bibr" target="#b12">13]</ref>, with a library operating system that lives in userspace to assist programs with persistent data access-in this case, helping them construct and dereference persistent pointers-while the kernel is responsible for managing the two abstractions discussed above and mediating between hardware and software. Each thread runs in a virtual address space, as usual, but with an additional translation layer underneath (the logical object space), as discussed in Section 2. These spaces are managed by the kernel, where the virtual space is controlled by userspace and the logical object space is managed as needed, adding objects when accessed, and removing them lazily when more space is required.</p><p>The logical object space greatly simplifies OS implementation; consider the case of multiple processes using an object that is relocated in physical memory from DRAM and BNVM. Instead of updating each process's address space, and having to do a reverse lookup to find where the object is in each space, the OS need only update the (single) mapping in the logical object space.</p><p>Security An immediate consequence of removing the kernel from the data access path is the loss of the traditional access control enforcement. Typically, the OS enforces access control during open, giving the process a token which encodes those access control policies (the file descriptor), allowing the OS to enforce the decided rights during calls to read, write, or mmap. Instead, our system allows applications to access data directly, and so cannot enforce these decisions in the OS.</p><p>Instead, we rely on hardware for enforcement: the mapping hardware we use for the object-space abstraction can also enforce security, if the OS configures mapping tables correctly. In the case of applications, the extended page tables contain the access rights for each object mapped into the space, and the CPU's MMU enforces those restrictions. For hardware, we can use the IOMMU's page-tables to do a similar job. The result is that application and hardware access to data objects is controlled by the same policy and the same basic mechanism, which opens the door to more autonomous operation of hardware. <ref type="figure">Figure 1</ref> shows permissions of objects in the logical object space along with the requested protections in the virtual address space.</p><p>The lack of kernel involvement in persistent data access and the separation of permissions and protections discussed above allows the removal of explicit "open" operations and supports "lazy-binding" of access rights. Traditionally, a process needs to know ahead of time what its access rights are. Consider the case of a program which operates on a file by reading it and only occasionally writing it. It must either open the file read-only and re-open it for writing later, handling permission errors, or it must open it read-write and potentially fail to do useful work if it cannot write the file. Instead, if access control is checked and enforced only on actual access to the file, the program can do the necessary reads and write when requested, handling a exceptions for permission errors. This model is much simpler and more natural than explicitly re-opening the file, and paves the way for more reliance on the operating system for handling access control rather than applicationspecific solutions. A program can hand out references to data that a recipient may not write, but they need not know that until they try. Moreover, TOCTTOU errors <ref type="bibr" target="#b30">[31]</ref> cannot occur, since each access is checked by hardware as it is made.</p><p>Of course, access control is not static throughout the system; different processes have different access control rights to different objects. We support this by allowing multiple logical object spaces with different access control specified per-object, but with an object occupying the same (virtuallyaddressed) location across spaces. The OS then maps objects from the logical object space with the appropriate permissions into a process's virtual address space. This does not significantly complicate the management of the logical address space, nor the OS's implementation, because the objects always occupy the same location, just with different permissions. The two-level mapping scheme also reduces the number of page-table structures required since we separate protection from security contexts, and so do not need to maintain all combinations of permissions and requested protections.</p><p>The result is that the logical address space can also be considered a security context, which threads may share. The OS then switches security contexts on context switch. Threads can change security contexts (if allowed) as well, allowing protected non-local control transfers. Similarly, hardware devices can have security roles assigned to them, allowing, for example, a NIC to access only objects associated with its receive and transmit queues.</p><p>We have begun implementing a prototype system with which to evaluate these ideas, including a set of userspace libraries to evaluate our persistent pointer mechanisms and a modified FreeBSD kernel that uses our two-level mapping to abstract physical memory from the point of view of much of the kernel. We are making use of the Extended <ref type="table">Page Tables on Intel  processors (a similar technology, called Nested Page Tables,  exists on AMD)</ref>.</p><p>Since the CPU's addresses are not translated by the IOMMU, but we still want the kernel to operate on the same abstraction as other hardware, we use the virtualization hardware to do two levels of address translation-the first being virtual addresses (which uses the normal address translation hardware) to logical object space, and the second from logical object space to physical memory (which uses the EPT).</p><p>The use of the EPT necessitates the use of the rest of the virtualization hardware, since only the guest (operating in VMX-non-root mode) has its addresses translated via the EPT. Thus, we take the approach of having the kernel act as its own hypervisor-during startup, the kernel creates an EPT with an identity map of physical memory, creates a virtual CPU, and launches it. Since the kernel in guest mode still has access to all of physical memory, and we trust the guest implicitly (it is the same kernel), we can avoid nearly every VM exit, with only a few exceptions. More modern processors can take advantage of two additional features to improve performance:</p><p>1. The vmfunc call allows the guest to switch EPTs efficiently without VM exits. The kernel maintains a list of "known-good" EPTs, and can switch to one of them without an exit. 2. Virtualization exceptions allow the guest to handle EPT violations (similar to page-faults), which correspond to paging operations for objects in our model. Importantly, our use of virtualization does not preclude the possibility of running our system atop a VM or using it as a traditional hypervisor. In the first case, we can make use of nested virtualization 1 or paravirtualization, and in the second, we can start additional virtual CPUs with different protection semantics. We are simply using the virtualization hardware when it is not in use to improve the simplicity of the kernel and align the CPU with what other hardware sees.</p><p>Using the IOMMU The IOMMU is capable of providing the same abstraction that we use the EPT for. Existing research on using the IOMMU focuses on either hardware virtualization, hardware protection <ref type="bibr" target="#b17">[18,</ref><ref type="bibr" target="#b19">20,</ref><ref type="bibr" target="#b20">21]</ref>, or partitioning process' access to hardware devices <ref type="bibr" target="#b1">[2,</ref><ref type="bibr" target="#b11">12]</ref>. In contrast, we are using the IOMMU to provide hardware with an abstracted view of data objects instead of physical memory as they access data, improving ease and security when sharing data between devices and enabling more hardware autonomy when accessing physical memory. The performance implications of the IOMMU are well-studied, and most of the performance overhead from the use of the IOMMU comes into play when unmapping DMA buffers (which is costly due to IOMMU invalidation). However, since we are presenting an address space with spaces that can be lazily reclaimed, we can avoid much of the invalidation cost. Because all processes on the CPU use the same mapping of objects in the logical address space, with multiple spaces only presenting different protections, the number of IOMMU map changes is reduced. Furthermore, the additional management for maintaining DMA buffers and allocations is removed since we are presenting data objects directly to the programs running on the individual hardware components, albeit through the lens of standard access control mechanisms enforced by the translation hardware.</p><p>Preliminary Results Since most hypervisors are not structured the way our system is-they need more isolation for the guest OS-we evaluated the cost of memory accesses with virtualization (testing the overhead of the EPT). We read and wrote 256 MiB of data randomly and sequentially under both VMX-non-root mode and as the host, and we found no significant impact to performance, partly because we avoid nearly all possible VM exits.</p><p>To evaluate the overhead from our persistent pointers, we repeatedly dereferenced a persistent pointer and measured the overhead. After the first dereference and mapping (which is not discussed here for brevity), we found that dereferencing a pointer to a different object costs 2.4 ± 0.1 ns, while dereferencing a pointer to within the same object costs merely 0.4 ± 0.1 ns, due to an optimized code path. These measurements do not include the cost of the final dereference, since that is required anyway. Note that these pointers allow easy programming for persistent data access that replaces serialization, a much more costly procedure <ref type="bibr" target="#b31">[32]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Conclusion</head><p>As BNVM becomes commonplace in computer systems, the abstractions governing how software and hardware view memory must change to allow programmers and hardware to efficiently utilize and manage persistent memory. By breaking memory into objects and providing object-based mappings for both applications and devices, software will be able to use a much simpler, more efficient programming model while still providing manageability and security for persistent random access memory. Our preliminary work has shown that this model can provide benefits even on current operating systems, while paving the way for new lightweight operating systems that hold the promise for improved performance and simplicity as computing systems move towards ubiquitous byte-addressable non-volatile memory.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Discussion Topics</head><p>We have approached our design from the perspective that hardware will grow to be more autonomous (e.g., NICs and special-purpose units operating directly on memory without significant CPU involvement) and that the heterogeneity of systems will continue to increase (e.g., different kinds of memory). We would welcome the storage community's take both on BNVM in the memory hierarchy, and on the use of more independent hardware operating directly on storage.</p><p>This paper has proposed that we should treat memory systems built from NVM and DRAM as collections of objects rather than simply as "flat" memory, and that the CPU MMU and IOMMU are the "right" places to manage such abstractions. We seek feedback on whether our design goal-object spaces-is a reasonable one, and whether our approach to the design is likely to improve system security and usability.</p><p>The organization of memory into object space allows the system to preserve the semantics of objects (files), and to present it to the CPU and devices directly. This can improve the ability of the CPU and other intelligent devices to manage the memory, since they now are aware of how individual memory pages are associated to make up objects. This approach has equally important benefits for security, since access permissions are specified and propagated on a per-object basis, and can be verified as the memory system is accessed by different devices. Are these benefits sufficient to warrant an object space model moving forward?</p><p>The object space model also engenders changes in the programming model, since pointers are now persistent. How much of this should be supported automatically, and how much should be programmer-specified, and how are these implemented? Does the compiler insert code automatically, and what guidance must the programmer provide? There must be some transparency-after all, the programmer would like to take advantage of direct access to BNVM-but there must be some defaults in-place for the complexity this brings.</p><p>The model we have proposed works well in the absence of failure, but how do failures of various sizes (e.g., memory cell failures, memory page failures, or simple "object not found") create problems, and how might they be solved? We would encourage feedback on the right failure recovery mechanisms for our approach and the impacts to the system design.</p><p>The object space approach has the obvious advantage that, if designed properly, it could span multiple individual memory systems using approaches such as those used for remote page faults in a global address space. Is this approach worth the additional complexity that it will require to implement, and would programmers be willing to use such an approach?</p><p>Finally, we have been implementing an operating system to make it simple to use an object space-based system. We would enjoy discussion on whether the small number of primitives in the operating system are sufficient, or whether we need additional primitives to create a fully-functional system.</p></div>
+			<note place="foot" n="1"> While this has a performance overhead, our system acts more like a hypervisor already, and our use of strong separation semantics and hardware security enforcement means we would see little benefit to virtualizing multiple instances of our system.</note>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgements</head><p>This work was supported in part by the NSF grant number IIP-1266400 and by the industrial partners of the Center for Research in Storage Systems. The authors additionally thank the members of the Storage Systems Research Center for their support and feedback. We would like to extend our gratitude to our paper shepherd, Tim Harris, and the anonymous reviewers for their feedback and assistance.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title level="m" type="main">Intel and Micron unveil 3D XPoint, a brand new memory technology</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ars</forename><surname>Technica</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">The nonkernel: A kernel designed for the cloud</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Muli</forename><surname>Ben-Yehuda</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Omer</forename><surname>Peleg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Orna Agmon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Igor</forename><surname>Benyehuda</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dan</forename><surname>Smolyar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Tsafrir</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 4th Asia-Pacific Workshop on Systems</title>
+		<meeting>the 4th Asia-Pacific Workshop on Systems</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">The Multics virtual memory: Concepts and design</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Bensoussan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">T</forename><surname>Clingen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">C</forename><surname>Daley</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2nd ACM Symposium on Operating Systems Principles (SOSP &apos;69)</title>
+		<meeting>the 2nd ACM Symposium on Operating Systems Principles (SOSP &apos;69)</meeting>
+		<imprint>
+			<date type="published" when="1969" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Extensibility, safety, and performance in the SPIN operating system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Brian</forename><forename type="middle">N</forename><surname>Bershad</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stefan</forename><surname>Savage</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Przemyslaw</forename><surname>Pardyak</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Emin Gün</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Marc</forename><forename type="middle">E</forename><surname>Sirer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Fiuczynski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Craig</forename><surname>Becker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Susan</forename><surname>Chambers</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Eggers</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 15th ACM Symposium on Operating Systems Principles (SOSP &apos;95)</title>
+		<meeting>the 15th ACM Symposium on Operating Systems Principles (SOSP &apos;95)</meeting>
+		<imprint>
+			<date type="published" when="1995-12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Overview of candidate device technologies for storage-class memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Geoffrey</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Burr</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Bülent</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Kurdi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chung</forename><forename type="middle">Hon</forename><surname>Scott</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kailash</forename><surname>Lam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Gopalakrishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Shenoy</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IBM Journal of Research and Development</title>
+		<imprint>
+			<biblScope unit="volume">52</biblScope>
+			<biblScope unit="page" from="449" to="464" />
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Sharing and protection in a singleaddress-space operating system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeffrey</forename><forename type="middle">S</forename><surname>Chase</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Henry</forename><forename type="middle">M</forename><surname>Levy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><forename type="middle">J</forename><surname>Feeley</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Edward</forename><forename type="middle">D</forename><surname>Lazowska</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Computer Systems</title>
+		<imprint>
+			<biblScope unit="volume">12</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="271" to="307" />
+			<date type="published" when="1994-11" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">NV-Heaps: Making persistent objects fast and safe with next-generation, non-volatile memories</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joel</forename><surname>Coburn</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adrian</forename><forename type="middle">M</forename><surname>Caulfield</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ameen</forename><surname>Akel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Laura</forename><forename type="middle">M</forename><surname>Grupp</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rajesh</forename><forename type="middle">K</forename><surname>Gupta</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ranjit</forename><surname>Jhala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steven</forename><surname>Swanson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 16th International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS &apos;11)</title>
+		<meeting>the 16th International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS &apos;11)</meeting>
+		<imprint>
+			<date type="published" when="2011-03" />
+			<biblScope unit="page" from="105" to="118" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Better I/O through byte-addressable, persistent memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeremy</forename><surname>Condit</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Edmund</forename><forename type="middle">B</forename><surname>Nightingale</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Christopher</forename><surname>Frost</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Engin</forename><surname>Ipek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Benjamin</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Doug</forename><surname>Burger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Derrick</forename><surname>Coetzee</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 22nd ACM Symposium on Operating Systems Principles (SOSP &apos;09)</title>
+		<meeting>the 22nd ACM Symposium on Operating Systems Principles (SOSP &apos;09)<address><addrLine>Big Sky, MT</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2009-10" />
+			<biblScope unit="page" from="133" to="146" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Introduction and overview of the Multics system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Fernando</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Victor</forename><forename type="middle">A</forename><surname>Corbató</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Vyssotsky</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the</title>
+		<meeting>the</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="1965-12-01" />
+			<biblScope unit="page" from="185" to="196" />
+		</imprint>
+	</monogr>
+	<note>fall joint computer conference, part I</note>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">System software for persistent memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanjay</forename><surname>Subramanya R Dulloor</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Anil</forename><surname>Kumar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Philip</forename><surname>Keshavamurthy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dheeraj</forename><surname>Lantz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rajesh</forename><surname>Reddy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeff</forename><surname>Sankaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Jackson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 9th European Conference on Computer Systems (EuroSys &apos;14)</title>
+		<meeting>the 9th European Conference on Computer Systems (EuroSys &apos;14)</meeting>
+		<imprint>
+			<date type="published" when="2014-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Phase change memory: A new memory enables new memory usage models</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sean</forename><surname>Eilert</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mark</forename><surname>Leinwander</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Giuseppe</forename><surname>Crisenza</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Memory Workshop, 2009. IMW&apos;09</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="1" to="2" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">I/O is faster than the CPU -let&apos;s partition resources and eliminate (most) OS abstractions</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pekka</forename><surname>Enberg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ashwin</forename><surname>Rao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sasu</forename><surname>Tarkoma</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 17th Workshop on Hot Topics in Operating Systems (HOTOS &apos;19)</title>
+		<meeting>the 17th Workshop on Hot Topics in Operating Systems (HOTOS &apos;19)</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Exokernel: An operating system architecture for application-level resource management</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dawson</forename><forename type="middle">R</forename><surname>Engler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">Frans</forename><surname>Kaashoek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">James O&amp;apos;</forename><surname>Toole</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jr</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 15th ACM Symposium on Operating Systems Principles (SOSP &apos;95)</title>
+		<meeting>the 15th ACM Symposium on Operating Systems Principles (SOSP &apos;95)</meeting>
+		<imprint>
+			<date type="published" when="1995" />
+			<biblScope unit="page" from="251" to="266" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">The Mungi singleaddress-space operating system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Germont</forename><surname>Heiser</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kevin</forename><surname>Elphinstone</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jerry</forename><surname>Vochteloo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stephen</forename><surname>Russell</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jochen</forename><surname>Liedtke</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Software Practice and Expererience</title>
+		<imprint>
+			<date type="published" when="1998-07" />
+			<biblScope unit="volume">28</biblScope>
+			<biblScope unit="page" from="901" to="928" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">K42: Building a complete operating system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Orran</forename><surname>Krieger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Marc</forename><surname>Auslander</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bryan</forename><surname>Rosenburg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><forename type="middle">W</forename><surname>Wisniewski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jimi</forename><surname>Xenidis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dilma Da</forename><surname>Silva</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michal</forename><surname>Ostrowski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jonathan</forename><surname>Appavoo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Maria</forename><surname>Butrico</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mark</forename><surname>Mergen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amos</forename><surname>Waterland</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Volkmar</forename><surname>Uhlig</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of Eurosys &apos;06</title>
+		<meeting>Eurosys &apos;06</meeting>
+		<imprint>
+			<date type="published" when="2006" />
+			<biblScope unit="page" from="133" to="145" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Bootless boot: Reducing device boot latency with byte addressable NVRAM</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dokeun</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Youjip</forename><surname>Won</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2013 International Conference on High Performance Computing</title>
+		<imprint>
+			<date type="published" when="2013-11" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">Loose-ordering consistency for persistent memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Youyou</forename><surname>Lu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jiwu</forename><surname>Shu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Long</forename><surname>Sun</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Onur</forename><surname>Mutlu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">32nd IEEE International Conference on Computer Design</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="216" to="223" />
+		</imprint>
+	</monogr>
+	<note>ICCD 14</note>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">rIOMMU: Efficient IOMMU for I/O devices that employ ring buffers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Moshe</forename><surname>Malka</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nadav</forename><surname>Amit</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Muli</forename><surname>Ben-Yehuda</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dan</forename><surname>Tsafrir</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Twentieth International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS &apos;15)</title>
+		<meeting>the Twentieth International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS &apos;15)<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2015-03" />
+			<biblScope unit="volume">50</biblScope>
+			<biblScope unit="page" from="355" to="368" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Persistent memcached: Bringing legacy code to byte-addressable persistent memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Virendra</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Margo</forename><surname>Marathe</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steve</forename><surname>Seltzer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tim</forename><surname>Byan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Harris</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">9th USENIX Workshop on Hot Topics in Storage and File Systems (HotStorage 17)</title>
+		<meeting><address><addrLine>Santa Clara, CA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">True IOMMU protection from DMA attacks: When copy is faster than zero copy</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alex</forename><surname>Markuze</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adam</forename><surname>Morrison</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dan</forename><surname>Tsafrir</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM SIGOPS Operating Systems Review</title>
+		<imprint>
+			<biblScope unit="volume">50</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="249" to="262" />
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Damn: Overhead-free iommu protection for networking</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alex</forename><surname>Markuze</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Igor</forename><surname>Smolyar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adam</forename><surname>Morrison</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dan</forename><surname>Tsafrir</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Twenty-Third International Conference on Architectural Support for Programming Languages and Operating Systems, ASPLOS &apos;18</title>
+		<meeting>the Twenty-Third International Conference on Architectural Support for Programming Languages and Operating Systems, ASPLOS &apos;18<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="301" to="315" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">LibPM: Simplifying application usage of persistent memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Leonardo</forename><surname>Marmol</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mohammad</forename><surname>Chowdhury</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Raju</forename><surname>Rangaswami</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Storage</title>
+		<imprint>
+			<biblScope unit="volume">14</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<date type="published" when="2018-12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Wholesystem persistence</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dushyanth</forename><surname>Narayanan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Orion</forename><surname>Hodson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 17th International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS &apos;12)</title>
+		<meeting>the 17th International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS &apos;12)</meeting>
+		<imprint>
+			<date type="published" when="2012-03" />
+			<biblScope unit="page" from="401" to="500" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Reducing NVM writes with optimized shadow paging</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yuanjiang</forename><surname>Ni</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jishen</forename><surname>Zhao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Daniel</forename><surname>Bittman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ethan</forename><surname>Miller</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 10th Workshop on Hot Topics in Storage and File Systems (HotStorage &apos;18)</title>
+		<meeting>the 10th Workshop on Hot Topics in Storage and File Systems (HotStorage &apos;18)</meeting>
+		<imprint>
+			<date type="published" when="2018-07" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">Steal but no force: Efficient hardware-driven undo+redo logging for persistent memory systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matheus</forename><surname>Ogleari</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ethan</forename><forename type="middle">L</forename><surname>Miller</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jishen</forename><surname>Zhao</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 24th International Symposium on HighPerformance Computer Architecture (HPCA 2018)</title>
+		<meeting>the 24th International Symposium on HighPerformance Computer Architecture (HPCA 2018)</meeting>
+		<imprint>
+			<date type="published" when="2018-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">Object oriented operating systems: An emerging design methodology</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ariel</forename><surname>Pashtan</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM &apos;82 Conference</title>
+		<meeting>the ACM &apos;82 Conference</meeting>
+		<imprint>
+			<date type="published" when="1982" />
+			<biblScope unit="page" from="126" to="131" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">Linkage in the Nemesis single address space operating system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Timothy</forename><surname>Roscoe</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM SIGOPS Operating Systems Review</title>
+		<imprint>
+			<biblScope unit="volume">28</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="48" to="55" />
+			<date type="published" when="1994-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<analytic>
+		<title level="a" type="main">Persistent memory programming</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andy</forename><surname>Rudoff</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Login: The Usenix Magazine</title>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2015" />
+			<biblScope unit="volume">42</biblScope>
+			<biblScope unit="page" from="34" to="40" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Using a single address space operating system for distributed computing and high performance</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alan</forename><surname>Skousen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Donald</forename><surname>Miller</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 18th IEEE International Performance, Computing and Communications Conference (IPCCC &apos;99)</title>
+		<meeting>the 18th IEEE International Performance, Computing and Communications Conference (IPCCC &apos;99)</meeting>
+		<imprint>
+			<date type="published" when="1999-02" />
+			<biblScope unit="page" from="8" to="14" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<monogr>
+		<title level="m" type="main">Inside the AS/400, Second Edition</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Frank</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Soltis</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1996" />
+			<publisher>Duke Communications International</publisher>
+			<pubPlace>Loveland, CO</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">Portably solving file TOCTTOU races with hardness amplification</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dan</forename><surname>Tsafrir</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tomer</forename><surname>Hertz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Wagner</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dilma Da</forename><surname>Silva</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 6th USENIX Conference on File and Storage Technologies, FAST &apos;08</title>
+		<meeting>the 6th USENIX Conference on File and Storage Technologies, FAST &apos;08<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2008" />
+			<biblScope unit="volume">13</biblScope>
+			<biblScope unit="page" from="1" to="13" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<analytic>
+		<title level="a" type="main">Morpheus: Creating application objects efficiently for heterogenous computing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hung-Wei</forename><surname>Tseng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Qianchen</forename><surname>Zhao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yuxiao</forename><surname>Zhou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mark</forename><surname>Gahagan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steven</forename><surname>Swanson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2016 ACM/IEEE 43rd Annual Intenational Symposium on Computer Architecture</title>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">Mnemosyne: Lightweight persistent memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Haris</forename><surname>Volos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andres</forename><forename type="middle">Jaan</forename><surname>Tack</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><forename type="middle">M</forename><surname>Swift</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 16th International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS &apos;11)</title>
+		<meeting>the 16th International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS &apos;11)</meeting>
+		<imprint>
+			<date type="published" when="2011-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<analytic>
+		<title level="a" type="main">Hardware supported persistent object address translation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tiancong</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sakthikumaran</forename><surname>Sambasivam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yan</forename><surname>Solihin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">James</forename><surname>Tuck</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 50th Annual IEEE/ACM International Symposium on Microarchitecture (MICRO &apos;17)</title>
+		<meeting>the 50th Annual IEEE/ACM International Symposium on Microarchitecture (MICRO &apos;17)<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="800" to="812" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<analytic>
+		<title level="a" type="main">NOVA: a log-structured file system for hybrid volatile/non-volatile main memories</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jian</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steven</forename><surname>Swanson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 14th USENIX Conference on File and Storage Technologies (FAST &apos;16)</title>
+		<meeting>the 14th USENIX Conference on File and Storage Technologies (FAST &apos;16)</meeting>
+		<imprint>
+			<date type="published" when="2016-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<analytic>
+		<title level="a" type="main">NOVA-Fortis: a fault-tolerant non-volatile main memory file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jian</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lu</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amirsaman</forename><surname>Memaripour</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Akshatha</forename><surname>Gangadharaiah</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amit</forename><surname>Borase</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tamires</forename><surname>Brito Da</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steven</forename><surname>Silva</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andy</forename><surname>Swanson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Rudoff</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 26th ACM Symposium on Operating Systems Principles (SOSP &apos;17)</title>
+		<meeting>the 26th ACM Symposium on Operating Systems Principles (SOSP &apos;17)</meeting>
+		<imprint>
+			<date type="published" when="2017-10" />
+			<biblScope unit="page" from="478" to="489" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

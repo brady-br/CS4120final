@@ -1,0 +1,722 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:58+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Too Many Knobs to Tune? Towards Faster Database Tuning by Pre-selecting Important Knobs</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Konstantinos</forename><surname>Kanellis</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Wisconsin -Madison</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ramnatthan</forename><surname>Alagappan</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Wisconsin -Madison</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shivaram</forename><surname>Venkataraman</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Wisconsin -Madison</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Too Many Knobs to Tune? Towards Faster Database Tuning by Pre-selecting Important Knobs</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>To achieve high performance, recent research has shown that it is important to automatically tune the configuration knobs present in database systems. However, as database systems usually have 100s of knobs, auto-tuning frameworks spend a significant amount of time exploring the large configuration space and need to repeat this as workloads change. Given this challenge, we ask a more fundamental question of how many knobs do we need to tune in order to achieve good performance. Surprisingly, we find that with YCSB workload-A on Cassandra, tuning just five knobs can achieve 99% of the performance achieved by the best configuration that is obtained by tuning many knobs. We also show that our results hold across workloads and applies to other systems like PostgreSQL, motivating the need for tools that can automatically filter out the knobs that need to be tuned. Based on our results, we propose an initial design for accelerating auto-tuners and detail some future research directions.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Tuning configuration parameters is critical for achieving high performance in database systems. This has been true in the past <ref type="bibr" target="#b7">[8,</ref><ref type="bibr" target="#b11">12,</ref><ref type="bibr" target="#b19">20]</ref> and recent research shows that this is still the case <ref type="bibr" target="#b0">[1,</ref><ref type="bibr" target="#b22">23,</ref><ref type="bibr" target="#b23">24]</ref>. However, database systems typically have hundreds of configuration knobs that determine the system's runtime behavior <ref type="bibr" target="#b21">[22]</ref>; for example, PostgreSQL has about 170 knobs <ref type="bibr" target="#b22">[23]</ref> and Apache Cassandra has around 155.</p><p>Manually finding the important knobs and their optimal values is thus a daunting task even for experienced practitioners. Consequently, researchers have resorted to automatic ways to tune knobs <ref type="bibr" target="#b8">[9]</ref>. Recent auto-tuning methods for database systems typically fall into two classes: search-based approaches <ref type="bibr" target="#b23">[24]</ref> and learning-based (ML) methods <ref type="bibr" target="#b0">[1,</ref><ref type="bibr" target="#b22">23]</ref>. In both cases, one starts with a set of knobs and a range of valid values for them, and then the tuning system tries to find the optimal values for each knob to maximize or minimize a specified objective (e.g., throughput or latency). The time it takes to tune is directly dependent on the number of knobs that needs to be tuned <ref type="bibr" target="#b22">[23,</ref><ref type="bibr" target="#b23">24]</ref>. With a larger number of knobs, the search space for search-based methods expands vastly, making it slower to find optimal values for all knobs. Similarly, ML-based approaches require a larger training dataset as we increase the number of knobs, with representative samples required from different values for each knob.</p><p>Given this, in this work, we ask the following fundamental question: how many knobs do we need to tune to achieve good performance? Is this a smaller subset of the entire set? To answer this question, we conduct a detailed and systematic measurement-based study. Specifically, we measure the performance of a target system under different configurations and use learning-based techniques to find how many and which knobs need to be tuned for high performance. Our results surprisingly show that tuning just five knobs can achieve 99% of the performance achieved by the best configuration (which tunes many knobs) for the YCSB-A workload in Cassandra.</p><p>Motivated by this result, we also extend our experiments across different workloads and systems. Our experiments show that similar results do indeed hold for different workloads (e.g., YCSB-B in Cassandra) and across different systems (PostgreSQL running YCSB-A and YCSB-B). Finally, we also compute the similarity between the sets of important knobs across workloads and find that there is a significant overlap of important knobs across some workloads.</p><p>Based on the above results, we argue that it is possible to significantly accelerate auto-tuning approaches by automatically filtering the most important configuration knobs. We propose a new design where we run a filtering or pre-selection phase to determine the important knobs, and we present some initial approaches to realize this design. We also describe future directions for research in understanding how different hardware or metrics change important knobs, and how we can perform auto-tuning while maintaining reliability guarantees.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Background and Motivation</head><p>We begin by providing a brief background on auto-tuners and describing the challenges in existing tuning frameworks.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">Automatically Tuning Database Systems</head><p>Exploring the entire space of configuration knobs in database systems is time-consuming and intractable. Three factors contribute to this problem. First, modern systems have too many knobs. Second, most knobs take values from a large continuous space, leading to many possible configurations. Finally, it may take several minutes to measure how even a single configuration performs <ref type="bibr" target="#b12">[13,</ref><ref type="bibr" target="#b23">24]</ref>.</p><p>As a result, recent research has proposed auto-tuning tools for database systems (e.g., Ottertune <ref type="bibr" target="#b0">[1]</ref>, BestConfig <ref type="bibr" target="#b23">[24]</ref>, and CDBTune <ref type="bibr" target="#b22">[23]</ref>). Most of these tools rely upon an initial offline phase, which either builds a knowledge base that is then used to bootstrap the tuning process for future workloads (by reusing already evaluated configurations), or trains an ML model that is used to recommend configurations during the online tuning phase. Performing this initial profiling phase is vital to the quality of configurations that these tools produce. For instance, the authors of CDBTune <ref type="bibr" target="#b22">[23]</ref> report that their system performs better compared to search-based systems like BestConfig, as the latter cannot find optimal configurations in a short time without prior knowledge.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">Challenges in Auto-tuning</head><p>The offline profiling (or training) phase, while crucial for obtaining high-quality configurations, is unfortunately very expensive. In fact, it is the most time-consuming step in the entire pipeline of these tools, accounting for over 95% of the total tuning time (i.e. several hours to days) <ref type="bibr" target="#b0">[1,</ref><ref type="bibr" target="#b22">23]</ref>. In addition, this phase requires substantial hardware resources in order to be executed in a reasonable time (multiple machines for parallel evaluation of different configurations). Further, this phase typically has to be re-executed for new workloads, or when porting the database system to a different hardware. Overall, the long running time of the offline phase and that it has to be run many times is one of the key challenges in using existing database auto-tuning tools in the real-world.</p><p>One approach to address this issue is to reduce the number of knobs that the auto-tuner must tune, thus reducing the search space or the training dataset size, which in turn cuts down the overall tuning time. However, the reduced set must contain the most important knobs, i.e., knobs that have the most effect on the performance; tuning irrelevant knobs will not lead to high performance. Most prior frameworks, however, ignore the importance of the knobs <ref type="bibr" target="#b12">[13,</ref><ref type="bibr" target="#b22">23,</ref><ref type="bibr" target="#b23">24]</ref>. Some tools (e.g., OtterTune) do have an additional step in the pipeline to filter out knobs that are redundant or do not impact performance much <ref type="bibr" target="#b0">[1]</ref>. However, such tools do the filtering step only after performing the initial profiling phase and observing the performance of the proposed configurations.</p><p>Given this, our primary goal in the paper is to study if it is possible to reduce the number of knobs that auto-tuners consider, while still yielding high performance. To realize this goal, a few key questions must be answered. First, how many and which knobs does one need to tune to obtain high performance for a given workload? Second, does this set of knobs change across workloads and hardware?</p><p>Recent research concurrent to our work has examined some of these questions in the context of file systems <ref type="bibr" target="#b5">[6]</ref>. Our work focuses instead on database systems, which usually have a more complex configuration space than file systems. This complexity is reflected in the number and the nature of database configuration knobs. Database systems have ~4× more performance-related knobs compared to file systems <ref type="bibr" target="#b5">[6]</ref> and most knobs in databases take continuous values, while most knobs are discrete in file systems. Therefore, while it is possible to evaluate all configuration points for a specific file system, this is impossible for a database <ref type="bibr" target="#b5">[6]</ref>. Further, typically no common knobs exist among different database systems (in contrast, for example, knobs like block-size and inodesize are common to many file systems) <ref type="bibr" target="#b6">[7]</ref>. We next discuss our study of important knobs for database systems and also compare our findings to observations made by prior work.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Study Methodology</head><p>Our study methodology consists of two main phases. In the first phase, we collect information on what performance numerous points in the configuration space deliver. In the second phase, we apply machine-learning methods to the collected data points to determine the most important knobs.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Generating and Collecting the Samples</head><p>Given that the configuration space is vast, it is prohibitively time-consuming to collect performance measurements for every single point in the space. We thus use a samplingbased approach. We employ a stratified sampling method called Latin Hypercube Sampling (LHS) <ref type="bibr" target="#b17">[18]</ref>, a well-known sampling technique used by many systems <ref type="bibr" target="#b0">[1,</ref><ref type="bibr" target="#b5">6,</ref><ref type="bibr" target="#b12">13]</ref>.</p><p>LHS takes as input the number of samples (N) to be generated. For each knob, LHS splits its value range into N equal-sized intervals. Then, N samples are selected from this space, such that each interval of any knob contains exactly one sample in it. Thus, LHS is able to generate samples that thoroughly and uniformly cover the configuration space. Prior work has shown that LHS covers the space more effectively compared to alternative techniques such as random or Monte Carlo sampling for a given target number of samples <ref type="bibr" target="#b9">[10,</ref><ref type="bibr" target="#b17">18]</ref>.</p><p>Each sample generated by LHS corresponds to a single point in the entire configuration space. For each such point, we arrange the system under test (e.g., Cassandra) to use that point as its current configuration. Then, we run a target workload (e.g., YCSB-A) and record the performance metrics (e.g., throughput or average latency) for that point. The output of the first phase is thus a dataset that consists of points in the configuration space and the obtained performance metrics.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Quantifying Knob Importance</head><p>Our goal is to determine which knobs have the most effect on performance, i.e., to find which knobs and the target metrics (e.g., throughput, average latency) have a strong correlation. Since our target metrics are continuous, we approach this problem using regression.</p><p>Regression models estimate the value of a dependent variable (y), given a set of independent variables (X) <ref type="bibr" target="#b14">[15]</ref>. In our case, the independent variables correspond to the databasesystem knobs and their values, and the dependent variable(s) to the target metric(s). For a regression model, the goodness of its fit can be measured using the coefficient of determination, R 2 . R 2 indicates the proportion of the variance in the dependent variable that can be explained by the independent variable(s) <ref type="bibr" target="#b15">[16]</ref>. Higher values correspond to better fits; a value of 1 implies a perfect fit. We use R 2 values to evaluate how well a model that is fitted using a smaller subset of knobs performs, compared to the one that is fitted on all knobs.</p><p>In order to quantify the importance of each knob, we use an ensemble of regression trees (i.e., random forest). Tree ensembles are generally more resistant to noise and overfit less than a single tree <ref type="bibr" target="#b3">[4]</ref>. Regression trees are non-parametric regression models that utilize variance-based metrics to select which knobs will be included in each tree node. We use the classification and regression trees (CART) <ref type="bibr" target="#b4">[5]</ref> algorithm, which quantifies the importance of a knob based on the reduction in variance of the target metric (dependent variable). CART builds the tree by greedily selecting the "best" knob (i.e., one that reduces variance significantly) for each node in a top-down fashion. Since our random forest consists of many trees where each tree is fitted on a random subset of samples, the "importance score" is averaged across all trees.</p><p>Random forests are an appropriate choice for our approach as they capture non-linear relationship among variables, are interpretable, and can be trained fast. Other popular alternatives, for example, linear regression, can provide interpretability but fall short on capturing non-linear relationships. More sophisticated models, e.g., neural networks, can capture complex relationships, but are expensive to train and usually are a black-box thus undermining interpretability. Due to their hierarchical structure, random forests are also able to capture variable (knob) interaction effects <ref type="bibr" target="#b20">[21]</ref>. Therefore, we do not need to explicitly include interaction terms in the set of independent variables, as with other regression methods (e.g. linear regression with polynomials). However, while it is not easy to identify or examine the importance of a specific interaction between two (or more) knobs, the interaction factors are included in the importance score of the individual knobs. Thus, if a strong interaction exists between two knobs, then the model will give high importance score to each of them. If they eventually get included in the set of important knobs, their interaction will be accounted for during the tuning phase.</p><p>Before fitting the data we perform two pre-processing steps. We first transform all categorical knobs into dummy variables. Since the number of categorical knobs is small (2 each for the two database systems we analyzed), the number of knobs remains manageable. Second, we standardize the knob values (i.e., scale to zero mean, unit variance). This ensures that our regression model is not influenced by the different range of values of each individual knob. At the end of the second phase, using the regression models, we can arrive at the set of important knobs and quantify their relative importance.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Analysis</head><p>We now present our analysis to answers the questions posed. We start by describing our experimental setup.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">Experimental Setup</head><p>Target Systems and Workloads. We study Cassandra (v3.11) <ref type="bibr" target="#b1">[2]</ref>, a NoSQL store, using the YCSB-A workload from the YCSB suite <ref type="bibr" target="#b10">[11]</ref>. This workload is write-heavy with 50% reads and 50% writes. We first determine the important knobs for this workload ( §4.2). Then, to study if the important knobs change with workloads, we study Cassandra using YCSB-B, a read-heavy workload with 95% reads and 5% writes ( §4.3). Finally, to see if the results hold across systems, we study PostgreSQL v9.6, a relational database, using the same workloads ( §4.4). Sample Generation and Collection. The total number of knobs for Cassandra is 155, and for Postgres 169. We generate 25K samples in the configuration space per system. These samples are obtained by tweaking 30 performancerelated knobs for Cassandra, and 29 for PostgreSQL. We hand-picked these knobs by consulting the documentation and prior works <ref type="bibr" target="#b0">[1,</ref><ref type="bibr" target="#b22">23]</ref>. Each of the authors independently examined all knobs and created a set of knobs that they believed would have some measurable impact on system performance. The final set of knobs is the union of the three individual sets. It is worth noting that tweaking all knobs would have led to much smaller coverage of the configuration space, due to relative small number of samples generated by LHS compared to the entire configuration space. This might have led to insufficient data for our machine-learning model. In general, we do not expect large deviations for the top-10 (or top-20) knobs, when considering all knobs. Before running the workload, we initialize the system under test with a single table with 18 million tuples. We then run the workload with 50 client threads. For each experiment (configuration), we run the workload for five minutes and record the overall throughput and the readand write-latency statistics at the end. Our client-threads setting is similar to those used in prior work <ref type="bibr" target="#b0">[1,</ref><ref type="bibr" target="#b22">23]</ref>.  We parallelize sample collection using 30 machines, with each machine running one experiment at a time. All machines have identical hardware specifications, run Linux v4.15, and are a part of the CloudLab infrastructure <ref type="bibr" target="#b13">[14]</ref>. We run the database system and the YCSB clients on the same physical machine but isolate them on separate CPUs (each machine has two CPUs). On each machine, the database system runs on a 10-core Intel Xeon Silver 4114 CPU with 64 GB of memory and uses a 480-GB SSD for storage. Running each experiment takes ∼ 9 minutes, and thus collecting 25K samples for a single system-workload pair requires approximately 3750 node-hours (or a bit over 5 days when using 30 nodes). Analysis. We use the Python's scikit-learn implementation of random forest (RF) for our regression model, which uses the CART algorithm. We initialize each RF with 300 trees, which lies inside the range of values (i.e. <ref type="bibr">[128,</ref><ref type="bibr">512]</ref>) that is shown to provide a good trade-off between model performance and training time <ref type="bibr" target="#b18">[19]</ref>. Training the model on the collected 25K samples takes under a minute on a single machine.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Apache</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">How Many Knobs Matter?</head><p>We analyze the samples to find the important knobs for obtaining high throughput for YCSB-A in Cassandra. <ref type="figure">Figure 1</ref> shows the ranking of knobs and their relative importance. The key result is that the top five knobs are much more important than the other ones. This importance reflects the amount of reduction in variance of our target metric (i.e., throughput).</p><p>From our regression model, the most important knob is concurrent_reads, which determines the number of simultaneous read operations that can be performed. We believe one reason this knob ranks high is because reads are more expensive than writes in Cassandra since most reads need to go to disk <ref type="bibr" target="#b2">[3]</ref>. Thus, increasing this knob's value allows many reads to be concurrently issued, allowing the drive to batch and (if necessary) reorder the requests, leading to higher throughput. The next important knob is native_transport_max_threads which is the maximum number of threads used to handle requests; with higher values, many threads can handle many concurrent client requests, improving throughput. The next three knobs determine the amount of memory allocated to the memtable, what percentage of this space can be filled before flushing to disk, and the rate at which new SSTables are written. More analysis is needed to explain why these knobs are ranked high.</p><p>Next, we use this ranking to fit our regression model with increasingly larger sets of the most important knobs <ref type="figure">(Figure 3</ref>). The baseline model is fitted on all 30 knobs, and can explain ∼ 90% of the variance (the red dotted line). We observe that a model fitted with just the most important knob is able to capture ∼ 50% of the throughput variance. Including the second knob raises this value to ∼ 65%. We continue to see improvements for the first five knobs, after which we see little or no improvements. The slight performance improvement of models fitted with fewer knobs over the baseline is because of overfitting, which occurs due to the large number of input features (knobs). Thus, we hypothesize that tuning as few as five knobs might be enough to reach almost the same performance obtained by the best among the 25K configurations.</p><p>In order to validate this hypothesis, we generate a separate set of 4K samples but by modifying only the values of the five most important knobs; the remaining ones are assigned their default values. We measure the performance of these configurations for YCSB-A and <ref type="table">Table 1</ref> shows the results for three target metrics: throughput, average read latency, and average write latency. We observe that just by tuning the five most important knobs, we are able to reach almost the same level of performance (for all three metrics) obtained by the best configuration in the 25K samples. Prior work <ref type="bibr" target="#b5">[6]</ref> has also done analysis that suggests that only a few knobs are important for performance in file systems. We find this also to be true for databases and we also use experiments to validate that just tuning five important knobs can be sufficient.</p><p>Summary and Implications. Tuning just a few most important knobs can yield high performance. Based on this result, we believe the tuning time of existing auto-tuners can be significantly reduced by pre-filtering such important knobs.  <ref type="table">Importance   default_statistics_target  fsync  shared_buffers  wal_sync_method  commit_delay  work_mem  effective_io_concurrency  wal_buffers  max_parallel_workers_per_gather  temp_buffers  backend_flush_after  bgwriter_flush_after  effective_cache_size</ref> wal_writer_delay wal_writer_flush_after  <ref type="table">Importance   fsync  wal_sync_method  shared_buffers  backend_flush_after  default_statistics_target  commit_delay  work_mem  wal_buffers  effective_io_concurrency  temp_buffers  max_parallel_workers_per_gather</ref> bgwriter_flush_after effective_cache_size max_wal_size maintenance_work_mem <ref type="figure">Figure 5</ref>: YCSB-B Most important PostgreSQL knobs for YCSB-A and YCSB-B for throughput from 25K samples (top 15 knobs).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.3">Do Similar Results Hold for a Different Workload?</head><p>We next conduct a similar analysis for YCSB-B and <ref type="figure" target="#fig_0">Figure 2</ref> shows the most important knobs that impact throughput in Cassandra. We observe that a few knobs (∼ 5) are more important than others, providing more evidence to our hypothesis that only a few knobs affect performance the most. We observe that concurrent_reads is ranked again as the most important knob, and with a greater score (than in YCSB-A); this is because YCSB-B is a read-heavy workload and thus increasing the concurrency in reads has even more effect.</p><p>More interestingly, we see that the five most important knobs exactly match the ones for YCSB-A. We believe the reason for this is that the top five knobs for YCSB-A were all important for improving read performance (writes are anyway cheaper than reads in Cassandra <ref type="bibr" target="#b2">[3]</ref>); as a result, the model ranks the same knobs high for a read-heavy workload.</p><p>From the above preliminary observation, we believe that it might be possible (at least across some workloads) to find the important knobs once for one workload and tune the same knobs to obtain high performance for a different workload. While this seems to be true for improving throughput in Cassandra across YCSB-A and YCSB-B, we anticipate that we may not get such an exact overlap across very different workloads (read-only vs. write-only) or if we consider a different metric (e.g., write latency.) In such cases, although there is no exact overlap, we think it might be possible to take a larger set of knobs from one workload (say 15) and analyze if tuning them alone leads to high performance for a different workload. We believe this is an interesting avenue for future work. Summary and Implications. Our hypothesis that only a few knobs impact performance significantly seems to hold for a different workload. We also note that across some workloads, there is a significant overlap of important knobs. Based on this, we believe it might be possible to find the important knobs once and tune the same or a slightly larger set of knobs to achieve high performance for a different workload.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.4">Do Results Hold across Database Systems?</head><p>We now turn our focus to PostgreSQL to check if our findings hold true for a different system. For YCSB-A <ref type="figure" target="#fig_3">(Figure 4</ref>), similar to Cassandra, we observe that a handful of knobs are most important. Among them, default_statistics_target is the most important one; we observe that higher values for this knob collects highly accurate table statistics for query optimization but hurts performance; lower values lead to higher performance. fsync enables or disables forced writes to storage; given that 50% operations are writes in YCSB-A, this knob has a large effect and thus is ranked high.</p><p>We also ran a similar experiment as in §4.2 to find how close can we get to the performance achieved by the best sample. We generate 4K samples by modifying only the five most important knobs and measure the performance <ref type="table">(Table 1)</ref>. We again notice the we can closely approximate the performance of the best configuration, by only modifying five knobs.</p><p>We also run PostgreSQL with YCSB-B and plot the most important knobs in <ref type="figure">Figure 5</ref>. Even though YCSB-B has 95% reads, we find that the most important knob is fsync and the second most important knob is wal_sync_method. Looking more closely at our data, we find that configurations with fsync off typically have around 30%-80% higher throughput than those with fsync on. We believe that this behavior happens because PostgreSQL tries to serialize read and write operations to the same key and YCSB-B uses a Zipfian key distribution. We hope to perform additional investigation in the future to isolate and explain this behavior. Summary and Implications. Our observation that only tuning a handful of knobs is sufficient generalizes to other systems like PostgreSQL across multiple workloads.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Towards Faster Database Tuning</head><p>Our preliminary study shows that only a few knobs have the most effect on performance. Thus, we argue that the tuning time of existing tuners can be significantly reduced if important knobs are identified before running the tuner. We propose a two-level design where we first run a pre-selection step that only identifies the important knobs (but not their optimal values). After that, we reuse existing tuners to determine the optimal values for the knobs. Our key insight is that filtering cuts down the search space or the training dataset of existing tuners, thus reducing the tuning time. For example, we consider an existing tuner, BestConfig with Cassandra on YCSB-A. We observe that when tuning only the top-5 knobs, BestConfig manages to reach the best performance using 5× fewer iterations, compared to when tuning all 30 knobs.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Model Performance</head><p>Knobs Set Similarity w.r.t. 25K samples <ref type="figure">Figure 6</ref>: Model performance and top-5 knobs similarity when model is fitted with less samples (Cassandra YCSB-A).</p><p>However, as we described in §4, our current analysis uses ~25K samples. While finding the important knobs from such a large data set makes our analysis robust, it comes at a cost: the time it takes to collect the samples. Each sample in our dataset is run with a specific configuration and workload for five minutes. Thus, collecting the samples is time-consuming, even with several machines running in parallel. Using the same method to optimize existing tuners would not result in dramatic improvements in tuning time.</p><p>One way to expedite this process is to examine if we can arrive at the same results (i.e., the same knobs) with fewer samples. We conducted an experiment to study this question and our initial results are shown in <ref type="figure">Figure 6</ref>. We compare the similarity score (intersection-over-union index <ref type="bibr" target="#b16">[17]</ref>) of the top-5 important knobs and R 2 obtained when using random subsets of samples against that of the baseline (25K samples). As shown, although the R 2 scores go down as we reduce the sample-set size, even with 64× fewer samples, we obtain the same important knobs (i.e., a similarity score of 1). Therefore, instead of using 3750 node-hours (25K samples) to collect samples, we would use ∼ 60 node-hours (400 samples). Assuming that the set of top-5 (or top-10) knobs remains the same across workloads, this could also reduce the need to execute experiments with many workloads beforehand (as it is the case with existing tuners <ref type="bibr" target="#b0">[1,</ref><ref type="bibr" target="#b22">23]</ref>). We believe more analysis is needed to determine how far we can reduce the sample-set size while being able to find the important knobs for different workloads and systems.</p><p>Another question that needs to be addressed is how many knobs should the pre-selection step output. One way to pick this would be to see how many knobs are required to get a good fit i.e., a target R 2 score. Another way is to consider the time budget for tuning. Given a time budget, there are many ways to split it between the two phases: a) identifying important knobs, and b) determining the optimal values for these knobs. If the pre-selection step outputs more knobs, it is inevitable that more time is needed by the tuner for exploration to come up with an optimal configuration. Hence, if we can only run the tuner for a short duration, then it is imperative that the pre-selection step produces fewer knobs.</p><p>A completely different approach is to use white-box knowledge of the target system to determine which knobs could have the greatest impact. We plan to investigate a number of avenues including techniques to parse comments or using profiling tools to detect which knob affects performance the most. We believe that latent information present in the code can be useful for selecting important knobs. We believe investigating these approaches can make the pre-selection step faster while finding configurations that provide high performance.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Conclusion</head><p>In this paper we studied the question of how many knobs do we need to tune to achieve good performance in database systems. Our results indicate that tuning a handful of knobs is good enough and that this trend holds across workloads and database systems. Based on this we proposed an initial design to accelerate auto-tuning frameworks and we outlined some research challenges that need to be addressed to realize this.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Discussion Topics</head><p>Studying the role of hardware. In this paper, we used a single hardware setup. Given that cloud platforms offer a variety of hardware choices, we believe it is interesting to study if the important knobs vary across different hardware configurations. The models maintained by existing learning-based tuners need to be retrained if the target hardware changes; specifically, new training samples for the new hardware configuration must be obtained <ref type="bibr" target="#b22">[23]</ref>. We believe by studying how sensitive the important knobs are to the hardware, we could potentially avoid retraining for new platforms. Optimizing for composite metrics. In our analysis, we aimed to optimize one metric (such as throughput or average latency) at a time. While this is a first good step, we expect that some deployments might want to optimize for composite metrics. For example, practitioners may want to improve the overall throughput while keeping the operation latencies within a bound. We believe it will be interesting to study if and how the set of important knobs changes when optimizing for composite metrics. Reliability-aware tuning. Most existing auto tuners aim to find the configuration that provides the highest performance possible. In this pursuit, these tools often compromise on reliability; for example, they may turn off fsync, leading to better performance but significantly higher possibility of data loss. We consider this a serious limitation in existing tuners and propose that methods to find the important knobs must also take the target reliability metrics into account.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 2 :</head><label>2</label><figDesc>Figure 1: YCSB-A</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Increasingly Larget Set of Important Knobs Random Forest (Important Knobs) Random Forest ( 30 Knobs)Figure 3 :</head><label>303</label><figDesc>Figure 3: Baseline model performance (30 knobs -red dotted line) vs. increasingly larger sets of top knobs (blue line).</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: YCSB-A</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="false"><head>Cassandra</head><label></label><figDesc></figDesc><table>PostgreSQL 
+Best configuration 
+Throughput Read latency Write latency Throughput Read latency Write latency 
+(samples, knobs) 
+(ops/sec) 
+(usecs) 
+(usecs) 
+(ops/sec) 
+(usecs) 
+(usecs) 
+Baseline (25K, 30) 
+74780.33 
+744.34 
+302.82 
+14134.34 
+907.37 
+4219.44 
+Validation (4K, Top-5) 
+74304.42 
+750.56 
+307.08 
+14006.90 
+967.52 
+4238.93 
+% of Baseline 
+99.36% 
+100.84% 
+101.41% 
+99.10% 
+106.63% 
+100.46% 
+
+Table 1: Performance when evaluating database with fewer samples that modify fewer important knobs, for workload YCSB-A. 
+
+</table></figure>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgements</head><p>We would like to thank the anonymous reviewers and our shepherd Vasiliki Kalavri for their insightful comments that improved this paper. This work is supported by the National Science Foundation grant CNS-1838733, a Facebook faculty research award and by the Office of the Vice Chancellor for Research and Graduate Education at UW-Madison with funding from the Wisconsin Alumni Research Foundation.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">Automatic Database Management System Tuning Through Large-scale Machine Learning</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dana</forename><surname>Van Aken</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrew</forename><surname>Pavlo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Geoffrey</forename><forename type="middle">J</forename><surname>Gordon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bohan</forename><surname>Zhang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2017 ACM SIGMOD International Conference on Management of Data (SIGMOD &apos;17)</title>
+		<meeting>the 2017 ACM SIGMOD International Conference on Management of Data (SIGMOD &apos;17)<address><addrLine>Chicago, IL</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2017-05" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Apache</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Cassandra</surname></persName>
+		</author>
+		<ptr target="http://cassandra.apache.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Apache</forename><surname>Cassandra</surname></persName>
+		</author>
+		<ptr target="http://cassandra.apache.org/doc/latest/configuration/cassandra_config_file.html#concurrent-reads" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+		<title level="m" type="main">Random forests. Machine learning</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Leo</forename><surname>Breiman</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2001" />
+			<biblScope unit="volume">45</biblScope>
+			<biblScope unit="page" from="5" to="32" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+		<title level="m" type="main">Classification and regression trees</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Leo</forename><surname>Breiman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jerome</forename><surname>Friedman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Charles</forename><forename type="middle">J</forename><surname>Stone</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Richard A</forename><surname>Olshen</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1984" />
+			<publisher>CRC press</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Carver: Finding Important Parameters for Storage System Tuning</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhen</forename><surname>Cao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Geoff</forename><surname>Kuenning</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Erez</forename><surname>Zadok</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 18th USENIX Conference on File and Storage Technologies (FAST &apos;20)</title>
+		<meeting>the 18th USENIX Conference on File and Storage Technologies (FAST &apos;20)<address><addrLine>Santa Clara, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2020-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Towards better understanding of black-box auto-tuning: A comparative analysis for storage systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhen</forename><surname>Cao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vasily</forename><surname>Tarasov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sachin</forename><surname>Tiwari</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Erez</forename><surname>Zadok</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2018 {USENIX} Annual Technical Conference ({USENIX}{ATC} 18)</title>
+		<imprint>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="893" to="907" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Index Selection Tool for Microsoft SQL Server</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Surajit</forename><surname>Chaudhuri</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vivek</forename><surname>Narasayya</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 23rd International Conference on Very Large Databases</title>
+		<meeting>the 23rd International Conference on Very Large Databases<address><addrLine>Athens, Greece</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="1997-08" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Self-tuning Database Systems: A Decade of Progress</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Surajit</forename><surname>Chaudhuri</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vivek</forename><surname>Narasayya</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 33rd International Conference on Very Large Databases (VLDB 33)</title>
+		<meeting>the 33rd International Conference on Very Large Databases (VLDB 33)<address><addrLine>Vienna, Austria</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2007-09" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<monogr>
+		<title level="m" type="main">Abdelkhalak El Hami, and Mohamed Eid. Reliability based optimization with metaheuristic algorithms and latin hypercube sampling based surrogate models</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Liu</forename><surname>Chu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eduardo</forename><surname>Souza De Cursi</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Benchmarking Cloud Serving Systems with YCSB</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Brian</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adam</forename><surname>Cooper</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Erwin</forename><surname>Silberstein</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Raghu</forename><surname>Tam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Russell</forename><surname>Ramakrishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Sears</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM Symposium on Cloud Computing (SOCC &apos;10)</title>
+		<meeting>the ACM Symposium on Cloud Computing (SOCC &apos;10)<address><addrLine>Indianapolis, IA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2010-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Automatic Performance Diagnosis and Tuning in Oracle</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Karl</forename><surname>Dias</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mark</forename><surname>Ramacher</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Uri</forename><surname>Shaft</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Venkateshwaran</forename><surname>Venkataramani</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Graham</forename><surname>Wood</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2nd Conference on Innovative Data Systems Research (CIDR 2005)</title>
+		<meeting>the 2nd Conference on Innovative Data Systems Research (CIDR 2005)<address><addrLine>Asilomar, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2005-01" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Tuning database configuration parameters with ituned</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vamsidhar</forename><surname>Songyun Duan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shivnath</forename><surname>Thummala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Babu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the VLDB Endowment</title>
+		<meeting>the VLDB Endowment</meeting>
+		<imprint>
+			<date type="published" when="2009" />
+			<biblScope unit="volume">2</biblScope>
+			<biblScope unit="page" from="1246" to="1257" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Snigdhaswin Kar, and Prabodh Mishra. The design and operation of CloudLab</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dmitry</forename><surname>Duplyakin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><surname>Ricci</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aleksander</forename><surname>Maricq</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gary</forename><surname>Wong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jonathon</forename><surname>Duerig</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eric</forename><surname>Eide</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Leigh</forename><surname>Stoller</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mike</forename><surname>Hibler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Johnson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kirk</forename><surname>Webb</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aditya</forename><surname>Akella</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kuangching</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Glenn</forename><surname>Ricart</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Annual Technical Conference (ATC)</title>
+		<meeting>the USENIX Annual Technical Conference (ATC)<address><addrLine>Chip Elliott, Michael Zink, Emmanuel Cecchet</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2019-07" />
+			<biblScope unit="page" from="1" to="14" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<monogr>
+		<title level="m" type="main">Statistical models: theory and practice</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>David A Freedman</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2009" />
+			<publisher>cambridge university press</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<monogr>
+		<title level="m" type="main">Primer of applied regression and analysis of variance</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Stanton A Glantz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Bryan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Slinker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Neilands</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1990" />
+			<publisher>McGraw-Hill</publisher>
+			<biblScope unit="volume">309</biblScope>
+			<pubPlace>New York</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">Distance between sets</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Levandowsky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Winter</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Nature</title>
+		<imprint>
+			<biblScope unit="volume">234</biblScope>
+			<biblScope unit="issue">5323</biblScope>
+			<biblScope unit="page" from="34" to="35" />
+			<date type="published" when="1971" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Comparison of three methods for selecting values of input variables in the analysis of output from a computer code</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Michael</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Richard</forename><forename type="middle">J</forename><surname>Mckay</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">William J</forename><surname>Beckman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Conover</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Technometrics</title>
+		<imprint>
+			<biblScope unit="volume">21</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="239" to="245" />
+			<date type="published" when="1979" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<monogr>
+		<title level="m" type="main">How many trees in a random forest? In International workshop on machine learning and data mining in pattern recognition</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Thais Mayumi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pedro</forename><forename type="middle">Santoro</forename><surname>Oshiro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">José Augusto</forename><surname>Perez</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Baranauskas</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2012" />
+			<publisher>Springer</publisher>
+			<biblScope unit="page" from="154" to="168" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Adaptive Self-tuning Memory in DB2</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Adam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Christian</forename><surname>Storm</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Garcia-Arellano</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yixin</forename><surname>Sam S Lightstone</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Maheswaran</forename><surname>Diao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Surendra</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 32nd International Conference on Very Large Databases (VLDB 32)</title>
+		<meeting>the 32nd International Conference on Very Large Databases (VLDB 32)<address><addrLine>Seoul, Korea</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2006-09" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<monogr>
+		<title level="m" type="main">Classification and regression trees, bagging, and boosting. Handbook of statistics</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Clifton D Sutton</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2005" />
+			<biblScope unit="volume">24</biblScope>
+			<biblScope unit="page" from="303" to="329" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">Hey, you have given me too many knobs!: Understanding and dealing with over-designed configuration in system software</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tianyin</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Long</forename><surname>Jin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xuepeng</forename><surname>Fan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yuanyuan</forename><surname>Zhou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shankar</forename><surname>Pasupathy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rukma</forename><surname>Talwadker</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Joint Meeting of the European Software Engineering Conference and the ACM SIGSOFT Symposium on the Foundations of Software Engineering (ESEC/FSE &apos;15)</title>
+		<meeting>the Joint Meeting of the European Software Engineering Conference and the ACM SIGSOFT Symposium on the Foundations of Software Engineering (ESEC/FSE &apos;15)<address><addrLine>Bergamo, Italy</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2015-08" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">An End-to-End Automatic Cloud Database Tuning System Using Deep Reinforcement Learning</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ji</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yu</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ke</forename><surname>Zhou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Guoliang</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhili</forename><surname>Xiao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bin</forename><surname>Cheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jiashu</forename><surname>Xing</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yangtao</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tianheng</forename><surname>Cheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Li</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Minwei</forename><surname>Ran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zekang</forename><surname>Li</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2019 ACM SIGMOD International Conference on Management of Data (SIGMOD &apos;19)</title>
+		<meeting>the 2019 ACM SIGMOD International Conference on Management of Data (SIGMOD &apos;19)<address><addrLine>Amsterdam, Netherlands</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2019-07" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">BestConfig: Tapping the Performance Potential of Systems via Automatic Configuration Tuning</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yuqing</forename><surname>Zhu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jianxun</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mengying</forename><surname>Guo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yungang</forename><surname>Bao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wenlong</forename><surname>Ma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhuoyue</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kunpeng</forename><surname>Song</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yingchun</forename><surname>Yang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM Symposium on Cloud Computing (SOCC &apos;17)</title>
+		<meeting>the ACM Symposium on Cloud Computing (SOCC &apos;17)<address><addrLine>Santa Clara, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2017-09" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

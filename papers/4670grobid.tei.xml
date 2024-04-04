@@ -1,0 +1,601 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T04:28+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Hardware-Assisted Rootkits: Abusing Performance Counters on the ARM and x86 Architectures</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author role="corresp">
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matt</forename><surname>Spisak</surname></persName>
+							<email>mspisak@endgame.com</email>
+							<affiliation key="aff0">
+								<orgName type="institution">Endgame, Inc</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Hardware-Assisted Rootkits: Abusing Performance Counters on the ARM and x86 Architectures</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>In this paper, a novel hardware-assisted rootkit is introduced , which leverages the performance monitoring unit (PMU) of a CPU. By configuring hardware performance counters to count specific architectural events, this research effort proves it is possible to transparently trap system calls and other interrupts driven entirely by the PMU. This offers an attacker the opportunity to redirect control flow to malicious code without requiring modifications to a kernel image. The approach is demonstrated as a kernel-mode rootkit on both the ARM and Intel x86-64 architectures that is capable of intercepting system calls while evading current kernel patch protection implementations such as PatchGuard. A proof-of-concept Android rootkit is developed targeting ARM (Krait) chipsets found in millions of smartphones worldwide, and a similar Windows rootkit is developed for the Intel x86-64 architecture. The prototype PMU-assisted rootkit adds minimal overhead to Android, and less than 10% overhead to Windows OS. Further analysis into performance counters also reveals that the PMU can be used to trap returns from secure world on ARM as well as returns from System Management Mode on x86-64.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">INTRODUCTION</head><p>Rootkit authors have been forced to adapt over the past decade as detection methods and countermeasures have been integrated into vendor operating systems and commercial security products. For example, the introduction of Kernel Patch Protection (KPP) and other kernel integrity measurement algorithms such as Microsoft PatchGuard for Windows <ref type="bibr" target="#b0">[1]</ref>, Samsung KNOX for Android devices <ref type="bibr" target="#b1">[2]</ref>, and Apple KPP for iOS 9+ devices <ref type="bibr" target="#b2">[3]</ref>, has mitigated traditional kernel rootkit designs that involve modifications to syscall dispatch tables, exception vector tables, or other critical code and data structures found in the OS. With KPP in place, attackers are often forced to move malicious code to less privileged user-mode, to elevate privileges enabling a hypervisor or TrustZone based rootkit, or to become more creative in their approach to achieving a kernel mode rootkit.</p><p>Early advances in rootkit design focused on low-level hooks to system calls and interrupts within the kernel. With the introduction of hardware virtualization extensions, hypervisor based rootkits became a popular area of study allowing malicious code to run underneath a guest operating system <ref type="bibr" target="#b3">[4,</ref><ref type="bibr" target="#b4">5]</ref>. Another class of OS agnostic rootkits also emerged that run in System Management Mode (SMM) on x86 <ref type="bibr" target="#b5">[6]</ref> or within ARM TrustZone <ref type="bibr" target="#b6">[7]</ref>. The latter two categories, which leverage virtualization extensions, SMM on x86, and security extensions on ARM, are perhaps more advanced in terms of added stealth; however, in some cases this may require an attacker to escalate privileges beyond the kernel level.</p><p>In this paper, a novel kernel-level rootkit is introduced, which utilizes the performance monitoring unit (PMU) of the CPU in order to trap specific architectural events. This provides an attacker the opportunity to redirect control flow at critical times without patching any part of a kernel image. Specifically, the contribution of this research includes:</p><p>• A generalized approach towards creating PMUassisted rootkits. This approach is validated with a proof-of-concept Android rootkit targeting the ARM architecture that can covertly intercept SMS messages.</p><p>• The concept is extended to the Intel x86-64 architecture with a prototype Windows rootkit that is proven to evade PatchGuard.</p><p>• An additional application of performance counters is discussed for detecting and intercepting returns from ARM secure world or returns from x86 SMM.</p><p>The rest of the paper is organized as follows. Section 2 offers background information on the PMU for both the ARM and x86 architectures. Section 3 describes the implementation of the rootkit for both architectures tailored towards Android and Windows as well as highlighting several implementation challenges. Section 4 highlights results, limitations, and other applications of this research. Section 5 details prior art in rootkits and other uses of the PMU in security research. Finally, section 6 offers areas for future research and general conclusions to the paper.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">BACKGROUND</head><p>Nearly all modern CPU architectures contain a performance monitoring unit built into silicon. While features may vary across architectures, they all share a common goal of providing metrics and insight into the performance of the CPU. The foundation of the PMU is built around one or more performance counters (PMC), a set of performance events to be counted, and an interrupt mechanism to signal a counter overflow. For example, an event such as cache misses could be sampled in order to evaluate the performance of the system under test. Numerous commercial products such as DS-5 Development Studio from ARM, VTune Amplifier from Intel, Xcode Instruments from Apple, and Linux perf all leverage the PMU in order to provide engineers real-time feedback to help them diagnose bugs or identify bottlenecks in software. In another example, drivers that act as a CPU governor on many Android based mobile devices are tied directly to a PMU in order to make real-time decisions for conserving power.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">PMU Overview</head><p>On both the ARM and Intel x86 architecture, the PMU can be controlled from software. In the x86 architecture this interface consists of a set of model-specific registers (MSR) accessible from ring 0, while on the ARM architecture software control of the PMU can be achieved thru a set of registers behind a system control coprocessor, CP15, or optionally from a memory-mapped interface. Intel's PMU features date back to the original Pentium while the ARM PMU was introduced in ARMv6 and can be found in ARM11, Cortex-R, and Cortex-A cores to include ARMv8 (64-bit). As the PMU is integrated into silicon, it operates transparently to any software running on the CPU. Multi-core processors have a separate PMU for each core, thus each core must be programmed individually.</p><p>The PMU's main task is to count events, based on event filters that are set in the event select registers. Each architecture specifies a list of events and filters that can be applied that includes both the event type (e.g. ITLB misses) as well as privilege mode. A complete list of available events can be found in the respective architecture reference manuals <ref type="bibr" target="#b7">[8,</ref><ref type="bibr" target="#b8">9]</ref>. Additionally, performance monitoring interrupts (PMI) can be enabled for each performance counter and will be triggered whenever a performance counter overflows. Whereas one possible usecase of the PMU is to periodically sample a counter based on timing intervals, the interrupt on overflow feature enables one to create a sampling period based on a specific number of events. For example, setting a counter to -3 would result in an interrupt after 3 instances of the selected event being counted by the PMU as shown in <ref type="figure" target="#fig_0">Figure 1</ref>. The interrupt handler is responsible to reset the counter value to the initial sampling period and the cycle repeats.</p><p>Four steps are required to properly utilize the PMU:</p><p>1. Register an interrupt service routine to handle performance monitoring interrupts (PMI).</p><p>2. Set the interrupt frequency by initializing a performance counter to the desired value.</p><p>3. Set the event selection filter, which specifies both the event to count and the privilege mode(s) in which to count.</p><p>4. Enable the counter and enable interrupts for the counter.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">The ARM PMU</head><p>Technically, the PMU is an optional extension of the ARM architecture, yet it is extremely common on chipsets found in mobile phones and tablets. Nonetheless, on a given ARM device it is first necessary to ensure the performance monitoring extensions are implemented The ARM reference manual defines a set of architectural performance events as well as numerous optional events. Further, the CP15 C9 register encodings are reserved for the PMU, and since only a subset are utilized it states that additional CP15 c9 encodings can be used to support IMPLEMENTATION DEFINED performance events. As an example, the Krait and Scorpion architectures, as developed by Qualcomm, extend this interface to include optional and custom events. A total of four CP15 c9 performance event selection registers are added in the Krait CPU representing four distinct regions of the CPU. One region for the vector floating-point unit codenamed Venum, and three others for each remaining unit of the CPU. These added events are then encoded based on the region of the CPU, an event code, and a group code. To utilize these Krait specific events, the Krait event selection register is set to the event of interest, and the standard ARM event selection register is set with another code to effectively link the PMU to utilize the appropriate Krait custom register.</p><p>Documentation is sparse on this architecture, but information can be gathered from the Android MSM kernel source <ref type="bibr">[10,</ref><ref type="bibr">11]</ref> as well as linux mailing lists <ref type="bibr" target="#b9">[12]</ref>. After briefly analyzing an iOS kernelcache, it appears as though Apple is another vendor to extend the ARM PMU specifications in order to add custom performance events to their proprietary ARM-based processors found in iPhones and iPads. However, Apple hardware was not further analyzed as part of this research effort.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">ROOTKIT DESIGN</head><p>The overall concept a PMU-assisted rootkit is to force a hardware interrupt on every single instance of a system call on a given CPU. Let S represent the set of all System Call events, and E the set of all performance events counted from one architecturally supported PMU event code. E is considered a candidate rootkit event if and only if, S is a subset of E, and the absolute complement of S is small. In other words, the goal is to identify a supported PMU event type that ideally counts syscall instructions and ONLY syscall instructions; however, other events may exist that include syscall events as a subset and limited additional events so as to keep performance overhead to a minimum. For example, while the PMU event ALL RETIRED BRANCHES might be a superset of all syscalls, the overhead from attempting to trap all branches on the system is too expensive and thus makes this event an unrealistic choice.</p><p>Once a candidate rootkit event is identified for the target architecture, a performance counter on each core is configured with an appropriate sampling period and interrupts are enabled for that counter. Typically, the desired sampling period will be -1 (0xFFFFFFFF), which will result in a PMC overflow, and subsequent PMI on every single instance of the event. Malicious code can then be inserted into an interrupt service routine (ISR) that is registered to handle interrupts triggered by the performance monitoring unit. This effectively enables malicious code to be transparently executed for every system call operation, in order for the ISR to inspect and <ref type="figure">Figure 2</ref>: The PMU-assisted rootkit is invoked on counter overflow, and can optionally modify saved registers in order to redirect code execution after servicing the interrupt.</p><p>optionally redirect code execution upon returning from the interrupt. Installation of the rootkit only requires initializing one performance counter, and registering the attacker controlled ISR to handle performance interrupts. To perform this behavior system-wide, the malicious ISR is then responsible for clearing the overflow bit from the generated PMI, and to reset the counter back to the sampling period to ensure the next event is also trapped by the PMU. This overall approach is depicted in <ref type="figure">Figure 2</ref>.</p><p>As it turns out, favorable events were identified on both the ARM and x86 architectures to capture system calls and exceptions that may be useful to rootkit authors. Since hardware is taking care of interrupting system calls, the rootkit does not need to patch any tables or portions of a kernel image that are often closely guarded by kernel patch protection algorithms. Control of the PMU is OS-agnostic, which means that only the malicious ISR handler is coupled to the OS. Most high-level operating systems such as Android, Linux, and Windows all provide APIs to legitimately register for performance interrupts. In this section, first a prototype rootkit implementation tailored towards Android running on the ARM (Krait) architecture will be introduced followed by a discussion of a similar rootkit tailored towards Windows 7 running on the Intel x86-64 architecture.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">The ARM Rootkit</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1.1">Finding Inspiration In the ARM Manual</head><p>The original idea behind a PMU-based rootkit first occurred while building a dynamic binary instrumentation tool and reviewing the ARM Architecture Reference Manual. In an effort to standardize event codes for vendors that wish to extend required performance events, Appendix C of the manual contains a table with ARM recommendations for IMPLEMENTATION DEFINED event numbers <ref type="bibr" target="#b7">[8]</ref>.</p><p>One particular group of events standout, namely the events with an EXC prefix (EXC UNDEF, EXC SVC, EXC PABORT, EXC DABORT, EXC IRQ, EXC FIQ, EXC SMC, EXC HVC). These events represent the entire ARM exception vector table (EVT), and combined with the fact a hardware performance counter can be configured to overflow generating an interrupt on every occurrence of an event, the idea for a PMU-assisted rootkit was born.</p><p>On the ARM architecture, the supervisor call instruction (SVC) is used to switch to a privileged mode by generating an SVC exception. This instruction was previously termed Software Interrupt SWI. Android, and many other operating systems, utilize this vector in the exception table to handle system calls. As such, the EXC SVC code matches the criteria discussed above as a perfect PMU rootkit event candidate.</p><p>The target chipset for a prototype ARM PMU rootkit was the Qualcomm APQ8084 Snapdragon processor found in the Motorola Nexus 6. This quad-core CPU was selected for several reasons. First, Qualcomm remains a leader in both application and baseband processor market share across the globe with their hardware found in more than a billion Android devices <ref type="bibr">[13,</ref><ref type="bibr" target="#b10">14,</ref><ref type="bibr" target="#b11">15]</ref>, and for this reason alone makes their products very attractive for research. Secondly, the APQ8084 CPU houses Qualcomm's custom Krait architecture. As highlighted in section 2, this CPU architecture extends the ARMv7 PMU specifications with a custom implementation that includes support for many additional performance events including counting SVC instructions. Finally, the author is a fan of Qualcomm technology and finds proprietary implementations all the more interesting to research. However, the approach is not unique to this chipset or architecture. Beyond the Krait, Scorpion, and possibly Kryo architectures, the event codes that are leveraged for the Android rootkit in this paper (EXC SVC and EXC SMC) are documented in both the ARMv7 and ARMv8 manuals <ref type="bibr" target="#b7">[8,</ref><ref type="bibr" target="#b12">16]</ref>, are included by default on the cortex-A57 and cortex-A72 architectures <ref type="bibr" target="#b13">[17,</ref><ref type="bibr" target="#b14">18]</ref>, and it is possible that other chipset manufactures have added similar functionality in extending their PMU.</p><p>Compared to a PMU-assisted rootkit, kernel-mode rootkits that patch portions of a kernel image are significantly easier to implement. All these traditional rootkits must do is override an address of a legitimate function in a syscall dispatch table and replace it with the address of an attacker controlled function. The idea of leveraging the performance monitoring unit to enable malicious code was found to be much harder to implement in practice. The main reason for this stems from the fact the rootkit is relying entirely on the PMU and its interrupt delivery in order to gain code execution. This introduces a number of challenges for successful and reliable syscall hooking via PMU interrupts, which will now be discussed in detail.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1.2">IRQ Number Identification</head><p>On the ARM architecture, performance monitoring interrupts are typically programmed in the Generic Interrupt Controller (GIC) to be delivered via IRQ. The Android kernel utilizes a radix tree data structure in order invoke registered IRQ handlers based on the IRQ number (IRQn). In order to register for performance interrupts the IRQn must be identified for the target platform, which can be achieved a couple different ways.</p><p>Device Tree Source Device tree source and source include files ( .dts and .dtsi) can be found in the kernel source for a given device. These files provide a detailed description of the hardware configuration of different boards and SoCs. In these files it is not uncommon to find the definition for the PMU. For the Nexus 6, the PMU definition can be found in msm/arch/arm/boot/dts/qcom/apq8084.dtsi:</p><p>cpu-pmu { compatible = "qcom,krait-pmu"; qcom,irq-is-percpu; interrupts = &lt;1 7 0xf00&gt;; };</p><p>This syntax above describes critical interrupt information about the PMU. The first value of the interrupts tuple denotes it is a Private Peripheral Interrupt (PPI). The middle value represents the interrupt number, and the final value represents the IRQ type and flags. The interrupt tuple can be translated to the IRQn based on the layout of the GIC <ref type="bibr" target="#b15">[19]</ref>. The first 16 interrupt ID numbers are considered Software Generated Interrupts (SGI), the next 16 are PPI's, and then an additional 988 values are available for Shared Peripheral Interrupts (SPI). For this device, the IRQn for the PMU = 7 + offset of PPIs (16) = 23. Once this value is obtained, invoking request percpu irq() will successfully register an ISR handler to the Krait PMU. In cases where this data is accessible from the Android device, it may be feasible to dynamically resolve the PMU IRQn from the rootkit installer.</p><p>Brute Force While most application processors contain a performance monitoring unit, not all COTS devices make use of their interrupts. Thus, PMU interrupt definitions are not always found in the device tree source. Such was the case while researching the Amazon Fire HD tablet with MT8135 CPU. For this device a small utility driver was created to help identify PMU IRQ numbers. To achieve this, an ISR handler was registered for every unused PPI and SPI on the system. Next, the PMU was programmed to periodically cause an overflow on a counter. Finally, /proc/interrupts was analyzed to match the number of overflows forced by the driver with the number of interrupts seen per IRQn. There may exist chipsets that include a PMU, but have its interrupt disabled within the GIC. Identifying and enabling the appropriate interrupt within memory-mapped GIC registers is outside of the scope of this research.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1.3">Interrupt Shadow</head><p>The biggest challenge to implementing the ARM rootkit was interrupt instruction skid. Instruction skid refers to the number of instructions that are executed past an instruction that triggers a PMC overflow before execution is halted by a PMI. The interrupt shadow refers to these instructions collectively, and any PMU event that occurs within this shadow is missed. This problem extends to both x86 and ARM architectures. The ARM manual <ref type="bibr" target="#b7">[8]</ref> sheds light on part of the reason for this effect, "...the architecture does not define a point in the pipeline where the event counter is incremented." Fortunately, SVC instructions occur far less frequently than many other event codes, and thus missing a single SVC instruction due to an interrupt shadow was found to be extremely rare. This was verified by checking the counter value in the ISR upon overflow. Normally, upon overflow the counter value will be at zero, if however the counter value is greater than zero then it means an event was missed due to interrupt shadow. The more frequent the interrupts, the more likely to miss trapping an event due to a shadow.</p><p>While interrupt shadow did not cause the rootkit to miss system calls, instruction skid still complicated system call hooking. The issue is made more difficult by the fact interrupts are disabled in the SVC exception handler, and then enabled just before accessing the system call dispatch table. Thus, the earliest point in which an SVC operation can be trapped via PMU in the Android kernel is the instruction following CPSIE within vector swi. The landing area is quite small between when interrupts are enabled and a branch to a resolved system call address occurs. Therefore, the rootkit had to deal with three different cases. Upon the SVC instruction being trapped by the PMU on a read system call for example, the saved program counter (PC) was either 1) within vector swi after the CPSIE instruction, 2) PC equals the address of the entry point of sys read, or 3) PC is somewhere past the sys read entry point.</p><p>The rootkit was developed to accommodate all three of these cases. The ISR first retrieved the saved user mode and SVC mode registers. The user mode registers were used to filter trapped SVCs by inspecting the syscall number in R7. The first two cases were straightforward to implement by emulating any remaining instructions within vector swi and changing the saved PC register to the address of a malicious function. As depicted in <ref type="figure" target="#fig_1">figure 3</ref>, these two cases represent roughly 95% of 3 million trapped read system calls. The third case was handled by overwriting a return address on the stack, and allowing the system call routine to finish. This was acceptable since all hook points selected involved data being retrieved from the kernel. Specifically, the ISR walks up the saved stack pointer in search of the address of ret fast syscall, and modifies it to a trampoline address. Trampoline code restores the Link Register (LR) with ret fast syscall before branching to malicious code. This malicious function takes the return value as its only parameter, already stored in R0, and then retrieves the original function parameters from the saved user mode registers in order to copy buffers to and from kernel space to perform any desired modifications to data.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1.4">CPU Hot-Plugging</head><p>One final challenge on the Nexus 6, and presumably many other Android devices, was the presence of a CPU hot-plug feature for multi-core systems. This feature allows individual CPU cores to be brought online based on demand in an effort to conserve power. The hotplugging feature is present by default on Android 5.0 on the Nexus 6. Performance monitoring unit registers do not persist when a core goes offline. The malicious ISR is still registered within the OS to handle interrupts, but the counter for a core coming online will no longer be set appropriately to count SVC instructions. Fortunately, the Linux kernel provides an easy interface, register hotcpu notifier, which will be invoked whenever a core changes state. No action is needed when a core goes offline, but the rootkit uses this callback to watch for the CPU STARTING event and then initialize the PMU on that core to count and trap all SVC instructions. With this implementation, the rootkit was able to persist through CPU hot-plugging.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1.5">The PMU-Assisted Android Rootkit</head><p>The prototype Android rootkit was successfully created and tested on a Nexus 6 running Android Lollipop 5.0, build number LRX210. Since the main objective of a rootkit is to enable covert operations and to hide indicators of compromise, the system calls getdents64 and read were selected for the proof-of-concept solution. The sys getdents64 function was selected in order to provide basic file hiding and process hiding on Android. To explore a more phone specific kernel malware feature, the sys read system call was intercepted and examined only in the context of qmuxd. The qmuxd daemon on Qualcomm powered Android devices is responsible for managing communication sessions with the cellular modem. This daemon passes along data encapsulated in a proprietary QMI protocol, between the cellular baseband and the appropriate clients running within Android. By hooking sys read within the context of qmuxd threads, it enabled the rootkit to intercept QMI packets being sent from the modem towards Android. As an example usecase of this hook, the rootkit inspects QMI packets and filters on the Wireless Messaging and Voice QMI services in order to intercept and modify incoming SMS messages, USSD messages, or incoming phone call notifications. While there are all kinds of interesting hooks and operations that could be conducted on a phone, one could envision this particular hook being utilized for covert communication, by preventing certain QMI packets from ever reaching higher-level services running in Android.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">The x86 Rootkit</head><p>Having successfully proven a kernel-level rootkit for Android using the ARM performance monitoring unit, attention was turned towards the Intel x86 architecture to explore whether Intel's performance monitoring unit could be abused in a similar manner. Specifically, the focus was on the x86-64 architecture since PatchGuard is only supported on 64-bit versions of Microsoft Windows. Initial experimentation was performed on Linux Ubuntu 14.04.3 x64 for ease of research and development, and then later tested on Windows 7 SP1 64-bit. Research was performed on a Dell laptop with Intel core i3-4030U, and a MacBook Pro with Intel core i7, both based on the Haswell microarchitecture.</p><p>Identifying a candidate PMU event type on the x86 architecture was a little more challenging. Unlike the ARM architecture, which offers counting SVC instructions, no obvious event was identified for counting exclusively SYSCALL instructions on x86-64. Coming up with a solution for x86 required first dissecting the operations involved in Intel's SYSCALL instruction. From a high level, the SYSCALL instruction switches from ring-3 to ring-0 while branching to a system call handler in the kernel. More specifically, the instruction leverages three separate MSR's: the target code segment (CS) and stack segments (SS) are loaded from IA32 START, the address of the OS syscall handler is loaded into RIP from IA32 LSTAR, and the RFLAGS register is updated based on the complement of IA32 FMASK.</p><p>One architectural performance event available on Intel processors is the Branch Instructions Retired (BR INST RETIRED) event. Dating back to at least the 3rd generation of Intel Core an interesting conditional unit-mask exists, namely the number of far branches taken (BR INST RETIRED.FAR BRANCH). This allows the PMU to count all retired far branches, and is of particular interest since the SYSCALL instruction essentially makes a far branch into the kernel system call handler, such as KiSystemCall64 for Windows. Two different Intel x86 event codes were found capable of counting far branches, which both satisfy the criteria as a candidate rootkit event. The first is the BR INST RETIRED.FAR BRANCH event. Since the SYSCALL instruction takes a far jump towards ring 0 kernel code, branches targeting user mode code can be Either of these event codes can be used to count every single far branch destined for kernel code. However, setting the counter sampling period to -1, as was performed on the ARM architecture, was found to result in an interrupt loop. The cause of the interrupt loop is the iretq instruction that occurs upon completing service of the performance monitoring interrupt. This particular iretq instruction is returning to the kernel code that was interrupted by PMI, and since the iretq itself is a far branch, the PMC overflows and triggers another PMI causing a loop. Thus, trapping every far branch in the kernel on x86 requires resetting the performance counter to -2 from the ISR. This behavior is captured in <ref type="figure" target="#fig_3">figure 5</ref>.</p><p>Last branch recording is a convenient feature of Intel x86 hardware that enables filtering and recording specific types of branches. Retrieving the TO address from the top of the LBR stack while filtering on far branches is the easiest way to determine whether the current PMI was triggered on a SYSCALL. By comparing this address with the address from IA32 LSTAR, the rootkit could quickly determine whether a system call was the culprit of the PMI. For environments where the LBR is not accessible, such as within a virtualized guest OS, the rootkit was implemented to inspect RIP from the KTRAP FRAME passed into the ISR in order to determine whether the address falls within KiSystemCall64. Using this methodology, the Windows 7 rootkit was developed and tested on physical hardware as well as within a VMWare guest OS. Since the SYSCALL instruction masks interrupts, a delayed interrupt instruction skid was observed in Windows as was the case on the ARM architecture. In spite of this, implementation of the Windows PMU-based rootkit was significantly easier than Android, given that many of the challenges such as IRQ number identification and CPU hot-plugging did not apply. The primary hurdle was dealing with the instruction skid occurring after the sti instruction within KiSystemCall64. However, the problem was much easier on Windows as the landing area between enabling interrupts and branching to the resolved syscall routine is much larger in Windows KiSystemCall64 compared to the Android kernel. In fact, in one experiment more than 32 million syscalls were trapped by the Windows rootkit, and more than 99.9999% of them were interrupted prior to jumping into the syscall routine retrieved from the System Service Descriptor <ref type="table">Table (SSDT)</ref>. For this reason, cases 2 and 3 from the Android rootkit were ignored, making the Windows rootkit implementation much simpler.</p><p>Using these PMU settings, a Windows rootkit was developed by trapping far branches and redirecting system calls on a Windows 7 64-bit kernel protected by PatchGuard. The Windows system call NtEnumerateValueKey was chosen as one hook in order to hide registry settings, and was able to successfully cloak registry values without tripping PatchGuard. Additionally, the Windows system call NtCreateFile was hooked in order to monitor files. SYSCALL instructions were found to represent 68% of far branches trapped, and another 25% of trapped events were far branches to KiPageFault. The far branch event remains a solid candidate for rootkits as the performance overhead is still quite low, and interestingly this approach may extend to intercepting other entries of the IDT since most of the additional far branches caught were page faults or other hardware interrupts.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">ANALYSIS</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">Overhead and Limitations</head><p>Efficacy testing was performed on the Android rootkit by validating PMU hooks were able to cloak threads from a process listing with the ps command, to hide a file on the file system while performing a directory listing with the ls command, and validating the ability to intercept and modify incoming SMS and USSD strings displayed to the user. On Windows, validation was performed by ensuring registry values were not visible from regedit, as well as ensuring PatchGuard did not trigger a BSOD for detecting any modifications to critical kernel code or data.</p><p>Performance overhead was studied on both architectures using the PassMark benchmarking tool <ref type="bibr" target="#b16">[20]</ref> for Android and Windows. Additionally, the Dromaeo JavaScript benchmarking tool <ref type="bibr" target="#b17">[21]</ref> was utilized as a secondary metric. In total, trapping system-wide SVC instructions via performance interrupts added 2% overhead to the Nexus 6 device. In most categories of PassMark for Android overhead was negligible, but the Memory tests had a 6% overhead likely due to hooking read. On x86, trapping all far branches in ring 0 added 8% overhead to Linux, and 10% overhead to Windows 7.</p><p>Existing KPP implementations ignore the performance monitoring unit and legitimately registered ISRs, thus the PMU rootkit was able to evade current integrity checks including from Microsoft's PatchGuard. However, detection of abuse of the performance monitoring unit is rather easy to perform. First, any kernel-level or higher privileged code is able to read and interpret PMU register settings. This could easily be integrated into anomaly detection software or KPP to periodically inspect PMU registers in search for abuse. A major increase in interrupt frequency is also evident when abusing the performance monitoring unit. The ability to detect an increase or even presence of PMI is another approach to detecting these rootkits. However, abusing the PMU is a double edged sword, and while this paper focuses on the offensive use-case of hardware performance counters, there are many more practical applications in the defensive realm. Thus, defenders must keep this mind before treating any PMU configuration anomalies as malicious.</p><p>As with any approach, there are limitations to a PMUassisted rootkit. First, the rootkit provides no form of persistence. PMU registers do not persist across core resets, and registering an ISR for handling interrupts must be done upon each boot. Secondly, the approach will miss any event that occurs while interrupts are disabled. This did not impact reliability of intercepting system calls, but may apply to other hardware-assisted ap-plications that utilize the PMU. Finally, the PMU-based rootkit is fragile. Any other code running with kernellevel privileges is capable or reading, writing, or tampering with the performance monitoring registers. Disabling an interrupt enable bit, changing an event code filter, or setting the counter value could prevent the rootkit from continuing to gain code execution on each system call. Thus, it may be necessary in a real world implementation to have a watchdog thread as part of the rootkit to detect PMU register tampering and reset these values for the rootkit to continue operation. Interestingly, the ARM architecture does support trapping access to the PMU to hypervisor mode, offering additional stealth opportunities provided an attacker has control of the hyp vector table.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Interactions with SMM and TrustZone</head><p>An interesting artifact of this research was observed once it appeared that various performance events were capable of trapping returns from System Management Mode on x86, and depending upon debug settings, trap returns from secure world on ARM. Potential applications for this are left to the reader's imagination, but knowledge of the periodicity of SMM and secure world switches could be beneficial to a rootkit especially if KPP is being performed while in these modes. In the case of ARM, there may exist a use-case for a rootkit to modify or capture data being returned from a particular Secure Monitor Call (SMC).</p><p>This topic was first investigated on ARM with the obvious EXC SMC event code. Using this code all SMC calls could be counted triggering an interrupt on overflow. Even on systems without this specific event code, SMC instructions can often be counted by using the appropriate mode exclusion bits. For example, event code 0x3800000C will count all branches in secure PL0, PL1, or HYP modes. Since the SMC instruction itself begins execution in normal world, but transfers to secure monitor mode, the SPNIDEN debug signal may not be required to count these instructions. Moreover, a MediaTek chipset in the Amazon Fire, listed in <ref type="table" target="#tab_0">Table 1</ref>, was found to support counting any event in secure world due to its debug settings. As a result, the PMU could be configured to trigger a PMI while in secure world resulting in the interrupt being serviced on return from an SMC call or a secure FIQ.</p><p>ARM recommends the FIQ to be reserved for secure world and IRQ for normal world. Because a secure FIQ is programmed with a much higher priority, even though an overflow of a performance counter would occur immediately upon running in secure world, the PMI will not be serviced until the FIQ is completed. Depending upon a vendors TrustZone implementation, there may exist denial-of-service attacks on an SMC call by causing an SMC handler to immediately be forced to return to normal world to service a PMU interrupt. It is thus important for a TrustZone implementation to ensure it first masks interrupts within the SMC vector handler. This is a possible area of future research, as further analysis was not performed as part of this effort.</p><p>On the x86 architecture, monitoring far branches also appeared to catch returns from SMM mode. This was especially apparent on hardware with LBR support. One convenient feature provided by Intel's PMU is the ability to freeze counting as well as freezing the LBR whenever a performance counter overflows. These two settings are controlled within the IA32 DEBUGCTL MSR. On the Haswell CPU inside the Dell Inspiron laptop, every return from SMM resulted in a few observable behaviors. Whenever the PMU ISR was invoked after executing in SMM, neither the LBR nor the counter was frozen. Because of this, the LBR top of stack (TOS) was always a branch to hal!HalpPerfInterrupt (IDT vector 0xFE). Additionally, inspecting the far branch prior to the TOS entry exposed a matching TO and FROM address. Finally, reading the far branch counter value revealed a positive count, whereas a normal far branch trap results in a counter value of zero due to the PMC freeze setting. All of these anomalies were found to reliably signal a return from SMM, further validated by noting an increment to the MSR SMI COUNT. There do exist errata for some Intel Xeon processors, which mention LBR data could be incorrect after return from SMM <ref type="bibr" target="#b18">[22,</ref><ref type="bibr" target="#b19">23]</ref>. Regardless of the exact cause and sequence of events, it seems that trapping far branches via PMU on this particular Haswell CPU is able to reliably detect and trap returns from SMM.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">RELATED WORK</head><p>A handful of rootkit designs have been introduced targeting the ARM architecture in prior research. A Phrack article <ref type="bibr" target="#b20">[24]</ref> covers a number of traditional approaches for Android based kernel-rootkits ranging from syscall table modifications via /dev/kmem, to modifying the SVC/SWI exception vector to branch to an attacker controlled syscall handler. Cloaker <ref type="bibr" target="#b21">[25]</ref> leverages the System Control Register (SCTLR) on the ARM architecture in order to move the exception vector table from high address to low address in order to map a malicious EVT at address 0x0 in order to intercept all exceptions. Rather than patching syscall table entries, Suterusu <ref type="bibr" target="#b22">[26]</ref> performs inline hot patching of kernel functions on both the x86 and ARM architectures. Clock Locking Beats <ref type="bibr" target="#b23">[27]</ref> explores the feasibility of hiding code by implementing a custom CPU governor capable of overclocking in order to add cycles for malware to run. Roth <ref type="bibr" target="#b6">[7]</ref> introduces a Trust-Zone based rootkit, which redirects IRQ interrupts, normally utilized by normal world, to secure monitor mode allowing TZ based malware to intercept.</p><p>Rootkits targeting the x86 architecture have been very well documented in prior literature including countless Phrack articles and books <ref type="bibr" target="#b24">[28]</ref>. Beyond traditional rootkit patching techniques, Shadow Walker <ref type="bibr" target="#b25">[29]</ref> added novel stealth techniques by hiding code pages after hooking the page fault handler. The Subversive rootkit <ref type="bibr" target="#b26">[30]</ref> leverages x86 debug registers in order to trap and intercept system calls of interest. The Blue Pill rootkit <ref type="bibr" target="#b3">[4]</ref> utilizes x86 virtualization extensions in order to create a hypervisor running underneath the target operating system, thus able to intercept interrupts among many other things. An SMM based keylogger <ref type="bibr" target="#b5">[6]</ref> was introduced that patches the SMI handler in BIOS firmware, and a GPU based keylogger <ref type="bibr" target="#b27">[31]</ref> was demonstrated that uses DMA to capture keystrokes.</p><p>The performance monitoring unit is the subject of several studies focused on hardware-assisted security and instrumentation. Most if not all of these studies have been focused on the Intel x86 PMU, with very little discussions on the ARM PMU. Vogl et al. <ref type="bibr" target="#b28">[32]</ref> discusses using the PMU on the x86 architecture in order to conduct instruction level monitoring by trapping performance events such as branches or instructions to a hypervisor for monitoring. Several studies focus on utilizing the PMU for return-oriented-programing (ROP) detection. <ref type="bibr">Wicherski [33]</ref> uses the PMU to trap mispredicted RET instructions occurring in Ring 0 in order to detect ROP activity within the kernel, and Li et al. <ref type="bibr" target="#b30">[34]</ref> extends this approach to check for stack pivoting on similar mispredicted return branches. CFIMon <ref type="bibr" target="#b31">[35]</ref> explores using the PMU and Branch Trace Store (BTS) on Intel architecture to apply control-flow integrity on branches. Meanwhile, NumChecker <ref type="bibr" target="#b32">[36]</ref> uses performance counters to detect rootkits by measuring event frequency during system calls.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">CONCLUSION</head><p>In this paper, a novel kernel-level rootkit is discussed and demonstrated on the ARM and Intel x86 architectures. On the ARM architecture, SVC instructions are trapped by configuring the performance monitoring unit to count and overflow on every SVC instruction. A prototype Android rootkit tailored towards the Krait architecture is implemented capable of hiding files, processes, and SMS messages. Similarly, by leveraging the far branch event supported on the Intel x86 architecture, a proof of concept solution is demonstrated in Windows 7 64-bit capable of hiding registry entries. Further, utilizing the PMU does not require patching or modifying any critical kernel structures and thus allows it to evade Kernel Patch Protection algorithms such as Microsoft PatchGuard. Performance overhead is shown to be low on Android, and at an acceptable level on Windows and Linux. Further, it was shown how the same approach can be used to trap returns from secure world on the ARM architecture, as well as returns from System Management Mode on the x86 architecture.</p><p>Several areas exist for potential future work in researching offensive applications of the performance monitoring unit. First, extending the solution to ARMv8 processors with their built-in support for counting SVC instructions on some Cortex-A cores is one area of future research. Additionally, exploring Apple and other custom ARM system-on-a-chip solutions in search of support for interesting PMU features. On the x86 architecture, further research is needed to better understand all events and interrupts that can be caught monitoring far branches. For example, in testing the prototype Windows PMU driver is able to trap and redirect code execution on debug exceptions prior to a breakpoint being hit opening up possibilities for anti-debugging features. Further, it was noted that capturing page faults was the second most common event beyond SYSCALL on x86. Thus, exploring the feasibility of Shadow Walker type solutions is another potential area of future research. Intel SGX is an emerging area of research that could also present interesting interactions with the performance monitoring unit.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: A performance counter is configured to count instructions retired, and the interrupt handler resets the counter to overflow every 3 instructions.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: The frequency associated with three possible values of PC upon trapping SVC instruction via PMU and isolating the read system call.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: Two Intel x86-64 PMU configurations capable of counting Far branches including the SYSCALL instruction</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 5 :</head><label>5</label><figDesc>Figure 5: A generalized LBR snapshot when logging only Far branches in ring 0</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="true"><head>Table 1 : Debug settings and PMU version supported on ARM chipsets found in various smartphones and tablets.</head><label>1</label><figDesc></figDesc><table>and available for use. This can be achieved by querying 
+the DBGAUTHSTATUS debug register in order to ob-
+tain the values of four debug signals: DBGEN, NIDEN, 
+SPIDEN, and SPNIDEN. The PMU is considered to be a 
+non-invasive debug feature and thus only requires either 
+NIDEN or DBGEN to be high for counting in normal 
+world, and SPIDEN or SPNIDEN to be high for count-
+ing events in secure world. Table 1 lists the debug set-
+tings found on several different mobile devices contain-
+ing chipsets from various vendors. 
+</table></figure>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Acknowledgments</head><p>A number of individuals need to be recognized and thanked for enabling this research to occur. Thus, a special thank you is given to Cody Pierce of Endgame, for his support, for educating me on the Windows Kernel, and for encouraging me to publish this research; to Kenny Fitch of Endgame, who was instrumental in enabling the Windows research by identifying how to register for PMU interrupts on Windows without upsetting PatchGuard; to Eric Miller of Endgame, for his support, sharing devices, and providing feedback to ideas; to Jamie Butler of Endgame, for educating me on some Windows and x86 rootkit techniques as well as reviewing this paper; and last and most importantly, thank you to my wife and kids for their love and support during what probably seemed like my working two jobs.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">PatchGuard Reloaded: A Brief Analysis of PatchGuard Version 3</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Skywing</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Uninformed</title>
+		<imprint>
+			<biblScope unit="volume">8</biblScope>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Hypervision across worlds: Real-time kernel protection from the ARM TrustZone secure world</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">M</forename><surname>Azab</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Ning</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Shah</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Q</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Bhutkar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Ganesh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Ma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Shen</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM CCS &apos;14</title>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="90" to="102" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title level="m" type="main">Hacking from iOS8 to iOS9</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Pangu</surname></persName>
+		</author>
+		<ptr target="http://blog.pangu.io/wp-content/uploads/2015/11/POC2015RUXCON2015.pdf.Ruxcon" />
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+		<title level="m" type="main">Subverting Vista Kernel For Fun And Profit</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Rutkowska</surname></persName>
+		</author>
+		<ptr target="https://www.blackhat.com/presentations/bh-usa-06/BH-US-06-Rutkowska.pdf.BlackHat" />
+		<imprint>
+			<date type="published" when="2006" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">SubVirt: Implementing Malware with Virtual Machines</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">T</forename><surname>King</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">M</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y.-M</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Verbowski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">J</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">R</forename><surname>Lorch</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2006 IEEE Symposium on Security and Privacy</title>
+		<meeting>the 2006 IEEE Symposium on Security and Privacy</meeting>
+		<imprint>
+			<publisher>IEEE Computer Society</publisher>
+			<date type="published" when="2006" />
+			<biblScope unit="page" from="314" to="327" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title level="m" type="main">A Real SMM Rootkit: Reversing and Hooking BIOS SMI Handlers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Wecherowski</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2009" />
+			<biblScope unit="volume">66</biblScope>
+		</imprint>
+	</monogr>
+<note type="report_type">Phrack</note>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Next Generation Mobile Rootkits</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Roth</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Hack In</title>
+		<meeting><address><addrLine>Paris</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<monogr>
+				<title level="m">ARM, ARM Architecture Reference Manual: ARMv7-A and ARMv7</title>
+		<imprint/>
+	</monogr>
+	<note>R edition</note>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<monogr>
+		<title level="m" type="main">Intel 64 and IA-32 Architectures Software Developer&apos;s Manual Volume</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Intel</surname></persName>
+		</author>
+		<imprint>
+			<biblScope unit="volume">3</biblScope>
+		</imprint>
+	</monogr>
+	<note>3A, 3B, 3C, 3D): System Programming Guide</note>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<monogr>
+		<title level="m" type="main">ARM: perf: Add support for Scorpion PMUs</title>
+		<ptr target="https://lkml.org/lkml/2015/2/11/654.LinuxKer-nelMailingList" />
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<monogr>
+		<title level="m" type="main">Qualcomm Retains Lion&apos;s Share Of LTE Baseband Market; Further Gains Expected</title>
+		<ptr target="http://www.forbes.com/sites/greatspeculations/2016/02/24/qualcomm-retains-lions-share-of-lte-baseband-market-further-gains-expected-in-2016/" />
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<monogr>
+				<ptr target="http://www.prnewswire.com/news-releases/strategy-analytics-smartphone-apps-processor-revenue-declined-4-percent-in-2015-to-reach-201-billion-300221407.html" />
+		<title level="m">Strategy Analytics: Smartphone Apps Processor Revenue Declined 4 Percent in 2015 to Reach $20.1 Billion</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<monogr>
+		<title level="m" type="main">Architecture Reference Manual: ARMv8, for ARMv8-A architecture profile</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arm</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arm</forename></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<monogr>
+				<title level="m">ARM, ARM Cortex-A57 MPCore Processor: Technical Reference Manual</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<monogr>
+				<title level="m">ARM, ARM Cortex-A72 MPCore Processor: Technical Reference Manual</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arm</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arm</forename><surname>Generic</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+	<note>Interrupt Controller Architecture Specification: GIC architecture version 3.0 and version 4.0</note>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Passmark Performancetest Mobile</surname></persName>
+		</author>
+		<ptr target="http://www.passmark.com/products/ptmobile.htm" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Dromaeo Javascript Performance</surname></persName>
+		</author>
+		<ptr target="http://dromaeo.com/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<monogr>
+		<title level="m" type="main">Intel Xeon Processor E5 v2 Product Family, Specification Update</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Intel</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2015-09" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<monogr>
+		<title level="m" type="main">Intel Xeon Processor E3-1200 Product Family, Specification Update</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Intel</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2015-08" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<monogr>
+		<title level="m" type="main">Android platform based linux kernel rootkit</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Dong-Hoon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>You</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2011" />
+			<biblScope unit="volume">68</biblScope>
+		</imprint>
+	</monogr>
+<note type="report_type">Phrack</note>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">Cloaker: Hardware supported rootkit concealment</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><forename type="middle">M</forename><surname>David</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">M</forename><surname>Chan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">C</forename><surname>Carlyle</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">H</forename><surname>Campbell</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings -IEEE Symposium on Security and Privacy</title>
+		<meeting>-IEEE Symposium on Security and Privacy</meeting>
+		<imprint>
+			<date type="published" when="2008" />
+			<biblScope unit="page" from="296" to="310" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<monogr>
+		<title level="m" type="main">Suterusu Rootkit:Inline Kernel Function Hooking on x86 and ARM</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Coppola</surname></persName>
+		</author>
+		<ptr target="https://github.com/mncoppola/suterusu" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<monogr>
+		<title level="m" type="main">Clock Locking Beats: Exploring the Android Kernel and Processor Interactions</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">M</forename><surname>Thomas</surname></persName>
+		</author>
+		<ptr target="https://github.com/monk-dot/ClockLockingBeats" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<monogr>
+		<title level="m" type="main">Rootkits: Subverting the Windows Kernel</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Hoglund</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Butler</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2005" />
+			<publisher>Addison-Wesley Professional</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">SHADOW WALKER: Raising The Bar For Rootkit Detection</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Sparks</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Butler</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">BlackHat Japan</title>
+		<imprint>
+			<date type="published" when="2005" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<monogr>
+		<title level="m" type="main">Subversive rootkit</title>
+		<ptr target="https://github.com/falk3n/subversive" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<monogr>
+		<title level="m" type="main">You Can Type, but You Can&apos;t Hide: a Stealthy GPU-based Keylogger</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Ladakis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Koromilas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Vasiliadis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Polychronakis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Ioannidis</surname></persName>
+		</author>
+		<editor>EuroSec</editor>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Using Hardware Performance Events for Instruction-Level Monitoring on the x86 Architecture</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Vogl</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Eckert</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of EuroSec&apos;12, 5th European Workshop on System Security</title>
+		<meeting>EuroSec&apos;12, 5th European Workshop on System Security</meeting>
+		<imprint>
+			<publisher>ACM Press</publisher>
+			<date type="published" when="2012-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<monogr>
+		<title level="m" type="main">Taming ROP on Sandy Bridge: Using Performance Counters to Detect Kernel ReturnOriented-Programming</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Wicherski</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+	<note>SyScan</note>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<monogr>
+		<title level="m" type="main">Transparent ROP Detection using CPU Performance Counters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Crouse</surname></persName>
+		</author>
+		<ptr target="https://www.trailofbits.com/threads/2014/transparentropdetectionusingcpuperfcounters.pdf.Threads" />
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<analytic>
+		<title level="a" type="main">CFIMon: Detecting violation of control flow integrity using performance counters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Xia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Zang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2012 42nd Annual IEEE/IFIP International Conference on Dependable Systems and Networks (DSN)</title>
+		<meeting>the 2012 42nd Annual IEEE/IFIP International Conference on Dependable Systems and Networks (DSN)</meeting>
+		<imprint>
+			<publisher>IEEE Computer Society</publisher>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="1" to="12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">NumChecker: detecting kernel control-flow modifying rootkits by using hardware performance counters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Karri</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">DAC</title>
+		<imprint>
+			<date type="published" when="2013" />
+			<publisher>ACM</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

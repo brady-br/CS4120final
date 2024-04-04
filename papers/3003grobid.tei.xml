@@ -1,0 +1,1197 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:57+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Revisiting Concurrency in High-Performance NoSQL Databases</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yuvraj</forename><surname>Patel</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Computer Sciences Department</orgName>
+								<orgName type="institution">University of Wisconsin-Madison</orgName>
+								<address>
+									<country>+ NVIDIA</country>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><roleName>Mohit</roleName><forename type="first">Verma</forename><surname>+0</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Computer Sciences Department</orgName>
+								<orgName type="institution">University of Wisconsin-Madison</orgName>
+								<address>
+									<country>+ NVIDIA</country>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Computer Sciences Department</orgName>
+								<orgName type="institution">University of Wisconsin-Madison</orgName>
+								<address>
+									<country>+ NVIDIA</country>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi</forename><forename type="middle">H</forename><surname>Arpaci-Dusseau</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Computer Sciences Department</orgName>
+								<orgName type="institution">University of Wisconsin-Madison</orgName>
+								<address>
+									<country>+ NVIDIA</country>
+								</address>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Revisiting Concurrency in High-Performance NoSQL Databases</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>We measure the performance of five popular databases and show that single-node performance does not scale while hosting data on high-performance storage systems (e.g., Flash-based SSDs). We then analyze each system, unveiling techniques each system uses to increase concurrent performance; our taxonomy places said approaches into six different categories (thread architecture, batch-ing, granularity, partitioning, scheduling and low-level efficiency) and thus points towards possible remedies that can scale the system. Finally, we introduce Xyza, a modified version of MongoDB that uses a wide range of classic and novel techniques to improve performance under concurrent , write-heavy workloads. Empirical analysis reveals that Xyza is 2× to 3× faster than MongoDB and scales well (up to 32 processing cores).</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Parallelism is a core technique used to increase distributed system performance. However, using parallelism, both across machines and within a single machine, is challenging; without careful management of concurrent activity, performance can be lost and correctness can be sacrificed. The goal of concurrency control is to ensure correctness among operations that are executing simultaneously in a system. Ideally, concurrency control mechanisms should enable correctness while allowing the system to scale well with the number of cores. Achieving this reality is difficult; decades of efforts have been put forth to understand limitations and propose new techniques that do not limit scaling <ref type="bibr">[12-15, 35, 40, 41, 50, 51, 55]</ref>.</p><p>Technology changes are also afoot in the data center. For example, storage has been a central performance bottleneck in scalable databases and file systems. Researchers and practitioners have proposed systems that can effectively utilize the newly available faster storage media <ref type="bibr">[4, 31-33, 42, 44, 46, 52]</ref>. In addition, each node now consists of more cores and it becomes crucial to use them all to achieve high performance; if single-node performance does not scale, more machines must be recruited to tackle the task at hand, thus increasing costs.</p><p>Thus, the central question that we address: are standard concurrency control mechanisms effective enough to harness faster storage devices and the large number of cores available in modern systems? In this paper, we answer this question by first analyzing the performance 0 Work done while studying at University of <ref type="bibr">Wisconsin-Madison.</ref> of five popular NoSQL databases -MongoDB <ref type="bibr" target="#b35">[36]</ref>, Cassandra <ref type="bibr" target="#b0">[1]</ref>, CouchDB <ref type="bibr" target="#b1">[2]</ref>, Oracle NoSQL DB <ref type="bibr" target="#b20">[21]</ref>, and ArangoDB <ref type="bibr" target="#b4">[5]</ref>. Our first and most important finding: on a single node with many cores, all five systems do not scale well as the client load increases; as a result, despite the presence of a fast storage device (in this case, a modern SSD <ref type="bibr" target="#b10">[11]</ref>), system throughput is notably lower than what could be realized, sometimes by 3× or more. To understand the concurrency control techniques utilized in these systems, we classify each popular technique into six categories: thread architecture, batching, granularity, partitioning, scheduling, and low-level efficiency. Classifying these techniques helps us understand weaknesses and identify why the databases are not scaling. Based on this analysis, we observe that common scaling techniques (such as partitioning and scheduling) are not well utilized; simply put, these systems, optimized for slow-storage media, are not yet concurrent enough to fully realize the performance of modern storage systems. To remedy this problem, and to demonstrate how high performance can be attained, we present Xyza -a modified version of MongoDB that uses a wide range of classic and novel techniques to deliver high performance and scalability. In particular, we concentrate our improvements on three techniques that most affect performance: partitioning, scheduling, and low-level efficiency.</p><p>Specifically, we partition data structures such as vectors, the journal, and the key-space to improve the performance of the write path. We introduce two novel techniques in scheduling: contention-aware scheduling and semanticaware scheduling. Contention-aware scheduling considers each lock as a resource and only schedules an operation if there will be no such contention. Semantic-aware scheduling selectively drops conflicting operations when no difference can be realized by clients (due to weakened levels of consistency). Finally, using atomic primitives, we fast-path the common cases allowing them a higher share of system resources, thus increasing performance under load. Overall, when Xyza is subjected to a concurrent, write-heavy workload, we observe that it scales well up to 32 cores and is 2× to 3× faster than MongoDB.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Concurrency Analysis</head><p>The simplest way to measure if a system scales vertically is by gradually scaling the resources in a single system and then measuring its performance. A truly scalable system will demonstrate a linear performance increase. How- ever, if the system does not scale well, how can one determine whether concurrency control is at the root of the problem? Also, how can one discover if the system cannot utilize available resources and hence limits performance? In this paper, we particularly concentrate on CPU scaling. To identify if concurrency control is a bottleneck, we conduct experiments in two modes. In the first mode, a single instance of a NoSQL database is run while the amount of load generated on these databases is increased via additional clients. In the second mode, multiple instances are instantiated and each client is configured to interact with a separate instance (on the same machine). As there is no interference among client operations, the hypothesis is that the overall cumulative performance will scale in the latter case, and reveal the potential optimal scaling of the system within that particular configuration.</p><p>In these experiments, we focus on write performance on a single node as it is more challenging to scale (as compared to reads). Writes modify the global structures more often and hence maintaining integrity poses a challenge under highly concurrent workloads. We choose the weakest consistency option available for the insert operation for all these databases. The weakest form of consistency is designed to achieve the highest levels of performance. Thus, it is useful in understanding whether concurrency control is a bottleneck.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">Experimental Setup and Workload</head><p>We perform our experiments on an 2.4 GHz Intel Xeon E5-2630 v3. It has 2 sockets and each socket has 8 physical cores with hyper-threading enabled. We use two such machines for our experiments where one is used as a server while another is used to run client programs. Both of these machines are connected via a 10Gbps network and has one 480 GB SAS SSD and 128 GB RAM. Both have Ubuntu 14.04 with kernel version 4.9. For ArangoDB, we use five client machines as a single client machine CPU utilization saturates, limiting the load that is generated on the server. Due to memory constraints in the Java environment, we only instantiate two and ten instances of Cassandra and Oracle NoSQL DB respectively. Our workload consists solely of insert operations. A client program issue inserts in a loop. The client program generates the key and the start and end key range is passed as a parameter to the client program. The value is 100 bytes and consists of random characters. We vary the number of client programs and all client programs execute on the same machine as discussed above. Totally, all the clients combined together insert fifty million records. We measure the time taken to complete the insert operations to calculate throughput and monitor the CPU, disk and network utilization on the server using dstat command <ref type="bibr" target="#b2">[3]</ref>. For Cassandra, we use their stress tool <ref type="bibr" target="#b28">[29]</ref> and it is configured to mimic the above-mentioned workload. The throughput reported is the average of five runs.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">Results and Analysis</head><p>The performance comparison of each NoSQL database for single and multiple instances is shown in <ref type="figure" target="#fig_0">Figure 1</ref>. We observe that for single instance mode, neither the storage nor the network is a bottleneck. This observation is consistent among all the databases; the average disk bandwidth ranges between 5-150 MB/sec. The throughput for single instance mode saturates as the number of clients increase. However, the CPU utilization of the server machine increases as the number of clients increase.</p><p>With multiple instances, the throughput either increases linearly or sub-linearly. We observe that the CPU utilization of the server is similar to that of the single instance mode. With multiple instances, unlike the single instance case, each client interacts with a separate instance and all the resources are independent and isolated. As there is no interference from other clients, the concurrency control mechanism does not have to handle contention. With less contention, each instance is able to work independently, thereby increasing the throughput of the system. The gap between single instance and multiple instances for Cassandra and Oracle NoSQL DB is not the same as that of other databases because the total number of instances compared is smaller. However, even with such a low number of multiple instances, we still see a significant difference in the throughput.</p><p>Based on the throughput comparison shown in <ref type="figure" target="#fig_0">Figure 1</ref>, we show that current concurrency control mechanisms are not able to scale well as the number of clients increases. Given the availability of many-core systems, and newer media such as Flash and NVM technologies, it is critical to design systems keeping in mind these technologies.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.3">Popular Design Techniques</head><p>Modern systems consist of many cores, thus making it extremely important to exploit the high parallelism offered to achieve high performance. Today's systems rely on a variety of techniques to ensure scalability and correctness, many of which have been suggested in the research literature. However, only some of these have been implemented in current systems, whereas others have not. We hypothesize that we can improve the performance scaling of these systems by focusing on a certain class of techniques that are not being currently implemented.</p><p>We present a qualitative analysis of these five systems based on the techniques they use in <ref type="table">Table 1</ref>. This table also discusses our new system (Xyza), an extension of MongoDB; we will present Xyza in the coming section. The table is generated by manually analyzing the code, architecture, and design documents of each system. Thread Architecture: We focus on one aspect of thread architecture: whether the threads are initialized statically at startup or dynamically created/terminated at run time. Static handling of threads can lead to either underutilization or over-utilization of resources; it can be challenging to identify an optimal thread-pool size. Dynamic thread creation augurs well, creating the possibility for the system to adjust itself according to system load. All five systems choose the former while MongoDB, Oracle NoSQL DB, and ArangoDB choose the latter. Batching: Batching is the process of grouping multiple operations to reduce overheads; for example, processing two requests together avoids some locking overhead, as locks only need to be acquired/released once. Similarly, a single larger disk I/O is generally more efficient than smaller individual writes. However, batching can increase the latency of operations; furthermore, it is sometimes difficult to create large batches, depending on the system and workload <ref type="bibr" target="#b47">[47]</ref>. All five systems that we study utilize batching to improve the performance of their systems. Granularity: Granularity refers to how a system handles data access and at what level such data access is allowed. There are two prime issues that need to be addressed: write/write coordination and write/read coordination. A simple coarse-grained approach is to allow exclusive access. However, it is extremely inefficient and limits scaling. To mitigate this, a fine-grained approach of allowing concurrent access to multiple threads is preferred. The coordination is ensured using locks or lockfree data structures. Locks enforce serialization and hence ensures integrity. Many techniques have been proposed to allow concurrent access to readers and writers such as snapshot isolation <ref type="bibr" target="#b11">[12]</ref>, multi-version concurrency control <ref type="bibr" target="#b13">[14]</ref>, and optimistic concurrency control <ref type="bibr" target="#b44">[45]</ref>. MongoDB, ArangoDB and Oracle NoSQL DB use finegrained locking to ensure write-write coordination. On the other hand, Cassandra uses last-write-wins strategy and allows two concurrent threads to work on a single record. However, such a strategy impacts read performance as the read operation will have to sweep all the relevant entries to find the latest. From the write-read coordination perspective, the majority of them use MVCC for write/read coordination while Cassandra uses row-level isolation and Oracle NoSQL DB uses read/write locks. Partitioning: Using partitioning, a resource can be broken into multiple parts and then each partition can either be allowed exclusive access or concurrent access. Generally, the number of partitions is not too large, and also depends on the data structure in question. The key aspect is that as the number of partitions increase, more threads can access the data parallelly improving the scalability.</p><p>Interestingly, none of the systems we study partition resources within a single node effectively. Oracle NoSQL DB does key-space partitioning and the number of partitions is configurable. MongoDB partitions the locks to scale the common case. We believe that partitioning is a necessary component of any design to scale well and we explore partitioning of resources in our approach. Scheduling: Scheduling deals with when to schedule operations based on resource availability and data-integrity constraints. Effective scheduling can improve performance by re-ordering requests to minimize contention. Scheduling and partitioning go hand-in-hand, as a system can schedule operations that belong to different partitions in parallel; many systems have relied on data partitioning and scheduling for scalability <ref type="bibr" target="#b24">[25]</ref>. Similarly, MongoDB uses multi-granularity locking <ref type="bibr" target="#b33">[34]</ref> that allows compatible operations to run in parallel.</p><p>Locks help enforce a schedule of how operations are executed. However, as system scales, contention to acquire locks increases limiting the performance. To scale well, we introduce an effective scheduling approach, called contention-aware scheduling(Section 3.2), that views locks as a resource and prevents two active threads from accessing the same lock or partition. To prevent the wait queues from growing longer due to contention, we introduce semantic-aware scheduling(Section 3.2) that drops the operations having weak consistency option under certain contention scenarios. Low-level efficiency: With multiple threads, acquiring and releasing locks is costly. Locks are implemented using hardware-provided atomic instructions and many designers choose to use these low-level atomic primitives directly to improve efficiency. These primitives are also used to build concurrent data structures and are more efficient than their lock-based counterparts <ref type="bibr" target="#b10">[11,</ref><ref type="bibr" target="#b15">16]</ref>. Using atomic primitives extensively makes programming hard, complicated, and prone to bugs. All the systems we study use atomic primitives to optimize some of their code paths. However, there is room for further optimization as we believe that low-level efficiency can be used to opti-  <ref type="table">Table 1</ref>: Key design techniques used for concurrency control mechanism. Empty cells denotes that the particular feature is not implemented.</p><p>mize common cases.</p><p>To summarize the above analysis, we observe that resource contention due to improper partitioning and inefficient scheduling limits scalability. Optimizing common cases needs to be emphasized for scaling systems.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Xyza</head><p>In this section, we discuss how a combination of old and new techniques can address the fundamental scaling problems. We present Xyza, an extension of MongoDB's existing concurrency control architecture. We choose MongoDB as it is a widely used and important system; it also presents us with ample room for improvement. Xyza inherits everything from MongoDB other than the concurrency control techniques discussed below.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Partitioning</head><p>MongoDB does not effectively utilize partitioning despite the presence of partitionable resources like the journal, key-space, global vectors, and maps, that Xyza partitions. Per client partitioning: For each new client connection, MongoDB creates a separate thread to handle their requests. Consequently, the thread terminates once the connection closes. Xyza takes advantage of this design aspect and partitions many resources per client thread. Due to exclusive access, there is no need for locking. Xyza partitions the system-wide journal used by MongoDB into a per-client journal. As the client threads now have exclusive access to their journal, they do not have to find/allocate active slots in the single global journal and hence avoid the use of locks/atomic primitives as would be necessary for coordination among threads. MongoDB associates each write operation with a session object and maintains a vector of session objects and protects it using a lock. In Xyza, we partition the session vector so that each client will have its own session vector and have exclusive access to it.</p><p>Additionally, effective partitioning helps in pinning the client threads to a particular core. Without pinning, threads can move between cores leading to frequent cache invalidations impacting the performance. Key-space: MongoDB uses sharding to partition its keyspace horizontally across multiple nodes; however, within a single node, it does not partition the key-space. It prevents write-write conflicts using locks. Xyza extends the partitioning approach to the key-space ranges and partitions the key-space accordingly. Thus, instead of relying on the locks for concurrent page accesses, more operations can execute in parallel as long as the number of partitions is more than the cores available in the node.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Scheduling</head><p>Contention-aware scheduling: As the locks are within the application domain, the operating system does not have a view of how they are used and hence cannot schedule operations based on their availability. However, the application can detect the lock availability and accordingly schedule operations that are not likely to contend. Taking advantage of this fact, we propose contentionaware scheduling, where no two operations that require the same set of locks will be scheduled simultaneously. Overlapping operations wait until the current operations complete. We extend this idea to partitions too. Using such scheduling helps in avoiding locks and thus one can view scheduling as a form of primitive synchronization. This ensures that correctness is not compromised. Moreover, Xyza does not allow a single operation to span across two partitions and hence avoids deadlocks. The hierarchical locking approach <ref type="bibr" target="#b36">[38]</ref> taken by MongoDB is not enough to ensure scaling. Thus, we include contention-aware scheduling in addition to hierarchical locking. Contention-aware scheduling relies on partitioning to mitigate the problem of false conflicts by precisely knowing which key ranges are busy. Semantic-aware scheduling: As part of scheduling the operations, the system should decide what happens to operations that are not scheduled due to lack of resources. The most obvious choice of waiting until the resources needed are available comes from the fact that the execution of the operation is absolutely necessary <ref type="bibr" target="#b13">[14]</ref>. However, another option arises due to the consistency options available within many of today's NoSQL databases. Specifically, Xyza uses this semantic knowledge, particularly in cases where consistency is weakened, to decide what should be done in case the operation cannot be scheduled. Such operations can be dropped without wait- ing as there is no guarantee associated with the weaker consistency option. Operations having stronger consistency will wait as the guarantees are stronger too.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">Low-level Efficiency</head><p>We believe low-level efficiency should also target common cases and designers should use atomic primitives wherever possible to optimize performance. Basic read and write operations are one of the most common operations for any NoSQL database. To speed up this common case, we replace the complex lock manager with a simple wait-signal mechanism where each resource has its own set of mutex and condition variables that can be efficiently used for waiting and signaling. To optimize the common case further, we use atomic primitives instead of traversing the hierarchy tree that acquires the mutex to update the state information of each resource.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Evaluation</head><p>To highlight Xyza's performance, we conduct experiments using workloads as described in Section 2. As seen in <ref type="figure" target="#fig_1">Figure 2</ref>, the performance of Xyza is more than 2× faster than MongoDB. Xyza's performance is roughly 80-90% of that of the multiple instances performance of MongoDB. As the machine has 16 physical cores, Xyza's performance improves slowly after 15 clients. We perform another experiment where each client writes to its own database and collection. We expect the performance to be on par with that of multiple instances of MongoDB as each client is accessing a different database and collection. The results shown in <ref type="figure" target="#fig_1">Figure 2</ref> confirms our expectations. To test how Xyza performs when subjected to conflicting operations where multiple clients write in the same keyspace partition for the same workload mentioned earlier; we observe around 8-12% operations are dropped due to semantic-aware scheduling for all clients . We also observe a decrease in the throughput by 3-11% along with a drop in CPU utilization around 4-9%.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Related Work</head><p>Key-value (KV) stores such as FAWN <ref type="bibr" target="#b3">[4]</ref>, WiscKey <ref type="bibr" target="#b42">[44]</ref>, NVMKV <ref type="bibr" target="#b46">[46]</ref>, SILT <ref type="bibr" target="#b40">[42]</ref>, etc., proposed new datastructures or optimizations from the storage perspective to improve performance. Instead, our work concentrates on concurrency control techniques that are general and can likely be used in any system. To improve throughput, several in-memory KV stores have been proposed such as Masstree <ref type="bibr" target="#b44">[45]</ref>, MICA <ref type="bibr" target="#b41">[43]</ref>, <ref type="bibr">Memcached [47]</ref>, RAMCloud <ref type="bibr" target="#b48">[48]</ref>, Hstore <ref type="bibr" target="#b49">[49]</ref>, VoltDB <ref type="bibr" target="#b54">[54]</ref>, and Silo <ref type="bibr" target="#b53">[53]</ref>. These systems are carefully designed to take advantage of DRAM and cache characteristics; our work shows that it is time to consider aggressive concurrency mechanisms even in persistent KV stores. Most of these stores, including Masstree, RAMCloud, Memcached, and Silo, use a single partition in a single node. Masstree chooses fine-grained concurrency and optimistic concurrency control in their design. Similarly, Silo also uses a variant of optimistic concurrency control. Xyza chooses a coarse-grained approach to identify potential conflicts and accordingly schedule operations and avoids the traditional concurrency control approaches.</p><p>In contrast, Hstore, MICA, and VoltDB partition data among multiple cores and thus ensure that exclusive access to these partitions can avoid concurrency. Hstore assigns one thread per partition and thus avoids traditional concurrency control. Xyza never ties any thread to a partition but relies on the efficient scheduling of operations to ensure that only one thread is accessing the partition.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Conclusion</head><p>We have shown that today's databases do not scale well when the data is hosted on high-performing storage media, and thus fail to fully utilize the large number of cores common in today's systems. We presented a categorization of various concurrency control techniques into six categories: thread architecture, batching, granularity, partitioning, scheduling and low-level efficiency. A thorough analysis of these techniques indicated that further optimization was needed; today's concurrency control mechanisms are not effective in scaling and thus do not obtain peak performance. Finally, we present Xyza, an extension of MongoDB, that uses a combination of classic and novel techniques to achieve high performance and scaling. We believe that the proposed techniques can be applied in many other systems, and look forward to testing this hypothesis in the future. We look forward to analyzing the read path and revisiting concurrency control for read operations in future work.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: Performance scaling of NoSQL Databases. Dark line represents single instance run. White line represents multiple instances run. Consistency options used (i) MongoDB 3.2.11 -w:0,j=false; (ii) Cassandra 3.11 -commitlog sync:periodic,replication factor:0, (iii) CouchDB 1.6.1 -delayed commits:true, (iv) ArangoDB 3.2 -database.wait-for-sync:false and (v) Oracle NoSQL DB 4.3.11 -master and replica sync policy:KV SYNC NONE, acknowledgment policy:KV ACK NONE.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: Xyza performance with various optimization techniques</figDesc></figure>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Acknowledgments</head><p>We thank the anonymous reviewers and the members of ADSL for their valuable input. This material was supported by funding from NSF grants CNS-1421033 and DOE grant DESC0014935. Any opinions, findings, and conclusions or recommendations expressed in this material are those of the authors and may not reflect the views of NSF, DOE,or any other institutions.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Apache</forename><surname>Cassandra</surname></persName>
+		</author>
+		<ptr target="http://cassandra.apache.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Apache</forename><surname>Couchdb</surname></persName>
+		</author>
+		<ptr target="http://couchdb.apache.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Dstat -Linux Man Page</surname></persName>
+		</author>
+		<ptr target="https://linux.die.net/man/1/dstat" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Fawn: A fast array of wimpy nodes</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><forename type="middle">G</forename><surname>Andersen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jason</forename><surname>Franklin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Kaminsky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amar</forename><surname>Phanishayee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lawrence</forename><surname>Tan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vijay</forename><surname>Vasudevan</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM SIGOPS 22Nd Symposium on Operating Systems Principles, SOSP &apos;09</title>
+		<meeting>the ACM SIGOPS 22Nd Symposium on Operating Systems Principles, SOSP &apos;09<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="1" to="14" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arangodb</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arangodb</surname></persName>
+		</author>
+		<ptr target="https://www.arangodb.com/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arangodb</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Terminology</forename><surname>Basics</surname></persName>
+		</author>
+		<ptr target="https://docs.arangodb.com/3.2/Manual/DataModeling/Documents/DocumentAddress.html" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="middle">Batch</forename><surname>Arangodb</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Requests</surname></persName>
+		</author>
+		<ptr target="https://docs.arangodb.com/3.2/HTTP/BatchRequest/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title/>
+		<ptr target="https://docs.arangodb.com/3.2/Manual/Administration/Configuration/GeneralArangod.html" />
+	</analytic>
+	<monogr>
+		<title level="j">ArangoDB. General Options</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<monogr>
+		<title level="m" type="main">Locking and Isolation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arangodb</surname></persName>
+		</author>
+		<ptr target="https://docs.arangodb.com/3.2/Manual/Transactions/LockingAndIsolation.html" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arangodb</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Scalability</surname></persName>
+		</author>
+		<ptr target="https://docs.arangodb.com/3.2/Manual/Scalability/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<monogr>
+		<title level="m" type="main">Operating Systems: Three Easy Pieces</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Remzi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2015-05" />
+		</imprint>
+	</monogr>
+	<note>Arpaci-Dusseau Books, 0.91 edition</note>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">A critique of ansi sql isolation levels</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hal</forename><surname>Berenson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Phil</forename><surname>Bernstein</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jim</forename><surname>Gray</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jim</forename><surname>Melton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Elizabeth O&amp;apos;</forename><surname>Neil</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Patrick O&amp;apos;</forename><surname>Neil</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 1995 ACM SIGMOD International Conference on Management of Data, SIGMOD &apos;95</title>
+		<meeting>the 1995 ACM SIGMOD International Conference on Management of Data, SIGMOD &apos;95<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="1995" />
+			<biblScope unit="page" from="1" to="10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Optimizing optimistic concurrency control for tree-structured, log-structured databases</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Philip</forename><forename type="middle">A</forename><surname>Bernstein</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sudipto</forename><surname>Das</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bailu</forename><surname>Ding</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Markus</forename><surname>Pilman</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2015 ACM SIGMOD International Conference on Management of Data, SIGMOD &apos;15</title>
+		<meeting>the 2015 ACM SIGMOD International Conference on Management of Data, SIGMOD &apos;15<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="1295" to="1309" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Concurrency control in distributed database systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Philip</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nathan</forename><surname>Bernstein</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Goodman</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Comput. Surv</title>
+		<imprint>
+			<biblScope unit="volume">13</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="185" to="221" />
+			<date type="published" when="1981-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<monogr>
+		<title level="m" type="main">Concurrency Control and Recovery in Database Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vassos</forename><surname>Philip A Bernstein</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nathan</forename><surname>Hadzilacos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Goodman</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1986" />
+			<publisher>Addison-Wesley Longman Publishing Co., Inc</publisher>
+			<pubPlace>Boston, MA, USA</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">A lock-free b+tree</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Anastasia</forename><surname>Braginsky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Erez</forename><surname>Petrank</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Twenty-fourth Annual ACM Symposium on Parallelism in Algorithms and Architectures, SPAA &apos;12</title>
+		<meeting>the Twenty-fourth Annual ACM Symposium on Parallelism in Algorithms and Architectures, SPAA &apos;12<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="58" to="67" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<monogr>
+		<title level="m" type="main">Apache Cassandra -Storage Engine</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Apache</forename><surname>Cassandra</surname></persName>
+		</author>
+		<ptr target="http://cassandra.apache.org/doc/latest/architecture/storage_engine.html" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Oracle Corporation</title>
+		<ptr target="https://docs.oracle.com/cd/E17277_02/html/GettingStartedGuide/concurrentProcessing.html" />
+	</analytic>
+	<monogr>
+		<title level="m">Concurrent Processing in Berkeley DB Java Edition</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<monogr>
+		<title level="m" type="main">Identify the number of partitions</title>
+		<ptr target="https://docs.oracle.com/cd/E26161_02/html/AdminGuide/store-config.html#num-partitions" />
+		<imprint/>
+	</monogr>
+	<note>Oracle Corporation</note>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title/>
+		<ptr target="https://blogs.oracle.com/nosql/oracle-nosql-bulkput" />
+	</analytic>
+	<monogr>
+		<title level="j">Oracle Corporation. Oracle NoSQL BulkPut</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<monogr>
+		<title level="m" type="main">Oracle NoSQL Database</title>
+		<ptr target="https://www.oracle.com/database/nosql/index.html" />
+		<imprint/>
+	</monogr>
+	<note>Oracle Corporation</note>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<monogr>
+		<title level="m" type="main">Oracle NoSQL Database vs</title>
+		<ptr target="http://www.oracle.com/technetwork/products/nosqldb/documentation/nosql-vs-cassandra-1961717.pdf" />
+		<imprint/>
+	</monogr>
+	<note>Oracle Corporation</note>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<monogr>
+		<title level="m" type="main">Apache CouchDB -Technical Overview</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Apache</forename><surname>Couchdb</surname></persName>
+		</author>
+		<ptr target="http://docs.couchdb.org/en/1.6.1/intro/overview.html#acid-properties" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<monogr>
+		<title level="m" type="main">Inserting documents in bulk</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Apache</forename><surname>Couchdb</surname></persName>
+		</author>
+		<ptr target="http://docs.couchdb.org/en/1.6.1/api/database/bulk-api.html#inserting-documents-in-bulk" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">To waffinity and beyond: A scalable architecture for incremental parallelization of file system code</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matthew</forename><surname>Curtis-Maury</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vinay</forename><surname>Devadas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vania</forename><surname>Fang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aditya</forename><surname>Kulkarni</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 12th USENIX Conference on Operating Systems Design and Implementation, OSDI&apos;16</title>
+		<meeting>the 12th USENIX Conference on Operating Systems Design and Implementation, OSDI&apos;16<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="419" to="434" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<monogr>
+		<title level="m" type="main">Cassandra -Batching inserts, updates and deletes</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Datastax</surname></persName>
+		</author>
+		<ptr target="https://docs.datastax.com/en/cql/3.3/cql/cql_using/useBatch.html" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<monogr>
+		<title level="m" type="main">How are Cassandra transactions different from RDBMS transactions?</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Datastax</surname></persName>
+		</author>
+		<ptr target="http://docs.datastax.com/en/cassandra/3.0/cassandra/dml/dmlTransactionsDiffer.html?hl=row\%2Clevel\%2Cisolation" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<monogr>
+		<title level="m" type="main">How is data read?</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Datastax</surname></persName>
+		</author>
+		<ptr target="http://docs.datastax.com/en/archived/cassandra/3.x/cassandra/dml/dmlAboutReads.html" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<monogr>
+		<title level="m" type="main">The cassandra-stress tool</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Datastax</surname></persName>
+		</author>
+		<ptr target="http://docs.datastax.com/en/cassandra/3.0/cassandra/tools/toolsCStress.html?hl=cas" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Datastax</surname></persName>
+		</author>
+		<ptr target="http://docs.datastax.com/en/cassandra/3.0/cassandra/operations/opsThreadPoolStats.html?hl=thread\%2Cpool" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">Flashstore: High throughput persistent key-value store</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Biplob</forename><surname>Debnath</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sudipta</forename><surname>Sengupta</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jin</forename><surname>Li</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Proc. VLDB Endow</title>
+		<imprint>
+			<biblScope unit="volume">3</biblScope>
+			<biblScope unit="issue">1-2</biblScope>
+			<biblScope unit="page" from="1414" to="1425" />
+			<date type="published" when="2010-09" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<analytic>
+		<title level="a" type="main">Skimpystash: Ram space skimpy key-value store on flash-based storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Biplob</forename><surname>Debnath</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sudipta</forename><surname>Sengupta</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jin</forename><surname>Li</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2011 ACM SIGMOD International Conference on Management of Data, SIGMOD &apos;11</title>
+		<meeting>the 2011 ACM SIGMOD International Conference on Management of Data, SIGMOD &apos;11<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2011" />
+			<biblScope unit="page" from="25" to="36" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">Query processing on smart ssds: Opportunities and challenges</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jaeyoung</forename><surname>Do</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yang-Suk</forename><surname>Kee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jignesh</forename><forename type="middle">M</forename><surname>Patel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chanik</forename><surname>Park</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kwanghyun</forename><surname>Park</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><forename type="middle">J</forename><surname>Dewitt</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2013 ACM SIGMOD International Conference on Management of Data, SIGMOD &apos;13</title>
+		<meeting>the 2013 ACM SIGMOD International Conference on Management of Data, SIGMOD &apos;13<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2013" />
+			<biblScope unit="page" from="1221" to="1230" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<monogr>
+		<title level="m" type="main">Readings in database systems. chapter Granularity of Locks and Degrees of Consistency in a Shared Data Base</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">N</forename><surname>Gray</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">A</forename><surname>Lorie</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">R</forename><surname>Putzolu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><forename type="middle">L</forename><surname>Traiger</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1988" />
+			<publisher>Morgan Kaufmann Publishers Inc</publisher>
+			<biblScope unit="page" from="94" to="121" />
+			<pubPlace>San Francisco, CA, USA</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<analytic>
+		<title level="a" type="main">An evaluation of distributed concurrency control</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rachael</forename><surname>Harding</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dana</forename><surname>Van Aken</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrew</forename><surname>Pavlo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Stonebraker</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Proc. VLDB Endow</title>
+		<imprint>
+			<biblScope unit="volume">10</biblScope>
+			<biblScope unit="issue">5</biblScope>
+			<biblScope unit="page" from="553" to="564" />
+			<date type="published" when="2017-01" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mongodb</forename><surname>Inc</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Mongodb</surname></persName>
+		</author>
+		<ptr target="https://www.mongodb.com/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b36">
+	<monogr>
+				<ptr target="https://docs.mongodb.com/v3.2/faq/concurrency/" />
+		<title level="m">MongoDB Inc. MongoDB 3.2 FAQ: Concurrency</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b37">
+	<monogr>
+		<title level="m" type="main">MongoDB 3.2 WiredTiger Storage Engine</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mongodb</forename><surname>Inc</surname></persName>
+		</author>
+		<ptr target="https://docs.mongodb.com/v3.2/core/wiredtiger/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b38">
+	<analytic>
+		<title level="a" type="main">On optimistic methods for concurrency control</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">T</forename><surname>Kung</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><forename type="middle">T</forename><surname>Robinson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Trans. Database Syst</title>
+		<imprint>
+			<biblScope unit="volume">6</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="213" to="226" />
+			<date type="published" when="1981-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b39">
+	<analytic>
+		<title level="a" type="main">High-performance concurrency control mechanisms for main-memory databases</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Peraake</forename><surname>Larson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Spyros</forename><surname>Blanas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cristian</forename><surname>Diaconu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Craig</forename><surname>Freedman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jignesh</forename><forename type="middle">M</forename><surname>Patel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mike</forename><surname>Zwilling</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Proc. VLDB Endow</title>
+		<imprint>
+			<biblScope unit="volume">5</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="298" to="309" />
+			<date type="published" when="2011-12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b40">
+	<analytic>
+		<title level="a" type="main">Silt: A memory-efficient, high-performance key-value store</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hyeontaek</forename><surname>Lim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bin</forename><surname>Fan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><forename type="middle">G</forename><surname>Andersen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Kaminsky</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Twenty-Third ACM Symposium on Operating Systems Principles, SOSP &apos;11</title>
+		<meeting>the Twenty-Third ACM Symposium on Operating Systems Principles, SOSP &apos;11<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2011" />
+			<biblScope unit="page" from="1" to="13" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b41">
+	<analytic>
+		<title level="a" type="main">Mica: A holistic approach to fast in-memory key-value storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hyeontaek</forename><surname>Lim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dongsu</forename><surname>Han</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><forename type="middle">G</forename><surname>Andersen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Kaminsky</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 11th USENIX Conference on Networked Systems Design and Implementation, NSDI&apos;14</title>
+		<meeting>the 11th USENIX Conference on Networked Systems Design and Implementation, NSDI&apos;14<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="429" to="444" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b42">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lanyue</forename><surname>Lu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thanumalayan</forename><surname>Sankaranarayana Pillai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Remzi</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b43">
+	<analytic>
+		<title level="a" type="main">Wisckey: Separating keys from values in ssd-conscious storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 14th Usenix Conference on File and Storage Technologies, FAST&apos;16</title>
+		<meeting>the 14th Usenix Conference on File and Storage Technologies, FAST&apos;16<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="133" to="148" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b44">
+	<analytic>
+		<title level="a" type="main">Cache craftiness for fast multicore key-value storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yandong</forename><surname>Mao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eddie</forename><surname>Kohler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert Tappan</forename><surname>Morris</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 7th ACM European Conference on Computer Systems</title>
+		<meeting>the 7th ACM European Conference on Computer Systems</meeting>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b45">
+	<analytic>
+		<title/>
+	</analytic>
+	<monogr>
+		<title level="j">EuroSys</title>
+		<imprint>
+			<biblScope unit="volume">12</biblScope>
+			<biblScope unit="page" from="183" to="196" />
+			<date type="published" when="2012" />
+			<publisher>ACM</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b46">
+	<analytic>
+		<title level="a" type="main">Nvmkv: A scalable, lightweight, ftl-aware key-value store</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Leonardo</forename><surname>Marmol</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Swaminathan</forename><surname>Sundararaman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nisha</forename><surname>Talagala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Raju</forename><surname>Rangaswami</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2015 USENIX Conference on Usenix Annual Technical Conference, USENIX ATC &apos;15</title>
+		<meeting>the 2015 USENIX Conference on Usenix Annual Technical Conference, USENIX ATC &apos;15<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="207" to="219" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b47">
+	<analytic>
+		<title level="a" type="main">Scaling memcache at facebook</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rajesh</forename><surname>Nishtala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hans</forename><surname>Fugal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steven</forename><surname>Grimm</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Marc</forename><surname>Kwiatkowski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Herman</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Harry</forename><forename type="middle">C</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ryan</forename><surname>Mcelroy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mike</forename><surname>Paleczny</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Daniel</forename><surname>Peek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Paul</forename><surname>Saab</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Stafford</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tony</forename><surname>Tung</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Venkateshwaran</forename><surname>Venkataramani</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 10th USENIX Conference on Networked Systems Design and Implementation, nsdi&apos;13</title>
+		<meeting>the 10th USENIX Conference on Networked Systems Design and Implementation, nsdi&apos;13<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2013" />
+			<biblScope unit="page" from="385" to="398" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b48">
+	<analytic>
+		<title level="a" type="main">Fast crash recovery in ramcloud</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Diego</forename><surname>Ongaro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stephen</forename><forename type="middle">M</forename><surname>Rumble</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ryan</forename><surname>Stutsman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><surname>Ousterhout</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mendel</forename><surname>Rosenblum</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Twenty-Third ACM Symposium on Operating Systems Principles, SOSP &apos;11</title>
+		<meeting>the Twenty-Third ACM Symposium on Operating Systems Principles, SOSP &apos;11<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2011" />
+			<biblScope unit="page" from="29" to="41" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b49">
+	<analytic>
+		<title level="a" type="main">The end of an architectural era: (it&apos;s time for a complete rewrite</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Stonebraker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Samuel</forename><surname>Madden</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Daniel</forename><forename type="middle">J</forename><surname>Abadi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stavros</forename><surname>Harizopoulos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nabil</forename><surname>Hachem</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pat</forename><surname>Helland</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 33rd International Conference on Very Large Data Bases, VLDB &apos;07</title>
+		<meeting>the 33rd International Conference on Very Large Data Bases, VLDB &apos;07</meeting>
+		<imprint>
+			<date type="published" when="2007" />
+			<biblScope unit="page" from="1150" to="1160" />
+		</imprint>
+		<respStmt>
+			<orgName>VLDB Endowment</orgName>
+		</respStmt>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b50">
+	<analytic>
+		<title level="a" type="main">Adaptive concurrency control: Despite the looking glass, one concurrency control does not fit all</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dixin</forename><surname>Tang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hao</forename><surname>Jiang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aaron</forename><forename type="middle">J</forename><surname>Elmore</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">CIDR</title>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b51">
+	<analytic>
+		<title level="a" type="main">Concurrency control: Methods, performance, and analysis</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alexander</forename><surname>Thomasian</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Comput. Surv</title>
+		<imprint>
+			<biblScope unit="volume">30</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="70" to="119" />
+			<date type="published" when="1998-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b52">
+	<analytic>
+		<title level="a" type="main">Query processing techniques for solid state drives</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dimitris</forename><surname>Tsirogiannis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stavros</forename><surname>Harizopoulos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Mehul</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Janet</forename><forename type="middle">L</forename><surname>Shah</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Goetz</forename><surname>Wiener</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Graefe</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2009 ACM SIGMOD International Conference on Management of Data, SIGMOD &apos;09</title>
+		<meeting>the 2009 ACM SIGMOD International Conference on Management of Data, SIGMOD &apos;09<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="59" to="72" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b53">
+	<analytic>
+		<title level="a" type="main">Speedy transactions in multicore in-memory databases</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stephen</forename><surname>Tu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wenting</forename><surname>Zheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eddie</forename><surname>Kohler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Barbara</forename><surname>Liskov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Samuel</forename><surname>Madden</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Twenty-Fourth ACM Symposium on Operating Systems Principles, SOSP &apos;13</title>
+		<meeting>the Twenty-Fourth ACM Symposium on Operating Systems Principles, SOSP &apos;13<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2013" />
+			<biblScope unit="page" from="18" to="32" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b54">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Inc</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Voltdb</surname></persName>
+		</author>
+		<ptr target="https://www.voltdb.com/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b55">
+	<analytic>
+		<title level="a" type="main">Tictoc: Time traveling optimistic concurrency control</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xiangyao</forename><surname>Yu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrew</forename><surname>Pavlo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Daniel</forename><surname>Sanchez</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Srinivas</forename><surname>Devadas</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2016 International Conference on Management of Data, SIGMOD &apos;16</title>
+		<meeting>the 2016 International Conference on Management of Data, SIGMOD &apos;16<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="1629" to="1642" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

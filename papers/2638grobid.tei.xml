@@ -1,0 +1,653 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:48+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">LOOM: Optimal Aggregation Overlays for In-Memory Big Data Processing *</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">William</forename><surname>Culhane</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Department of Computer Science</orgName>
+								<orgName type="institution">Purdue University</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kirill</forename><surname>Kogan</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Department of Computer Science</orgName>
+								<orgName type="institution">Purdue University</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chamikara</forename><surname>Jayalath</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Department of Computer Science</orgName>
+								<orgName type="institution">Purdue University</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Patrick</forename><surname>Eugster</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Department of Computer Science</orgName>
+								<orgName type="institution">Purdue University</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">LOOM: Optimal Aggregation Overlays for In-Memory Big Data Processing *</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Aggregation underlies the distillation of information from big data. Many well-known basic operations including top-k matching and word count hinge on fast ag-gregation across large data-sets. Common frameworks including MapReduce support aggregation, but do not explicitly consider or optimize it. Optimizing aggrega-tion however becomes yet more relevant in recent &quot;on-line&quot; approaches to expressive big data analysis which store data in main memory across nodes. This shifts the bottlenecks from disk I/O to distributed computation and network communication and significantly increases the impact of aggregation time on total job completion time. This paper presents LOOM, a (sub)system for efficient big data aggregation for use within big data analysis frameworks. LOOM efficiently supports two-phased (sub)computations consisting in a first phase performed on individual data subsets (e.g., word count, top-k matching) followed by a second aggregation phase which consolidates individual results of the first phase (e.g., count sum, top-k). Using characteristics of an aggrega-tion function, LOOM constructs a specifically configured aggregation overlay to minimize aggregation costs. We present optimality heuristics and experimentally demonstrate the benefits of thus optimizing aggregation overlays using microbenchmarks and real world examples.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Processing big data is a core challenge of our era. Extracting and distilling more concise information from large datasets is vital to scientific research (e.g., astrophysics, chemistry), the commercial sector (e.g., advertising, recommendation), and governmental institutions (e.g., intelligence services, population demographics).</p><p>Aggregation of information -broadly construedinherently underlies the distillation process. In commonly employed toolkits for parallelized big data batch processing including MapReduce <ref type="bibr" target="#b4">[5]</ref>, aggregation happens straightforwardly. In the popular word count example, mappers produce intermediate key-value pairs where keys represent words and values their number of occurrences in a slice of input data -in a common simple ap- * Financially supported by DARPA grant # N11AP20014, Purdue Research Foundation grant # 205434, and Google Award "GeoDistributed Big Data Processing". proach mappers are executed for individual words, and this value is trivially 1. Aggregation happens when reducers sum all values with the same key, i.e., word.</p><p>As demonstrated by Yu, Gunda, and Isard <ref type="bibr" target="#b14">[15]</ref>, performance can be significantly improved by considering partial word counts computed for larger subsets of data, and subsequently aggregating these. The intuition is that some "functions" such as word-count can be performed in a distributed associative <ref type="bibr" target="#b14">[15]</ref> manner by expressing them as two parts -a first one which can be performed on data subsets individually, and a second one aggregating the results of the first stage, possibly in several steps.</p><p>The relevance of how exactly to perform such aggregation is addressed by recent work which stores datasets in main memory to increase expressiveness of computations for instance by supporting iterative or incremental computations, somewhat departing from pipelined batch processing towards more online processing (e.g., distributed arrays in Presto <ref type="bibr" target="#b10">[11,</ref><ref type="bibr" target="#b9">10]</ref>, resilient distributed datasets in Shark <ref type="bibr" target="#b15">[16,</ref><ref type="bibr" target="#b11">12]</ref>). By striping a dataset across the main memory of a large number of n nodes, heavy disk I/O is avoided between subsequent computation phases, within iterations of a phase, upon incremental computations triggered by updates, or upon continuous, interactive computations. By bypassing disk I/O, performance can be improved by an order of magnitude, yet the bottlenck is shifted to communication and aggregation.</p><p>If the function used for aggregation is cumulative (so results are the combination of results on subsets), commutative (so subsets can be aggregated in any order), and associative (so subsets can be aggregated in any grouping), there is some configurability in the structure of an overlay network along which such aggregation can take place: aggregation can happen in one step aggregating all sub-results on one node, between two sub-results at a time over log 2 n steps, or something in between. This paper thus presents Lightweight Optimal Overlay Mechanism (LOOM), a system to efficiently determine and implement provably optimal aggregation overlays to weave together results in compute-aggregate operations. Based on traits of the aggregation function and the n nodes taking part, LOOM automatically heuristically determines the provably (near-)ideal fanout for an aggregation tree consolidating sub-results from these nodes after they performed the initial computation phase individually. Depending on the parameters, performance between the overlay identified by LOOM and a naïve one can vary by more than 600% in our experiments, and we expect greater variation in more extreme environments.</p><p>Our contributions are as follows. After introducing the model of compute-aggregate tasks considered we 1. present provably optimal heuristics for determining the fanout of an aggregation tree given the knowledge of the aggregation method (Section 2). 2. discuss the architecture of LOOM, a system that uses the heuristics to create optimal aggregation trees in the case of well-defined or sampled aggregation functions used in compute-aggregate problems (Section 3). 3. empirically show via microbenchmarks and some typical compute-aggregate tasks that the overlay determined by LOOM matches the ideal case in practice and leads to significant time savings (Section 4).</p><p>Section 5 discusses prior art. We draw conclusions in Section 6.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Model</head><p>Compute-aggregate is a two-phase class of problems (see <ref type="figure">Figure 1</ref>). The first computation phase happens only at the leaf nodes. At each such node, data z is contained in memory prior to computation, and computation applies some function f such that x = f (z), where x is data ready for aggregation. Once the computation phase is completed the aggregation overlay is responsible for aggregating the partial results from all leaves into a single result. This is done by applying a function g which takes x 1 . . . x i and outputs the aggregate x 1..i , i.e., x 1..i = g(x). <ref type="table">Table 1</ref> defines more precisely the required traits of an aggregation function which allows for configurable overlays. Note that we say results are equivalent (≡) rather than equal. For example, if you want the top-k results and there are k + 1 results with the same score, different aggregation orders may result in different results, but each is correct.</p><p>Each node applies the function to all of its inputs and forwards its results. As long as the function is cumulative commutative, and associative, any overlay network that has exactly one path from each leaf to the root of the aggregation tree gives a correct output.</p><p>With everything in memory the time to aggregate at each node is mostly dependent upon the size of its combined input. The most efficient system is one with no <ref type="table">Table 1</ref>: Mathematical definitions of requirements for g (x). waiting at any nodes that have work to do, so we assume a balanced and full tree; sibling aggregation nodes begin and finish at roughly the same time, with a bit of a buffer provided by the nature of network communication. This does require some level of homogeneity, which is not unreasonable to expect in cloud services. If any assumptions are broken, the optimality guarantee breaks, but the correctness of the output remains.</p><formula xml:id="formula_0">Property Definition Cumulative g (g (x) , g (x )) ≡ g (x, x ) Commutative g (x , x) ≡ g (x, x ) Associative g (g (x) , x ) ≡ g (x, x ) Aggregation Overlay Computation at Local Nodes · · · · · · · · · · · · · · ·</formula><p>Our objective is to minimize the total latency of the system. Since the aggregation phase is separate from the local computation time, we can optimize them separately. The aggregation overlay simply aggregates the outputs from all the computation nodes, so the number of leaf nodes for the tree defining the aggregation overlay is given by the number of local nodes involved in the computation phase. The functions to aggregate multiple inputs into a single input are also given by the problem, so the only variable left to change is the fanout. <ref type="figure">Figure 2</ref> shows three equivalent trees with different fanouts.</p><p>The aggregation time at a level -composed of the time to receive input from the level just beneath it and the time to create the output for the level -depends on the size of the input, some set of partial results x. We use g c (x) to denote the time required by g (x) to aggregate input of size |x|, including communication time. Aggregation on the same level of the overlay happens in parallel, so only the time of a single branch is modeled.</p><p>Fanout and tree height are inversely related. Increased height increases amount of work done in parallel at the lower levels, but it also might increase the total amount of work to be done when results have to filter up through more levels. We analyze traits of the aggregation function to determine if the time saved by the parallelism offsets the time required by extra levels. <ref type="table">Table 2</ref> summarizes our optimal heuristics for choosing the fanout of the aggregation overlay tree and notes <ref type="table">Table 2</ref>: Heuristic values for fanout. means provably optimal, * indicates provably near-optimal result.</p><formula xml:id="formula_1">y 0 Optimal fanout Sublin. g c (x) Linear g c (x) Superlin. g c (x) y 0 &lt; 1 2 y 0 = 1 e * 1 &lt; y 0 &lt; n min n, (1 − log n y 0 )</formula><p>− log y 0 n n ≤ y 0 n the cases for which they are proved. Two variables in the table represent characteristics of the aggregation. g c (x) is one. The other is the ratio of the size of the final aggregate output to the size of the output of a single computation node, denoted y 0 . n is simply the number of leaves. Optimal fanouts remain uproven when the degree of sublinearity or superlinearity is necessary for meaningful analysis. Communication time is linear with respect to the input size, so there is always linear component to g c (x). Thus it makes sense to use the heuristics from the linear cases on the sublinear cases. In practice we also use the heuristics from the linear cases on the superlinear cases as they are the best available analyses. y 0 is a very relevant variable to aggregation. As seen in <ref type="table">Table 2</ref>, it is the primary factor for deciding the optimal fanout of the aggregation overlay. To give an idea what types of problems fall into each category we present <ref type="table" target="#tab_0">Table 3</ref>. It shows some aggregation functions which fall into some of the different regions for y 0 . For brevity we elide the computation function computeFn used to generate Integer elements from a String dataset and the aggregation function aggregateFn used to determine the top-k elements of the set of Integers. The operation returns a PCollection that contains the top-k elements.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Experiments</head><p>Setup. We ran our experiments on m1.small nodes in an Amazon EC2 datacenter. Each leaf and vertex is on a distinct node. We show fanouts resulting in full trees to avoid the noise of straying from the model, but our system handles all fanouts. Averages of 5 runs are shown.</p><p>We first test the system with microbenchmarks varying y 0 with linear aggregation methods. Leaf nodes generate a random list of integers. Aggregators generate a series of random numbers proportional to the size of their inputs, then prune down the list to the size dictated by y 0 . All microbenchmarks are performed on 16 leaf nodes.</p><p>Then we evaluate the system on two common aggregation tasks using a dataset that consists of log files of Yahoo's Hadoop clusters. Each leaf node contains 830MB of input data, which is in the range of what is studied in RDDs <ref type="bibr" target="#b15">[16]</ref>. We perform on both 16 and 64 leaves:</p><p>• Top-k match -a simple equation "scores" how well each line of the log matches a filter. The k lines with the highest score are returned in sorted order from each leaf. Aggregator nodes forward the k highest scores across their inputs. We use k = 100000.</p><p>• Word count -counts the occurrences of each word in the log files at the leaves and sums the results. The final aggregate result is a map of each word in the logs and the number of times it appeared across all logs. Log entries are not very disparate, so any word appearing in the log at one leaf has a high probability of appearing in the logs at every other leaf, so if y 0 is greater than 1, it is negligibly so.</p><p>For all tests the leaves complete their computation and inform the controller. The controller then starts a timer, sends a "go" signal to begin aggregation and stops the timer when it receives the final aggregate result from the root of the overlay. We use the value from d = 2 from most experiments and the model for the associated value of y 0 to create the "Predicted Values" lines.</p><p>Results. <ref type="figure">Figure 4</ref> shows the results of the microbenchmarks. In <ref type="figure">Figure 4</ref>(a) each line represents the data  <ref type="figure">Figure 4</ref>(b) draws the same data, but each line represents an aggregation tree with a given fanout.When y 0 is small, the smaller fanouts outperform. As y 0 grows, the performance of those overlays degrades until a larger fanout is faster. <ref type="figure" target="#fig_1">Figure 5</ref> show the performance of each y 0 for varying fanouts versus that predicted by the model. In all four cases the trends match. The only minimum not at the predicted place is for y 0 = 1. Fanout 4 slightly outperforms fanout 2 when the model predicts identical performance.</p><p>For y 0 = 1 n , the time taken for d = 16 is 350% what it is for d = 2. For y 0 = n, the time for d = 2 is 175% what it is for d = 16. That is a very significant penalty for choosing the wrong fanout, and the right fanouts are opposite in these two examples. Even choosing between 2 and n is not a good heuristic for all cases, as the faster of the two still takes 132% of the time as d = 4 for y = √ n. <ref type="figure" target="#fig_2">Figure 6</ref> shows the results from our common aggregation problems on real world data. For the 16 leaf topk matching experiment in <ref type="figure" target="#fig_2">Figure 6</ref>(a) the values seem to diverge from the predicted values as d grows, but the trend matches the model and the microbenchmarks. The deviation may be because the aggregation function de- show the results from the word count test for 16 and 64 leaves respectively. They show the same trends as the microbenchmarks and top-k matching experiments and deviate even less from the predicted values. This is likely because the sets of words at each node were the same, so summing occurrences is an aggregation function truly linear on the size of the input.</p><p>Predictably, the relative impact of choosing the right fanout increases as more leaves are added. For the top-k matching and word count applications with 16 nodes the worst case fanouts take 182% and 215% as much time as their best case fanouts respectively. When n increases to 64 those numbers jump to 542% and 629% respectively.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Related Work</head><p>Big data aggregation. The idea of distinct phases in problems is not new. The popular MapReduce <ref type="bibr" target="#b4">[5]</ref> framework requires a problem to be broken into two phases as suggested by its name. The application of MapReduce is so enticing that its Hadoop implementation has been modified to fit some aggregation problems which cannot be recast efficiently as strict MapReduce problems. MapReduceMerge <ref type="bibr" target="#b13">[14]</ref> extends the framework with a step called merge -a synonym for aggregation. MapReduceMerge is motivated by many operations relevant to applications using MapReduce, e.g. full sorts, joins, set unions, and cartesian products, which are not being supported efficiently. Yu et al. <ref type="bibr" target="#b14">[15]</ref> extend MapReduce to efficiently aggregate data in between phases of jobs.</p><p>Optimizing aggregation. Astrolabe <ref type="bibr" target="#b8">[9]</ref> is introduced as a summarizing mechanism of bounded size using hierarchical overlays. Gossip protocols use aggregation to monitor system state and promote dynamic scalability. The overlay's impact on the aggregation is considered, but minimal aggregation time is not the primary concern.</p><p>STAR <ref type="bibr" target="#b5">[6]</ref> extends a line of research started by SDIMS <ref type="bibr" target="#b12">[13]</ref> creating information management systems on top of distributed hash tables. STAR adaptively sets the precision constraints for processing aggregation.</p><p>Cheng and Robertazzi <ref type="bibr" target="#b3">[4]</ref> tackle the problem of optimal load distribution on processors connected by a tree network. Their work and the extension by Kim et al <ref type="bibr" target="#b6">[7]</ref> consider balancing computation for problems in which the greatest parallelization leads to the fastest completion because there is no computation to aggregate results from each processor. Morozov and Weber <ref type="bibr" target="#b7">[8]</ref> consider distributed computations resulting in merge trees, an abstraction for combining subsets of large structured datasets. Their system monitors data attributes in different branches and recomputes a more optimal tree.</p><p>These works do not optimize for aggregation or use extrapolation to find (a potentially local) optimum.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Conclusions and Future Work</head><p>We present a system constructing optimal aggregation overlays for a relevant class of problems which includes a time-sensitive aggregation phase. We deduce that improving the time for aggregation significantly improves the total system latency, and this is doable by adjusting the fanout of the aggregation overlay.</p><p>We experimentally show our optima to be very close to the values seen in practice using targeted microbenchmarks and common aggregation functions on real world data. On the real world data we saw a performance difference in excess of 600% between optimal and nonoptimal fanouts, and we expect the difference to grow as more leaves are added. Especially since the aggregation phase takes a greater portion of the total system time as work is parallelized across a greater number of leaves, this represents a significant potential for optimization.</p><p>Our heuristics rely only upon the number of leaves and the ratio of the output size of the aggregation to the input size, which are provided upfront. There are still a handful of cases for which the optima remain unproven based on the execution time of the aggregation relative to input size. Proving these cases will result in two relevant variables which could be determined through experimentation and interpolation without the need for human intervention. This will be harder for cases when the growth factor changes between levels, but that may provide more interesting results including a dynamic fanout.</p><p>In addition, we are currently investigating optimizations for incremental and iterative computation.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :Figure 2 :</head><label>12</label><figDesc>Figure 1: Computation and aggregation phases.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 5 :</head><label>5</label><figDesc>Figure 4: Microbenchmark results</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 6 :</head><label>6</label><figDesc>Figure 6: Common problem results pends on d and input size (O (d |x 0 | log d)) and not just the input size. At increased scale with 64 leaves, as seen in Figure 6(b), the divergence becomes overshadowed. Figures 6(c) and 6(d) show the results from the word count test for 16 and 64 leaves respectively. They show the same trends as the microbenchmarks and top-k matching experiments and deviate even less from the predicted values. This is likely because the sets of words at each node were the same, so summing occurrences is an aggregation function truly linear on the size of the input. Predictably, the relative impact of choosing the right fanout increases as more leaves are added. For the top-k matching and word count applications with 16 nodes the worst case fanouts take 182% and 215% as much time as their best case fanouts respectively. When n increases to 64 those numbers jump to 542% and 629% respectively.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="false"><head>Table 3 :vertex. Each aggregator waits until it has results from all its children, then aggregates and pushes the results to its parent. When the root finishes it can hand the result over to the big data analysis system or write it out to a distributed file system. If the over- lay is created for ongoing computation then the</head><label>3</label><figDesc></figDesc><table>Typical aggregation functions g grouped by y 0 . 
+
+y 0 
+Common problems 
+y 0 &lt; 1 
+The average MapReduce job at Google [5], the average 
+"aggregate" jobs at Facebook and Yahoo [3] 
+
+y 0 = 1 
+Min, max, average, top-k match, word count with a 
+fixed dictionary, multiplication of square matrices 
+y 0 &gt; 1 
+sort, concatenate, word count with disjoint dictionaries 
+
+3 Implementation 
+
+Architecture. LOOM uses the heuristics defined previ-
+ously to form optimal hierarchies for compute-aggregate 
+problems. Figure 3 overviews its architecture. Com-
+putation nodes are managed by a big data analysis sys-
+tem (e.g., Apache Crunch [1] or Spark [16]) which uses 
+LOOM. When a compute-aggregate problem is initial-
+ized, computation nodes start the first phase. A list of the 
+computation nodes and the traits of the aggregation func-
+tion are sent to the Controller within LOOM. After this 
+LOOM determines the optimal fanout and determines the 
+appropriate overlay on an ordered set of vertices. The 
+controller tells each vertex its children and parent. All 
+nodes create the relevant TCP connections while waiting 
+for the computation phase to complete. 
+When a computation node finishes, it sends its results 
+to the appropriate vertices 
+maintain their connections and do work when new input 
+is pushed in. Otherwise a node drops connections after 
+communicating its portion to its parent. 
+
+Vertex 
+Vertex 
+Vertex 
+
+... 
+Distributed 
+File 
+System 
+
+Controller 
+
+Big Data Analysis System 
+
+LOOM 
+
+Vertex 
+Setup 
+
+Read 
+Input 
+Heartbeat 
+
+Perform 
+Aggregations 
+
+Aggregation 
+Results 
+
+Figure 3: Architecture 
+
+Programming abstractions. Next we outline a mi-
+nor API extension to FlumeJava [2] implemented in 
+Apache Crunch [1] for users to directly, more eas-
+ily, define compute-aggregate operations. FlumeJava 
+is a Java library for dealing with collections that rep-
+resent possibly large amounts of data, and expressing 
+operations that should be performed on these collec-
+tions. The two main data structures of FlumeJava are 
+PCollection and PTable, representing a collection 
+of elements and a collection of key-value pairs respec-
+tively. FlumeJava proposes four main types of op-
+erations that can be performed on its data structures: 
+(1) parallelDo() performs a general operation de-
+fined by a function object (DoFn) on each element; (2) 
+groupByKey() groups elements of a PTable based on 
+keys; (3) combineVales() combines elements of a 
+grouped PTable that has the same key based on a func-
+tion object of type CombineFn; (4) flatten() flattens 
+elements of two or more PCollections resulting in a 
+single PCollection. 
+We extend FlumeJava with a fifth main operation 
+parallelAggregate(). The syntax of the operation 
+performed on a PCollection&lt;A&gt; is given below. 
+
+PCollection&lt;B&gt; parallelAggregate(DoFn&lt;A,B&gt;, 
+AggregateFn&lt;B&gt;) 
+
+parallelAggregate() takes two parameters: (1) a 
+compute function of type DoFn&lt;A,B&gt; and (2) an aggre-
+gation function of type AggregateFn&lt;B&gt;. The result of 
+the operation is a PCollection&lt;B&gt; that represents the 
+aggregated data. The following example illustrates how 
+
+</table></figure>
+		</body>
+		<back>
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title level="m" type="main">Incubator Crunch</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Apache</forename><surname>Software Foundation</surname></persName>
+		</author>
+		<ptr target="http://crunch.apache.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">FlumeJava: Easy, Efficient Data-parallel Pipelines</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chambers</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Raniwala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Perry</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Adams</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Henry</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">R</forename><surname>Bradshaw</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Weizenbaum</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">PLDI</title>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">The Case for Evaluating MapReduce Performance Using Workload Suites</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chen</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Ganapathi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Griffith</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Katz</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">MASCOTS</title>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Distributed Computation for a Tree Network with Communication Delays</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cheng</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robertazzi</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Transactions on Aerospace and Electronic Systems</title>
+		<imprint>
+			<biblScope unit="volume">26</biblScope>
+			<biblScope unit="page" from="511" to="516" />
+			<date type="published" when="1990" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Simplified Data Processing on Large Clusters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dean</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ghemawat</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Mapreduce</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Commun. ACM</title>
+		<imprint>
+			<biblScope unit="volume">51</biblScope>
+			<biblScope unit="page" from="107" to="113" />
+			<date type="published" when="2008-01" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title level="m" type="main">STAR: Self-tuning Aggregation for Scalable Monitoring</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jain</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Kit</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Mahajan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Yalagandula</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Dahlin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Optimal Load Distribution for Tree Network Processors</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kim</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H.-J</forename><surname>Jee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G.-I</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lee</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J.-G</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Transactions on Aerospace and Electronic Systems</title>
+		<imprint>
+			<biblScope unit="volume">32</biblScope>
+			<biblScope unit="page" from="607" to="612" />
+			<date type="published" when="1996" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Distributed Merge Trees</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Morozov</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Weber</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">PPoPP</title>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Astrolabe: A Robust and Scalable Technology for Distributed System Monitoring, Management, and Data Mining</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Van Renesse</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><forename type="middle">P</forename><surname>Birman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vogels</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Trans. Comput. Syst</title>
+		<imprint>
+			<biblScope unit="volume">21</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="164" to="206" />
+			<date type="published" when="2003-05" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Venkataraman</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Bodzsar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Roy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Auyoung</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">S</forename><surname>Schreiber</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Presto</surname></persName>
+		</author>
+		<title level="m">Distributed Machine Learning and Graph Processing with Sparse Matrices. In EuroSys</title>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<monogr>
+		<title level="m" type="main">Using R for Iterative and Incremental Processing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Venkataraman</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Roy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Auyoung</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Schreiber</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename></persName>
+		</author>
+		<editor>HotClouds</editor>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xin</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">S</forename><surname>Rosen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Zaharia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Franklin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">J</forename><surname>Shenker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stoica</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Shark: SQL and Rich Analytics at Scale. In SIGMOD</title>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">SDIMS: A Scalable Distributed Information Management System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yalagandula</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dahlin</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGCOMM</title>
+		<imprint>
+			<date type="published" when="2004" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Map-Reduce-Merge: Simplified Relational Data Processing on Large Clusters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H.-C</forename><surname>Dasdan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Hsiao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R.-L</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Parker</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGMOD</title>
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Distributed Aggregation for Data-parallel Computing: Interfaces and Implementations</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><forename type="middle">U</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Gunda</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">K</forename><surname>And Isard</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP</title>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Resilient Distributed Datasets: A Fault-Tolerant Abstraction for In-memory Cluster Computing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zaharia</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Chowdhury</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Das</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Dave</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Ma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Mccauley</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Franklin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">J</forename><surname>Shenker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stoica</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">NSDI</title>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

@@ -1,0 +1,782 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:57+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">EvFS: User-level, Event-Driven File System for Non-Volatile Memory</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Takeshi</forename><surname>Yoshimura</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">IBM Research -Tokyo</orgName>
+								<orgName type="institution" key="instit2">IBM Research -Tokyo</orgName>
+								<orgName type="institution" key="instit3">IBM Research -Tokyo</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tatsuhiro</forename><surname>Chiba</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">IBM Research -Tokyo</orgName>
+								<orgName type="institution" key="instit2">IBM Research -Tokyo</orgName>
+								<orgName type="institution" key="instit3">IBM Research -Tokyo</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hiroshi</forename><surname>Horii</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">IBM Research -Tokyo</orgName>
+								<orgName type="institution" key="instit2">IBM Research -Tokyo</orgName>
+								<orgName type="institution" key="instit3">IBM Research -Tokyo</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">EvFS: User-level, Event-Driven File System for Non-Volatile Memory</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>The extremely low latency of non-volatile memory (NVM) raises issues of latency in file systems. In particular, user-kernel context switches caused by system calls and hardware interrupts become a non-negligible performance penalty. A solution to this problem is using direct-access file systems, but existing work focuses on optimizing their non-POSIX user interfaces. In this work, we propose EvFS, our new user-level POSIX file system that directly manages NVM in user applications. EvFS minimizes the latency by building a user-level storage stack and introducing asynchronous processing of complex file I/O with page cache and direct I/O. We report that the event-driven architecture of EvFS leads to a 700-ns latency for 64-byte non-blocking file writes and reduces the latency for 4-Kbyte blocking file I/O by 20 µs compared to a kernel file system with journaling disabled.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Non-volatile memory (NVM) brings a significant benefit to file systems in terms of read/write latency. For example, a non-volatile memory express (NVMe) SSD shows 7 µs read and 18 µs write latency <ref type="bibr" target="#b0">[1]</ref>. Non-volatile main memory (NVMM) reaches between 20 and 85 ns for reads and between 10 and 1000 ns for writes depending on memory technology <ref type="bibr" target="#b22">[22]</ref>. At this scale, however, user-kernel context switches caused by system calls and hardware interrupts become a non-negligible performance penalty <ref type="bibr" target="#b14">[15]</ref>. User applications can minimize these overheads by leveraging user-level storage frameworks for NVMe (e.g., Storage Performance Development Kit (SPDK) <ref type="bibr" target="#b21">[21]</ref> and NVMeDirect <ref type="bibr" target="#b10">[11]</ref>) or direct memory-mapped I/O (mmap) for NVMM (e.g., <ref type="bibr" target="#b8">[9,</ref><ref type="bibr" target="#b9">10,</ref><ref type="bibr" target="#b19">19,</ref><ref type="bibr" target="#b20">20]</ref>), but those frameworks require changes in application code.</p><p>A solution to this problem is using direct access enabled file systems, but existing work focuses on optimizing their specialized user interfaces for efficient I/O processing. For example, BlobFS <ref type="bibr" target="#b2">[3]</ref>, which is a user-level file system in SPDK, exposes its optimized user-level storage stack to applications through its non-POSIX interface. BlobFS experimentally provides POSIX interface with FUSE, but it incurs a cost of IPCs <ref type="bibr" target="#b16">[17,</ref><ref type="bibr" target="#b24">24]</ref>. Other user-level filesystems <ref type="bibr" target="#b14">[15,</ref><ref type="bibr" target="#b15">16,</ref><ref type="bibr" target="#b17">18]</ref> also show that their specialized interfaces outperform POSIX interface. However, optimization of I/O processing with POSIX interfaces for NVM remains an important direction for accelerating existing user applications.</p><p>In this work, we propose EvFS, our new user-level POSIX file system that directly manages NVM in user applications.</p><p>Our key insight is that an event-driven architecture of EvFS minimizes the latency of the file system since it enables a user application to invoke a non-blocking file I/O with ns-level latency for event submission. This design is inspired by the event-driven architecture of BlobFS for efficient polling-based I/O processing. We adopt their efficient execution model to the communication between users and page cache in EvFS. It enables EvFS to highly utilize the bandwidth of DRAM and NVM even with few user threads. The file system can also reduce the latency for a user's persistent requests like fsync by coalescing multiple writes with managed persistent ordering.</p><p>EvFS is provided as a dynamic link library to avoid changes in application code and binaries. The library exposes POSIX APIs to eliminate system calls. We built EvFS on top of the user-level storage stack in SPDK. The storage stack in SPDK manages both NVMe and NVMM within its block layer and is promising for the future enhancement of EvFS. EvFS contains page cache for both NVMe and NVMM, but users can still bypass the feature with open flags (e.g., O_DIRECT in Linux).</p><p>We also report our preliminary experimental results with FIO, a microbenchmark for file I/O. Non-blocking I/O with EvFS reached 700 ns for 64-B writes. For blocking I/O, EvFS reduced file I/O latency by 20 µs compared to EXT4 with journaling disabled.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Background and Motivation</head><p>In this section, we first discuss prior user-level file systems that aim to offer high performance I/O to user applications.</p><p>Then, we summarize their problems, which our user-level file system will solve.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">High performance user-level file systems</head><p>Moneta-D <ref type="bibr" target="#b6">[7]</ref> and Arrakis <ref type="bibr" target="#b14">[15,</ref><ref type="bibr" target="#b15">16]</ref> offer their user-level file systems with hardware-assisted virtualization. Their key idea is to delegate software complexity such as security checks to hardware. They require rich storage features such as protection mechanisms, flash-backed SRAM on the device (i.e., volatile write cache in NVMe), and the use of a flash translation layer for wear leveling. However, their requirements include auxiliary features that are often limited due to cost efficiency. For example, the volatile write cache is set to a limited size or zero compared to main memory. In that case, we need to emulate the hardware cache in software to work around the limited hardware features, which can be complicated.</p><p>Aerie <ref type="bibr" target="#b17">[18]</ref> provides a user-level file system for NVMM. It bypasses page cache because of the high performance of NVMM, but HiNFS <ref type="bibr" target="#b13">[14]</ref> shows the effectiveness of cache line-sized page cache to solve the issue of long write latency of NVM <ref type="bibr" target="#b5">[6,</ref><ref type="bibr" target="#b23">23]</ref>. Aerie also provides mmap to allow user applications to enable users' direct accesses to NVMM as done by kernel file systems for NVMM <ref type="bibr" target="#b8">[9,</ref><ref type="bibr" target="#b9">10,</ref><ref type="bibr" target="#b13">14,</ref><ref type="bibr" target="#b19">19,</ref><ref type="bibr" target="#b20">20]</ref>. In the case of mmap, those file systems can remove both context switches and a storage stack from critical I/O paths. However, it also raises challenges to guarantee crash safety. NOVA-Fortis <ref type="bibr" target="#b20">[20]</ref> resolves the challenges and reports performance degradation caused by page faults in particular workloads.</p><p>ScaleFS <ref type="bibr" target="#b4">[5]</ref> and Strata <ref type="bibr" target="#b11">[12]</ref> employ user-level loggers to record per-process updates and digest them into their kernel file systems. They move file cache from the kernel to user processes. As a result, cache reads/writes do not need context switches. These in-memory logs are lazily collected at fsync, so users can increase total throughput by coalescing multiple writes. However, their fsync needs context switches because it involves their kernel file systems.</p><p>FUSE enables user-level file systems running within a user process. Applications with FUSE can easily export their mount point to an OS while serving the high customizability in file system implementation. As a result, there are many use-cases of FUSE for high-performance file systems such as distributed file systems (e.g., GlusterFS and HDFS). However, FUSE incurs a cost of IPCs <ref type="bibr" target="#b16">[17,</ref><ref type="bibr" target="#b24">24]</ref>, which cause a relatively large latency for NVM.</p><p>SPDK also has BlobFS <ref type="bibr" target="#b2">[3]</ref>, which is its own simple userlevel file system for RocksDB enhancement. We initially extend BlobFS, but EvFS departs from the original design. For example, BlobFS provides POSIX APIs with FUSE and their page cache does not allow random accessing. As a result, we need to design and implement EvFS from scratch although we reuse some SPDK utilities in its implementation. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Application</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Flush</head><p>Context switch Execution <ref type="figure">Figure 1</ref>: Breakdown of a persistent write with a kernel file system. We regard in-memory processing of file systems such as memory copy from a user buffer to page cache and preparing an I/O submission as "Execution." We omit journaling from the figure.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">Problem summary</head><p>In summary, prior user-level file systems aim to reduce OS involvement with modern hardware features and sophisticated storage software stacks. Prior work aimed to simplify critical I/O paths in user applications by using hardware features or mmap. However, the reality of NVM raises the requirement for complex but essential software features such as page cache and crash safety. The complexity is derived from the never-ending demand for crash safety and file I/O optimization. From this observation, we argue that we should explore how we hide the file system's complexity, which potentially increases its latency, from user applications. <ref type="figure">Figure 1</ref> describes the breakdown of a persistent write that prior file systems aim to optimize. Kernel file systems synchronously execute the complex processing of file I/O within the kernel context of a process that requests a system call. We divide the latency of a file system from user applications into context switches and synchronous processing of file I/O.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">EvFS</head><p>EvFS is a user-level POSIX file system that minimizes its latency from user applications by reducing the number of context switches and asynchronously processing all file I/O. <ref type="figure">Figure 2</ref> shows the comparison of a traditional kernel file system and EvFS. We built a user-level storage stack with SPDK to reduce context switches caused by system calls and hardware interrupts. We also leveraged SPDK utilities to build an event-driven architecture for asynchronous file I/O processing.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">User-level storage stack</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1.1">Library calls</head><p>EvFS is provided as a shared library, which has the same POSIX file APIs as LIBC (e.g., open). By preloading the shared library before LIBC, EvFS can hook these APIs. We </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1.2">User-level block layer</head><p>We architect a backend storage stack with SPDK to support various NVMe and NVMM devices in our user-level block layer. SPDK contains a user-level NVMe driver and also supports PMDK, which is an external library for NVM. We can easily apply EvFS to new storage by developing a new SPDK block driver. SPDK also provides a scalable thread library, event-based I/O processing, and extended storage drivers such as software RAID and logical volumes. We expect that we can easily combine and enhance modern NVM devices with this rich storage stack and EvFS to our future enterprise solutions.</p><p>EvFS builds a UNIX file-directory structure within an NVM namespace by using SPDK Blobstore <ref type="bibr" target="#b3">[4]</ref>. It builds and maintains a simple logical block layout for flash storage. The superblock of Blobstore maintains metadata for each BLOB, which represents a chunk of block page clusters in storage. Blobstore provides interfaces for reads, writes, and resizes on a BLOB, and thus, we regard a BLOB as an inode. However, Blobstore itself has a flat structure and does not maintain any trees or directories. Thus, we emulate a UNIX-like directory by using a BLOB that contains the pointer to other BLOBs and subdirectories under the directory.</p><p>A limitation of Blobstore is that the size of a BLOB must be sufficient for a write. Thus, EvFS has to track the size of each BLOB and invoke an expand request before a BLOB write occurs if the write exceeds the size. Each BLOB has customizable extended attributes that contain the name and length of a BLOB. Blobstore updates these metadata in memory and writes it back to storage when we explicitly invoke a synchronization API. Blobstore has the crash safety at page granularity, but EvFS handles the file-level consistency by using the synchronization API.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1.3">User-level page cache</head><p>In addition to the SPDK storage stack, we introduce user-level page cache in EvFS to coalesce multiple writes and reads on BLOBs. With page cache, user applications can achieve either DRAM-level speed at no memory pressure or NVM-level speed at high memory pressure. Note that user applications can choose direct I/O by specifying it at an open call to avoid redundant memory copies for page cache.</p><p>EvFS enables users to set the limit of memory usage in page cache. EvFS evicts page cache from memory to NVM if the ratio of dirty page cache reaches a configurable threshold. In the case of no memory space for page cache, EvFS delays a user's request by using event chaining described in Section 3.2.2. EvFS reduces its speed to NVM-level when there is no memory space for event descriptors described in Section 3.2.1. In that case, a requesting thread sleeps until EvFS finishes the processing of a chained event and releases the memory for it.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1.4">Private mount point</head><p>EvFS creates a private mount point for the user application when the library loads. Users can specify the mounted path and a used NVM namespace through environmental variables. Thus, multiple applications can share data on NVM by specifying the same variable. However, EvFS currently does not allow concurrent accesses to the same NVM namespace from different user processes. NVM namespace that is mounted becomes inaccessible and invisible to the OS kernel and other concurrent processes. To enable concurrent accesses, we are planning to develop an exposed interface as done in prior work <ref type="bibr" target="#b15">[16]</ref>. We use a hardware-based NVM namespace to partition storage that our NVMe supports. Theoretically, we can apply logical volumes in SPDK or isolated virtual volumes <ref type="bibr" target="#b12">[13]</ref> to EvFS with separated partitions even if NVM does not support namespaces.   <ref type="figure" target="#fig_0">Figure 3</ref> in the future. We also hook APIs for thread creation (pthread_create and __libc_start_main) to associate I/O channels to individual application threads. We attach thread-local memory to application threads during the thread creation so that we can avoid frequent memory allocation to prepare events for file reads and writes. Memory allocation increases page table updates, which cause not only user-kernel context switches but also potential scalability issues <ref type="bibr" target="#b7">[8]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1.5">POSIX interface</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Asynchronous file I/O processing</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2.1">Executions with event descriptors</head><p>In EvFS, dedicated threads poll event queues and execute submitted events. Each event consists of an event descriptor that contains a callback address and arguments such as a BLOB, target offset, length, and user buffer. We follow the SPDK's event-driven execution model for our file I/O processing.</p><p>Suppose that a user thread called a read. In that case, read in EvFS allocates an event descriptor with EvFS's internal read callback, the arguments for read, and a semaphore for I/O completion notification. Then, the poller thread expands the event descriptor and executes EvFS's internal read with the argument. The internal read also allocates an event descriptor with Blobstore's internal read callback, a callback for the completion handler for Blobstore's read, and the arguments for the read. Finally, the poller thread extracts it and executes Blobstore's read.</p><p>These recursive event submissions finally invoke SPDK's user-level NVMe device driver if the file system mounts an NVMe. The NVMe driver writes memory-mapped I/O to trigger data transfer from the NVMe with direct memory access (DMA). Unfortunately, we cannot directly set a user buffer that an application specifies at the first read's argument to the DMA target, since it is often allocated from non-page aligned heap memory such as malloc, which is not DMAenabled memory. Instead, EvFS allocates page-aligned, DMAenabled memory for page cache (or temporary memory for direct I/O) and uses it for the physical data transfer from/to NVMe.</p><p>After the DMA request, a poller thread periodically checks NVMe's doorbell device register to catch physical I/O completion. If the thread detects the I/O completion, it synchronously calls the upper-level completion handlers. For example, the completion handler for Blobstore's read is called, and it should post the semaphore to notify the completion to the user thread. This polling-based I/O completion handling eliminates hardware interrupts and reduces the latency of EvFS.</p><p>POSIX APIs allow both blocking and non-blocking file I/O. Non-blocking file I/O enables user applications to return to their thread execution immediately after an event submission. In this case, we cannot eliminate additional memory copies before the submission since the copy elimination would result in an inconsistent write if the user conducted an in-place update on the buffer. For blocking I/O, user threads need to wait for the I/O completion. In this case, we can add the address of the user buffer to the event descriptor to directly copy data from a DMA-enabled memory.</p><p>We need to carefully avoid memory allocation for event submissions since it increases system calls and page table updates. EvFS employs a simple memory pool for reducing the number of system calls for memory allocation.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2.2">Event Chaining</head><p>In cases where EvFS needs to handle complex event dependencies, we postpone the event until the dependent one finishes by chaining the event descriptor to the dependent object. The dependent object invokes the postponed event after it finishes. For example, a BLOB write must be called after a resize if the write occurs on a larger offset than the on-disk BLOB length. In this case, we chain the event to one for the dependent resize. EvFS also supports page cache, so we need to handle cases where a write happens on a page that is being written back. In that case, we postpone the write event by chaining it to one for the dependent page in page cache. We also have to release non-dirty pages if the memory pressure or a fsync call occurs. Users expect that all the API calls will finish before fsync returns, so EvFS chains a "barrier" event to a queue that manages on-going events and synchronously start cache eviction after all the on-going events complete.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Preliminary Evaluation</head><p>In this section, we show the result of our preliminary evaluation of EvFS. Specifically, we compare the performance of EvFS and EXT4. Our benchmark is FIO, which executes file I/O with POSIX APIs. Reported results are the average of ten FIO runs. For each run, a single FIO thread executes 40-GB random reads or writes (no mixed reads and writes).</p><p>Our evaluation uses Ubuntu 18.04 LTS on an IBM Power System AC922 machine with 160 logical CPU cores (POWER9, 3.8GHz), 1-TB DRAM, and 6.4-TB NVMe SSD <ref type="bibr" target="#b1">[2]</ref>. We disabled readahead at the block layer and journaling for the EXT4 to simplify our analysis. We do not show the result with memory pressure. EvFS shows higher latency and lower bandwidth under memory pressure as well as other file systems. Note that even if the memory is sufficient, EvFS evicts cache to reach the configured ratio of dirty pages as well as other file systems. We set the ratio to 20% in our experiments.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">Does EvFS minimize latency?</head><p>Figure 4 (a) and (b) shows the mean and 99th-percentile latency of non-blocking writes on EXT4 and EvFS, respectively. EvFS shows a lower latency than EXT4 for all the cases. In this workload, the dominant factor of write latency for EXT4 is the time for memory copies from the user buffer to kernel page cache and user-kernel context switches. EvFS also copies the user buffer to a per-thread event buffer, but we eliminated the context switches and busy-waits for racy writes on a page by event chaining. As a result, non-blocking writes with EvFS reached 700 ns for 64-B writes. An advantage of the ns-level latency is that the storage bandwidth can be highly utilized with a single thread. <ref type="figure" target="#fig_1">Fig. 4</ref> (c) shows a large throughput gain at 4-KB writes. We expect that EvFS can mitigate the issue of NVMM's limited bandwidth by utilizing DRAM.</p><p>As related techniques, we also conducted similar experiments with <ref type="bibr">Linux</ref>  </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Does</head><p>EvFS optimize direct I/O? Does direct I/O reduce latency? <ref type="figure" target="#fig_2">Figure 5</ref> shows the mean and 99th-percentile latencies for direct and buffered I/O. We regard a buffered I/O for a write as a pair of write and fsync in this case. For both I/O types, EvFS enables applications to avoid user-kernel context switches for their critical I/O paths. EvFS reduced mean latency for direct reads and writes by 20 µs from EXT4. As a result, the bandwidth of EvFS reached 2.2x higher for writes and 1.3x higher for reads than EXT4. Direct I/O in EvFS reduced the read latency by two µs from buffered reads. This result indicates that EvFS is promising for future NVM with much lower latency for reads and writes. Latency sensitive applications can be optimized with EvFS and its direct I/O, although they should maintain a self-managed cache.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Conclusion</head><p>In this work, we introduced EvFS, our new user-level, eventdriven, POSIX file system for NVM. The event-driven architecture of EvFS enables low latency and high throughput I/O with NVM for user applications. EvFS potentially mitigates the limited bandwidth of NVMM by utilizing DRAM. However, at the time of writing, EvFS is not a production-ready file system because it neither provides all the POSIX APIs or crash-safe properties. We believe that the event-driven architecture enables us to mitigate the latency of future EvFS and NVM due to their increased complexity and requirements through its 700-ns latency of non-blocking I/O and 20-µs improvements in blocking I/O.</p><p>We are looking to receive feedbacks around mmap with userlevel file systems like EvFS. As a file system for NVM, EvFS should enable user applications to use mmap. We are planning to hook LIBC mmap to provide this functionality as well as other POSIX APIs. However, we can provide two different ways for mmap: allowing or disallowing direct mapping of NVMM area to user applications. The former answer is to allow direct mapping as well as other file systems, but it exposes the NVM complexity to user applications. Applications can easily degrade performance or causes inconsistency if they incorrectly specify memory barriers. Also, a slow write latency may affect the applications' performance.</p><p>Disallowing the direct mapping means EvFS enables user applications to map page cache instead of raw NVM area. The biggest advantage is that user applications can use the mapped area with the same manners as other storage. Applications can read and write the mapped area at DRAM speeds. Even if the size of NVM is limited, we can provide a larger area for mmap by using DRAM. However, this idea may raise another challenge for how we replace pages on DRAM and NVMM. Without smart replacement policies, application performance will easily degrade due to frequent page faults.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 3 lists all the APIs and open flags</head><label>3</label><figDesc>Figure 3 lists all the APIs and open flags EvFS currently provides. EvFS associates a file descriptor (FD) to an inode, i.e., a BLOB at an open call. We keep the integer for the FD to be consistent for files under file systems other than EvFS by opening a pseudo file (e.g., /dev/null in Linux) and reusing it. By changing open flags such as O_SYNC, users</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: Latency of non-blocking writes. The mean and 99th-percentile latencies of non-blocking writes with different request sizes on EvFS and EXT4 are shown in (a) and (b), respectively. The throughputs for each workload are shown in (c).</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 5 :</head><label>5</label><figDesc>Figure 5: Performance of direct and buffered I/O. The mean and 99th-percentile latencies for 4-KB reads and writes on EXT4, EXT4 with direct I/O (EXT4-direct), EvFS, and EvFS with direct I/O (EvFS-direct) are shown in (a) and (b), respectively. We regard a buffered I/O for a write as a pair of write and fsync. The throughputs for each workload are shown in (c).</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_2" validated="false"><head></head><label></label><figDesc>EvFS currently provides. EvFS associates a file descriptor (FD) to an inode, i.e., a BLOB at an open call. We keep the integer for the FD to be consistent for files under file systems other than EvFS by opening a pseudo file (e.g., /dev/null in Linux) and reusing it. By changing open flags such as O_SYNC, users</figDesc><table>Type 
+
+APIs 
+File 
+open, read, write, pread, pwrite, 
+lseek, close, __xstat, __lxstat, 
+__fxstat, 
+posix_fadvise, 
+fsync, 
+unlink, unlinkat, stat, access, 
+truncate, ftruncate, creat 
+Directory opendir, readdir, closedir, mkdir 
+Flags 
+O_SYNC, O_DIRECT 
+Thread 
+pthread_create, __libc_start_main 
+
+Figure 3: Supported APIs and flags in EvFS under 
+Ubuntu 18.04 LTS. This figure excludes 64-bit variations 
+such as open64. __libc_start_main calls the main() function 
+and handles the return from it in an application. Note that 
+exact names of APIs depend on the version of an OS and 
+LIBC, CPU type, and other environments. 
+
+can control the blocking level and consistency for file I/O. 
+EvFS enables a non-blocking write if a user does not specify 
+O_SYNC. O_DIRECT enables direct I/O on a file so that users 
+can choose to bypass page cache. EvFS will support mmap as 
+well as the APIs shown in </table></figure>
+		</body>
+		<back>
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title level="m" type="main">TM memory series (32gb, m.2 80mm pcie 3.0, 20nm, 3d xpoint) product specifications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Intel R Optane</surname></persName>
+		</author>
+		<ptr target="https://ark.intel.com/content/www/us/en/ark/products/series/99743/intel-optane-memory-series.html" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title level="m" type="main">Pcie3 x8 nvme 6.4 tb ssd nvme flash adapter (fc ec5e and ec5f</title>
+		<ptr target="https://www.ibm.com/support/knowledgecenter/8335-GTH/p9hcd/fcec5e.htm" />
+		<imprint/>
+	</monogr>
+	<note>ccin 58fe</note>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+				<ptr target="https://spdk.io/doc/blobfs.html" />
+		<title level="m">Spdk: Blobstore filesystem</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+		<title level="m" type="main">Spdk: Blobstore programmer&apos;s guide</title>
+		<ptr target="https://spdk.io/doc/blob.html" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Scaling a file system to many cores using an operation log</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Srivatsa</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rasha</forename><surname>Bhat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Austin</forename><forename type="middle">T</forename><surname>Eqbal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">Frans</forename><surname>Clements</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nickolai</forename><surname>Kaashoek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Zeldovich</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 26th Symposium on Operating Systems Principles (SOSP &apos;17)</title>
+		<meeting>the 26th Symposium on Operating Systems Principles (SOSP &apos;17)</meeting>
+		<imprint>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="69" to="86" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Emerging nvm: A survey on architectural integration and research challenges</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jalil</forename><surname>Boukhobza</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stéphane</forename><surname>Rubini</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Renhai</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zili</forename><surname>Shao</surname></persName>
+		</author>
+		<idno>14:1-14:32</idno>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Design Automation of Electronic Systems (TODAES)</title>
+		<imprint>
+			<biblScope unit="volume">23</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<date type="published" when="2017-11" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Providing safe, user space access to fast, solid state disks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adrian</forename><forename type="middle">M</forename><surname>Caulfield</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Todor</forename><forename type="middle">I</forename><surname>Mollov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Louis</forename><forename type="middle">Alex</forename><surname>Eisner</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arup</forename><surname>De</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joel</forename><surname>Coburn</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steven</forename><surname>Swanson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Seventeenth International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS XVII)</title>
+		<meeting>the Seventeenth International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS XVII)</meeting>
+		<imprint>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="387" to="400" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Radixvm: Scalable address spaces for multithreaded applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Austin</forename><forename type="middle">T</forename><surname>Clements</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">Frans</forename><surname>Kaashoek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nickolai</forename><surname>Zeldovich</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 8th ACM European Conference on Computer Systems (EuroSys &apos;13)</title>
+		<meeting>the 8th ACM European Conference on Computer Systems (EuroSys &apos;13)</meeting>
+		<imprint>
+			<date type="published" when="2013" />
+			<biblScope unit="page" from="211" to="224" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Better i/o through byte-addressable, persistent memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeremy</forename><surname>Condit</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Edmund</forename><forename type="middle">B</forename><surname>Nightingale</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Christopher</forename><surname>Frost</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Engin</forename><surname>Ipek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Benjamin</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Doug</forename><surname>Burger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Derrick</forename><surname>Coetzee</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM SIGOPS 22Nd Symposium on Operating Systems Principles (SOSP &apos;09)</title>
+		<meeting>the ACM SIGOPS 22Nd Symposium on Operating Systems Principles (SOSP &apos;09)</meeting>
+		<imprint>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="133" to="146" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">System software for persistent memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Subramanya</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanjay</forename><surname>Dulloor</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Anil</forename><surname>Kumar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Philip</forename><surname>Keshavamurthy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dheeraj</forename><surname>Lantz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rajesh</forename><surname>Reddy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeff</forename><surname>Sankaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Jackson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Ninth European Conference on Computer Systems (EuroSys &apos;14)</title>
+		<meeting>the Ninth European Conference on Computer Systems (EuroSys &apos;14)</meeting>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="volume">15</biblScope>
+			<biblScope unit="page" from="1" to="15" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Nvmedirect: A user-space i/o framework for applicationspecific optimization on nvme ssds</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hyeong-Jun</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Young-Sik</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jin-Soo</forename><surname>Kim</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 8th USENIX Conference on Hot Topics in Storage and File Systems (HotStorage &apos;16)</title>
+		<meeting>the 8th USENIX Conference on Hot Topics in Storage and File Systems (HotStorage &apos;16)</meeting>
+		<imprint>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="41" to="45" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Strata: A cross media file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Youngjin</forename><surname>Kwon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Henrique</forename><surname>Fingler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tyler</forename><surname>Hunt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Simon</forename><surname>Peter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Emmett</forename><surname>Witchel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thomas</forename><surname>Anderson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 26th Symposium on Operating Systems Principles (SOSP &apos;17)</title>
+		<meeting>the 26th Symposium on Operating Systems Principles (SOSP &apos;17)</meeting>
+		<imprint>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="460" to="477" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Decibel: Isolation and sharing in disaggregated rack-scale storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mihir</forename><surname>Nanavati</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jake</forename><surname>Wires</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrew</forename><surname>Warfield</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 14th USENIX Conference on Networked Systems Design and Implementation (NSDI &apos;17)</title>
+		<meeting>the 14th USENIX Conference on Networked Systems Design and Implementation (NSDI &apos;17)</meeting>
+		<imprint>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="17" to="33" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">A high performance file system for non-volatile main memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jiaxin</forename><surname>Ou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jiwu</forename><surname>Shu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Youyou</forename><surname>Lu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Eleventh European Conference on Computer Systems (EuroSys &apos;16)</title>
+		<meeting>the Eleventh European Conference on Computer Systems (EuroSys &apos;16)</meeting>
+		<imprint>
+			<date type="published" when="2016" />
+			<biblScope unit="volume">12</biblScope>
+			<biblScope unit="page" from="1" to="12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Towards high-performance application-level storage management</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Simon</forename><surname>Peter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jialin</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Doug</forename><surname>Woos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Irene</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dan</forename><forename type="middle">R K</forename><surname>Ports</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thomas</forename><surname>Anderson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arvind</forename><surname>Krishnamurthy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mark</forename><surname>Zbikowski</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 6th USENIX Conference on Hot Topics in Storage and File Systems (HotStorage &apos;14)</title>
+		<meeting>the 6th USENIX Conference on Hot Topics in Storage and File Systems (HotStorage &apos;14)</meeting>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Arrakis: The operating system is the control plane</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Simon</forename><surname>Peter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jialin</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Irene</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dan</forename><forename type="middle">R K</forename><surname>Ports</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Doug</forename><surname>Woos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arvind</forename><surname>Krishnamurthy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thomas</forename><surname>Anderson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Timothy</forename><surname>Roscoe</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 11th USENIX Conference on Operating Systems Design and Implementation (OSDI &apos;14)</title>
+		<meeting>the 11th USENIX Conference on Operating Systems Design and Implementation (OSDI &apos;14)</meeting>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="1" to="16" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">To fuse or not to fuse: Performance of userspace file systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Bharath Kumar Reddy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vasily</forename><surname>Vangoor</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Erez</forename><surname>Tarasov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Zadok</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 15th USENIX Conference on File and Storage Technologies (FAST &apos;17)</title>
+		<meeting>the 15th USENIX Conference on File and Storage Technologies (FAST &apos;17)</meeting>
+		<imprint>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="59" to="72" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<monogr>
+		<title level="m" type="main">Sankarlingam Panneerselvam</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Haris</forename><surname>Volos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanketh</forename><surname>Nalli</surname></persName>
+		</author>
+		<imprint>
+			<publisher>Venkatanathan Varadarajan, Prashant Saxena,</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Aerie: Flexible file-system interfaces to storage-class memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><forename type="middle">M</forename><surname>Swift</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Ninth European Conference on Computer Systems (EuroSys &apos;14)</title>
+		<meeting>the Ninth European Conference on Computer Systems (EuroSys &apos;14)</meeting>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="volume">14</biblScope>
+			<biblScope unit="page" from="1" to="14" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Nova: A log-structured file system for hybrid volatile/non-volatile main memories</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jian</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steven</forename><surname>Swanson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 14th Usenix Conference on File and Storage Technologies (FAST &apos;16)</title>
+		<meeting>the 14th Usenix Conference on File and Storage Technologies (FAST &apos;16)</meeting>
+		<imprint>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="323" to="338" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Nova-fortis: A faulttolerant non-volatile main memory file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jian</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lu</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amirsaman</forename><surname>Memaripour</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Akshatha</forename><surname>Gangadharaiah</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amit</forename><surname>Borase</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tamires</forename><surname>Brito Da</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steven</forename><surname>Silva</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andy</forename><surname>Swanson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Rudoff</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 26th Symposium on Operating Systems Principles (SOSP &apos;17)</title>
+		<meeting>the 26th Symposium on Operating Systems Principles (SOSP &apos;17)</meeting>
+		<imprint>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="478" to="496" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">Spdk: A development kit to build high performance storage applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">R</forename><surname>Harris</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Walker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Verkamp</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Chang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Cao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Stern</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Verma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">E</forename><surname>Paul</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2017 IEEE International Conference on Cloud Computing Technology and Science (CloudCom &apos;17)</title>
+		<imprint>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="154" to="161" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Optimizing file systems with a write-efficient journaling scheme on non-volatile memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Feng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Hua</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Chen</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Transactions on Computers</title>
+		<imprint>
+			<biblScope unit="volume">68</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<biblScope unit="page" from="402" to="413" />
+			<date type="published" when="2019-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Optimizing file systems with a write-efficient journaling scheme on non-volatile memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Feng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Hua</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Chen</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Transactions on Computers</title>
+		<imprint>
+			<biblScope unit="volume">68</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<biblScope unit="page" from="402" to="413" />
+			<date type="published" when="2019-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">Direct-fuse: Removing the middleman for high-performance fuse file system support</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yue</forename><surname>Zhu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Teng</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kathryn</forename><surname>Mohror</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adam</forename><surname>Moody</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kento</forename><surname>Sato</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Muhib</forename><surname>Khan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Weikuan</forename><surname>Yu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 8th International Workshop on Runtime and Operating Systems for Supercomputers (ROSS &apos;18)</title>
+		<meeting>the 8th International Workshop on Runtime and Operating Systems for Supercomputers (ROSS &apos;18)</meeting>
+		<imprint>
+			<date type="published" when="2018" />
+			<biblScope unit="volume">6</biblScope>
+			<biblScope unit="page" from="1" to="6" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

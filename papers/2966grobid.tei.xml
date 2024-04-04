@@ -1,0 +1,1581 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:56+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Understanding the Fault Resilience of File System Checkers</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Om</forename><surname>Rameshwar</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Computer Science Department</orgName>
+								<orgName type="institution">New Mexico State University</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gatla</forename><forename type="middle">Mai</forename><surname>Zheng</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Computer Science Department</orgName>
+								<orgName type="institution">New Mexico State University</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Understanding the Fault Resilience of File System Checkers</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>File system checkers serve as the last line of defense to recover a corrupted file system back to a consistent state. Therefore, their reliability is critically important. Motivated by real accidents, in this paper we study the behavior of file system checkers under faults. We systematically inject emulated faults to interrupt the checkers and examine the impact on the file system images. In doing so, we answer two important questions: Does running the checker after an interrupted-check successfully return the file system to a correct state? If not, what goes wrong? Our results show that there are vulnerabilities in popular file system checkers which could lead to unre-coverable data loss under faults.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>File systems play an essential role in managing today's data. From desktops to warehouse-scale machines <ref type="bibr" target="#b12">[14]</ref>, a wide variety of local file systems (e.g., Ext4 <ref type="bibr" target="#b4">[5]</ref>, XFS <ref type="bibr" target="#b7">[8]</ref>, Btrfs <ref type="bibr" target="#b0">[1]</ref>) and large-scale file systems (e.g., GFS <ref type="bibr" target="#b27">[29]</ref>, Ceph <ref type="bibr" target="#b1">[2]</ref>, Lustre <ref type="bibr" target="#b5">[6]</ref>) are deployed to store and manage much of the world's precious data. Therefore, the integrity of file systems is critically important.</p><p>Unfortunately, despite of various protection techniques, file systems may still become corrupted for many reasons including power outages, server crashes, latent sector errors, software or firmware bugs, etc <ref type="bibr" target="#b10">[12,</ref><ref type="bibr" target="#b11">13,</ref><ref type="bibr" target="#b23">25,</ref><ref type="bibr" target="#b35">37,</ref><ref type="bibr" target="#b37">39]</ref>. Therefore, most file systems come with a checker to serve as the last line of defense <ref type="bibr" target="#b3">[4,</ref><ref type="bibr" target="#b8">9,</ref><ref type="bibr" target="#b37">39,</ref><ref type="bibr" target="#b38">40]</ref>. The checker usually scans the on-disk layout of the corresponding file system, resolves inconsistencies based on pre-defined policies, and recovers the corrupted system back to a healthy state.</p><p>Due to the prime importance of file system checkers, abundant work has been done to improve them. For example, Gunawi et al. <ref type="bibr" target="#b29">[31]</ref> finds that the checker of Ext2 may create inconsistent or even insecure repairs; they then proposes a more elegant checker (i.e., SQCK) based on a declarative query language. Similarly, SWIFT <ref type="bibr" target="#b19">[21]</ref> uses a mix of symbolic and concrete execution to test popular file system checkers, and has exposed bugs in all checkers tested. And more recently, ffsck <ref type="bibr" target="#b37">[39]</ref> reduces the checking time of Ext3-like file systems by changing the disk layout and the indirect block structure of Ext3 and co-designing the checking policies.</p><p>One common assumption of the aforementioned work is that the checker can finish normally without interruption. In other words, they mostly focus on the behavior of file system checkers during normal executions.</p><p>Complementary to the existing efforts, in this work we study the behavior of file system checkers with interruption. This is motivated by a real-world accident happened at the High Performance Computing Center (HPCC) in Texas <ref type="bibr">[10,</ref><ref type="bibr" target="#b18">20]</ref>, where the Lustre file system suffered severe data loss after experiencing two consecutive power outages: the first one triggered the Lustre file system checker (i.e., LFSCK) after restarting the cluster, while the second one interrupted LFSCK and led to the final downtime and corruption. Since the Lustre deployed is built on top of a variant of Ext4 (i.e., ldiskfs), and LFSCK relies on the consistency of the local file system on every node, the overall checking and recovery procedure is complicated (e.g., requires several days <ref type="bibr">[10]</ref>). Moreover, with the trend of increasing the capacity of storage devices and scaling to more and more nodes, checking and repairing file systems will likely become more timeconsuming and thus more vulnerable to faults.</p><p>As one step towards building fault-resilient file system checkers, we perform a comprehensive study on the behavior of existing local file system checkers under faults. Specifically, we explore two important questions: Does running the checker after an interrupted-check successfully return the file system to a correct state? If not, what goes wrong?</p><p>To answer the questions, we build a fault-injection framework based on an iSCSI driver <ref type="bibr" target="#b54">[55]</ref>. We use a set of test images, which are either provided by the developers of file systems or generated by ourselves, as the input to trigger the target file system checker. During the execution of the checker, we record the I/O commands at the driver level, and replay partial I/O blocks to emulate the effect of an interrupted checker on the file system image. Moreover, after generating the interrupted state, we re-run the checker again without any fault injection. This is to verify that whether the corruption introduced by the interrupted checker can be recovered or not.</p><p>We apply the testing methodology to study e2fsck <ref type="bibr" target="#b3">[4]</ref> and xfs repair <ref type="bibr" target="#b8">[9]</ref>, the default checkers of the popular Ext-series file systems and XFS file system, respectively. Our experimental results show that there are vulnerabilities in these representative file system checkers which could lead to additional severe corruption under faults (e.g., the file system becomes "unmountable"). Moreover, many corruptions cannot be repaired by reexecuting the default checker again, which implies that the data loss incurred might be permanent.</p><p>The rest of the paper is organized as follows. We first introduce the background of file system checkers ( §2). Next, we describe our methodology of injecting faults and testing the resilience ( §3). Then, we discuss our studies on e2fsck ( §4) and xfs repair ( §5). Finally, we discuss related work ( §6) and conclude ( §7).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Background of File System Checkers</head><p>File system checkers are designed to check and repair inconsistencies in file systems. Depending on the structures of file systems, the checkers may perform different number of checking passes and exam different consistency rules. We use e2fsck as a concrete example to illustrate the complexity as well as the potential vulnerabilities of the checkers in this section.</p><p>The first action of e2fsck is to replay the journal (in case of Ext3/Ext4) and then restart itself. Next, e2fsck executes the following five passes in order:</p><p>Pass 1: Scan the entire file system and check inodes. In this pass e2fsck iterates over all inodes and checks each inode one by one (e.g., validating the mode, size, and block count). Meanwhile, it stores the scanned information in a set of bitmaps, including inodes in use (inode used map), blocks claimed by two inodes (block dup map), etc. Besides, it performs four subpasses to generate a list of duplicate blocks and their owners, checks the integrity of the extent trees, etc.</p><p>Pass 2: Check directory structure. Based on the bitmaps collected, Pass 2 iterates through all directory inodes and checks a set of rules for each directory. For example, the first directory entry should be ".", the length of each entry (rec len) should be within a range, etc.</p><p>Pass 3: Check connectivity. This pass ensures that all directories are connected properly in the file system tree.</p><p>To this end, e2fsck first checks whether if a root directory exists. If not, then a new root directory is created and is marked as "done". Next, e2fsck iterates over all directory inodes and attempts to traverse up the file system tree, until it reaches a directory marked as "done". If no "done" directory is reachable, then the current directory inode is marked as disconnected, and e2fsck offers to reconnect it to the "lost+found" folder. During the traversal, if e2fsck sees a directory twice (i.e., there is a loop), e2fsck also offers to reconnect the directory to the "lost+found" folder to break the loop.</p><p>Pass 4: Check reference counts. Pass 4 iterates over all the inodes to validate the inode link counts. Also, it checks the connectivity of the extended attribute (EA) blocks reconnect them if necessary. In addition, Pass 4 loads a set of readahead bitmaps for the next pass.</p><p>Pass 5: Recalculate checksums and flush updates. In the final pass e2fsck checks the repaired in-memory data structures against on-disk data structures and flush necessary updates to the disk to ensure consistency. Also, if the in-memory data structures are mapped dirty due to the fixes in the previous passes, the corresponding checksums are re-calculated before flushing.</p><p>Based on the analysis above, we can see that the checking procedure of e2fsck is complicate and may be vulnerable to faults. For example, there are cross-pass dependency (e.g., the bitmaps are used and updated by multiple passes) and some early fixes are not committed until the last pass. We describe our methodology to actually expose the vulnerabilities in the next section.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Methodology</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Test Images</head><p>Since file system checkers are designed to repair corrupted file systems, it is necessary to have a set of corrupted file system images to trigger the checkers. We call this set of file system images as test images.</p><p>We consider two ways of generating test images. First, the developers of file systems may provide test images for regression testing of their checkers. For example, e2fsprogs <ref type="bibr" target="#b3">[4]</ref> includes a set of 175 test images for testing e2fsck. These images usually cover the most representative corruption scenarios as envisioned by the developers. In this case, we directly use the test images provided by the developers for triggering the target file system checker.</p><p>Second, in case the default test images are not available, we inject random bits to corrupt important on-disk structures of the file system, similar to the previous approaches for introducing corruptions <ref type="bibr" target="#b29">[31,</ref><ref type="bibr" target="#b53">54]</ref>. While this approach requires in-depth understanding of the file system layout, it allows great flexibility in terms of creating corruption scenarios and could potentially cover corner cases that are not envisioned by the developers.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Fault Injection Module</head><p>Besides generating test images to trigger the target checker, another challenge of evaluating the fault resilience is how to generate faults in a systematic and controllable way. Unplugging the power cord repeatedly is simply impractical.</p><p>To this end, we emulate the effect of faults using software. We adopt the "clean power fault" model <ref type="bibr" target="#b54">[55]</ref>: there is a minimal atomic unit of write operations, i.e., the size of data written to media is always an integer block multiple (e.g., 512B or 4KB); a fault can occur at any point during the execution of the checker; once a fault happens, all blocks committed before the fault are durable without corruption, and all blocks after the fault have no effect on the media. This simple model can serve as a conservative lower bound of the failure impact. In other words, file system checkers must be able to handle this simple fault model gracefully before addressing more aggressive fault models (e.g., arbitrary reordering of blocks).</p><p>To emulate the fault model, we adapt an iSCSI driver <ref type="bibr" target="#b54">[55]</ref> to record the I/O commands generated during the execution of the target file system checker in a command history log. Then, we replay a prefix of the command history log (i.e., partial commands) to a copy of the initial test image, which effectively generate the effect of an interrupted checker on the test image.</p><p>For each command history log, we exhaustively replay all possible prefixes, and thus generate a set of interrupted images which correspond to injecting faults at different points during the execution of the target checker.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">Workflow</head><p>Putting it together, <ref type="figure" target="#fig_0">Figure 1</ref> summarizes the overall workflow of testing the fault resilience of file system checkers. As shown in the figure, there are 10 steps: (1) we make a copy of the test image which contains a corrupted file system; (2) the target file system checker (i.e., fsck) is executed to check and repair the original corruption on the copy of the test image; (3) after running fsck, the resulting image is stored as the reference image; (4) during the checking and repairing procedure of fsck, we simultaneously record the I/O commands generated by fsck; (5) we make another copy of the original test image; (6) we replay partial commands recorded in step (4) to the new copy of the test image, which emulates the effect of an interrupted fsck; (7) the image generated in step (6) is stored as the interrupted image; (8) fsck is executed again on the interrupted image to fix any repairable issues; (9) the image generated in (8) is stored as the repaired image; (10) finally, we compare the file system on the repaired image with that on the reference image to identify any mismatches. The comparison is first performed via the diff command. If a mismatch is reported, we further verify the cause of the mismatch manually.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Case Study I: e2fsck</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">Overall Results</head><p>We use 175 test images from e2fsprogs v1.43.1 <ref type="bibr" target="#b3">[4]</ref> as inputs to trigger e2fsck. The file system block size on all these images is 1KB. To emulate faults on storage systems with different atomic units, we inject faults in two granularities: 512B or 4KB. In other words, we interrupt e2fsck after every 512B or 4KB of an I/O trans-  fer command. Since the file system block is 1KB, we do not break file system blocks when injecting faults in 4KB granularity.</p><p>As described in §3.3, for each fault injected (i.e., each interruption) we run e2fsck again and generate one repaired image. From one test image we usually generate multiple repaired images because the repairing procedure usually requires updating multiple file system blocks. For example, to fix the test image "f noroot" (image with no root directory) from e2fsprogs, e2fsck needs to update four 1KB blocks, which generates eight interrupted images (and consequently repaired images) when faults are injected after each 512B. <ref type="table">Table 1</ref> summarizes the total number of repaired images generated under the two granularities. We can see that the 512B case leads to more repaired images because the repairing procedure is interrupted more frequently.</p><p>By comparing with the reference image <ref type="figure" target="#fig_0">(Figure 1</ref>), we can verify if a repaired image contains unrecoverable corruptions or not. If at least one repaired image contains such corruption, we mark the corresponding test image as reporting corruption too. <ref type="table">Table 2</ref> shows the number of test images and the number of repaired images reporting corruptions. We can see that with the 512B granularity, more images have corruptions. This is because the updates are broken into smaller pieces, and thus it is more challenging to maintain consistency when interrupted.</p><p>To further understand the severeness of the corruptions, we examine the symptoms in details and classify them into four types, including: (1) unmountable; (2) file content corruption; (3) misplacement of files (e.g., a file is either in the"lost+found" folder or completely missing) (4) others (e.g., showing "???" after an ls command). <ref type="table" target="#tab_2">Table 3</ref> shows the classification. We can see that file content corruption and misplacement of files are most common. Also, even with a fault injection granularity bigger than the file system block (i.e., 4KB &gt; 1KB), we still observe three cases where the whole file system volume becomes unmountable.  </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Enforcing Synchronous Writes</head><p>For performance reason, the existing e2fsck buffers most updates in memory and flush them to the disk synchronously only at the end of the last pass. This extensive buffering may cause inconsistencies under faults because there is no ordering or atomicity guarantees when flushing the large amount of buffered updates.</p><p>To examine the impact of this design tradeoff, we modify the source code of e2fsck to enforce frequent synchronous writes in two ways. First, we change all updates to the disk image to synchronous writes by adding the O SYNC flag. Second, we insert an fsync call at the end of each of the five passes of e2fsck. We inject faults in 4KB granularity and see if the more frequent synchronization would reduce the window of vulnerability.</p><p>As shown in <ref type="table">Table 4</ref>, in the first scenario (i.e., sync every write), 45 test images and 223 repaired images have corruptions. The numbers in the second scenario (i.e., sync at the end of each pass) are similar. In addition, <ref type="table">Table 5</ref> further classifies the corruptions observed on the repaired images into the four types described in §4.1.</p><p>From this experiment, we can see that enforcing synchronous updates may avoid some corruptions (e.g., 0 in "others" in <ref type="table">Table 5</ref>). However, most corruptions cannot be solved in this way. Moreover, by frequently enforcing synchronization, more intermediate states become visible on disk. As a result, we may observe even more unrecoverable corruptions (i.e., the numbers in <ref type="table">Table 4</ref> are generally larger than those in <ref type="table">Table 2</ref>), which suggests that the resilience of e2fsck cannot be enhanced simply by enforcing synchronous writes.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.3">Undo Logging</head><p>One way to handle unexpected interruptions is write ahead logging <ref type="bibr" target="#b40">[42]</ref>. In fact, the developers of e2fsck have envisioned the potential needs and have added builtin support for an undo log, although this feature has sel- <ref type="table" target="#tab_2">Corruption   sync  sync  Types  every write every pass  unmountable  203  211  file content corruption  13  11  misplacement of files  7  20  others  0  0  Total  223  242  Table 5</ref>: Number of repaired images reporting each type of corruptions after enforcing synchronous updates in two ways. dom been used due to the degraded performance <ref type="bibr" target="#b2">[3]</ref>.</p><p>To exam the effectiveness of the undo logging, we create a separate block device in our framework to store the undo log, and inject faults to interrupt both the checking and the logging. Surprisingly, we observe a similar amount of corruptions. Further analysis on the source code as well as the system call traces reveals that there is no ordering guarantee between the writes to the undo log and the writes to the image being fixed, which essentially invalidates the write ahead logging mechanism. This current status suggests that enhancing the checker with transactional support is non-trivial. More effective and efficient mechanisms are needed.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Case Study II: xfs repair</head><p>We have also studied the resilience of xfs repair, the checker of XFS file system. To generate test images, we make use of the blocktrash command of xfs db <ref type="bibr" target="#b8">[9]</ref> to flip random bits on the file system images. In the experiment, we generated 3 test images by flipping 10, 20 and 30 bits, respectively. From the 3 test images, the framework generated 124 repaired images in total under the 4KB fault injection granularity, among which 16 images have exhibit the misplacement of files corruption.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Related Work</head><p>Reliability of file system checkers. <ref type="bibr">Gunawi et al. [31]</ref> inject faults to corrupt carefully selected blocks of a Ext2 file system, and find that the Ext2 checker may create inconsistent or even insecure repairs; they then proposes a more elegant checker (i.e., SQCK) based on a declarative query language. Carreira et al. <ref type="bibr" target="#b19">[21]</ref> propose a tool called SWIFT, which uses a mix of symbolic and concrete execution and includes a corruption model for testing file system checkers. They tested the checkers of ext2, ext3, ext4, ReiserFS, and Minix and found bugs in all of them. <ref type="bibr">Ma et al. [39]</ref> change the disk layout and the indirect block structure of Ext3 (i.e., rext3) and co-design the checking policies (i.e., ffsck), which enables scanning and repairing the file system much more efficiently. By speeding up the checking procedure, they effectively narrow the window of vulnerability for the checker.</p><p>Generally, these studies consider the behavior of file system checkers during normal executions (i.e., no interruption). Complimentary to these efforts, we study checkers' behavior under faults.</p><p>Reliability of file systems. Great efforts have been put towards improving the reliability of file systems <ref type="bibr" target="#b14">[16,</ref><ref type="bibr" target="#b21">23,</ref><ref type="bibr" target="#b24">26,</ref><ref type="bibr" target="#b25">27,</ref><ref type="bibr" target="#b30">32,</ref><ref type="bibr" target="#b35">37,</ref><ref type="bibr" target="#b39">41,</ref><ref type="bibr" target="#b42">44,</ref><ref type="bibr" target="#b46">48,</ref><ref type="bibr" target="#b50">52,</ref><ref type="bibr" target="#b53">54]</ref>. For example, EX-PLODE <ref type="bibr" target="#b50">[52]</ref> uses model checking to find errors in storage software, especially in file systems. <ref type="bibr">Chidambaram et al. [26]</ref> introduce a backpointer-based NoFS to provide crash consistency. Overall, these research help understand and improve the reliability of file systems, which may reduce the need for file system checkers. However, despite of these efforts, file system checkers remain a necessary component for most file systems.</p><p>Reliability of storage devices. In terms of storage devices, research efforts are also abundant <ref type="bibr" target="#b10">[12,</ref><ref type="bibr" target="#b11">13,</ref><ref type="bibr" target="#b22">24,</ref><ref type="bibr" target="#b32">34,</ref><ref type="bibr" target="#b43">45,</ref><ref type="bibr" target="#b44">46]</ref>. For example, <ref type="bibr">Schroeder et al. [46]</ref> analyze the disk replacement data of seven production systems over five years. <ref type="bibr">Bairavasundaram et al. [12, 13]</ref> analyze the data corruption and latent sector errors in production systems containing a total of 1.53 million HDDs. Besides HDDs, more recent work has been focused on flash memory and flash-based solid state drives (SSDs) <ref type="bibr" target="#b9">[11,</ref><ref type="bibr" target="#b13">15,</ref><ref type="bibr" target="#b15">17,</ref><ref type="bibr" target="#b16">18,</ref><ref type="bibr" target="#b17">19,</ref><ref type="bibr" target="#b20">22,</ref><ref type="bibr" target="#b26">28,</ref><ref type="bibr" target="#b28">30,</ref><ref type="bibr" target="#b31">33,</ref><ref type="bibr" target="#b33">35,</ref><ref type="bibr" target="#b34">36,</ref><ref type="bibr" target="#b36">38,</ref><ref type="bibr" target="#b41">43,</ref><ref type="bibr" target="#b45">47,</ref><ref type="bibr" target="#b47">49,</ref><ref type="bibr" target="#b48">50,</ref><ref type="bibr" target="#b49">51,</ref><ref type="bibr" target="#b51">53,</ref><ref type="bibr" target="#b55">56,</ref><ref type="bibr" target="#b56">57]</ref>. These studies provide valuable insights for understanding file system corruptions caused by hardware, and are helpful for generating realistic test images to trigger the checkers in our study.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Conclusions and Future Work</head><p>We have studied the behavior of file system checkers under emulated faults. Our results show that running the checker after an interrupted-check may not return the file system to a correct state, and the image may even become unmountable. In the future, we would like to apply the methodology to study the reliability of other critical but insufficiently tested procedures (e.g., system upgrades). We hope our study will raise the awareness of reliability vulnerabilities in storage systems in general, and facilitate building truly fault-resilient systems.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: Workflow of testing the fault resilience of a file system checker (i.e., fsck). There are 10 steps: (1) make a copy of the test image which contains a corrupted file system; (2) run fsck on the copy of test image; (3) store the image generated in (2) as the reference image; (4) record the SCSI commands generated during the fsck; (5) make another copy of the test image; (6) replay partial commands to emulate the effect of an interrupted fsck on the copy of test image; (7) store the image generated in (6) as the interrupted image; (8) run fsck on the interrupted image; (9) store the image generated in (8) as the repaired image; (10) compare the repaired image with the reference image to identify mismatches.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="false"><head>: Number of test images and repaired images generated under two fault injection granularities.</head><label></label><figDesc></figDesc><table>Total # of 
+Total # of 
+Granularities 
+test images repaired images 
+
+512 B 
+175 
+25,062 
+4 KB 
+175 
+3,195 
+Table 1Fault Injection # of images reporting corruptions 
+Granularities 
+test images 
+repaired images 
+
+512 B 
+34 
+240 
+4 KB 
+17 
+37 
+Table 2: Number of test images and repaired images reporting 
+
+corruptions under two fault injection granularities. 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_2" validated="false"><head>Table 3 :</head><label>3</label><figDesc></figDesc><table>Classification of corruptions observed on repaired 
+
+images under two fault injection granularities. 
+
+Sync 
+# of images reporting corruptions 
+Methods 
+test images 
+repaired images 
+
+sync every write 
+45 
+223 
+sync every pass 
+45 
+243 
+Table 4: Number of test images and repaired images reporting 
+
+corruptions after enforcing synchronous updates in two ways. 
+
+</table></figure>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="8">Acknowledgements</head><p>We thank the anonymous reviewers for their insightful comments and suggestions. We also thank the Linux kernel practitioners, especially Theodore Ts'o and Ric Wheeler, for the invaluable discussion at Linux FAST Summit. This work was supported in part by the National Science Foundation (NSF) under grant CNS-1566554. Any opinions, findings, and conclusions or recommendations expressed in this material are those of the author(s) and do not necessarily reflect the views of NSF.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Btrfs File</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>System</surname></persName>
+		</author>
+		<ptr target="https://btrfs.wiki.kernel.org/index.php/MainPage" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Ceph File</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>System</surname></persName>
+		</author>
+		<ptr target="http://docs.ceph.com/docs/master/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title level="m" type="main">Discussion with Theodore Ts&apos;o at Linux FAST Summit&apos;17</title>
+		<ptr target="https://www.usenix.org/conference/linuxfastsummit17" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+				<ptr target="http://e2fsprogs.sourceforge.net/" />
+		<title level="m">E2fsprogs: Ext2/3/4 Filesystem Utilities</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Ext4 File</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>System</surname></persName>
+		</author>
+		<ptr target="https://ext4.wiki.kernel.org/index.php/MainPage" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title level="m" type="main">Lustre File System</title>
+		<ptr target="http://opensfs.org/lustre/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tdb</forename><surname>Samba</surname></persName>
+		</author>
+		<ptr target="https://tdb.samba.org/" />
+		<imprint/>
+	</monogr>
+	<note>Trivial DataBase</note>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Xfs File</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>System</surname></persName>
+		</author>
+		<ptr target="http://xfs.org/index.php/MainPage" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<monogr>
+				<ptr target="https://access.redhat.com/documentation/en-US/RedHatEnterpriseLinux/6/html/StorageAdministrationGuide/xfsothers.html" />
+		<title level="m">XFS File System Utilities</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<monogr>
+		<title level="m" type="main">Design Tradeoffs for SSD Performance</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nitin</forename><surname>Agrawal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vijayan</forename><surname>Prabhakaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ted</forename><surname>Wobber</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><forename type="middle">D</forename><surname>Davis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mark</forename><surname>Manasse</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rina</forename><surname>Panigrahy</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">An analysis of data corruption in the storage stack</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Lakshmi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Bairavasundaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arpacidusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Remzi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Garth</forename><forename type="middle">R</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bianca</forename><surname>Goodson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Schroeder</surname></persName>
+		</author>
+		<idno>8:1-8:28</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Trans. Storage</title>
+		<imprint>
+			<biblScope unit="volume">4</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<date type="published" when="2008-11" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">An analysis of latent sector errors in disk drives</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Lakshmi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Garth</forename><forename type="middle">R</forename><surname>Bairavasundaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shankar</forename><surname>Goodson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jiri</forename><surname>Pasupathy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Schindler</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2007 ACM SIGMETRICS International Conference on Measurement and Modeling of Computer Systems, SIGMETRICS &apos;07</title>
+		<meeting>the 2007 ACM SIGMETRICS International Conference on Measurement and Modeling of Computer Systems, SIGMETRICS &apos;07<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2007" />
+			<biblScope unit="page" from="289" to="300" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<monogr>
+		<title level="m" type="main">The Datacenter As a Computer: An Introduction to the Design of Warehouse-Scale Machines</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andre</forename><surname>Luiz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Urs</forename><surname>Barroso</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Hoelzle</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2009" />
+			<publisher>Morgan and Claypool Publishers</publisher>
+		</imprint>
+	</monogr>
+	<note>1st edition</note>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">A new reliability model for post-cycling charge retention of flash memories</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Hanmant</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nick</forename><surname>Belgal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ivan</forename><surname>Righos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeff</forename><forename type="middle">J</forename><surname>Kalastirsky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><surname>Peterson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Neal</forename><surname>Shiner</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Mielke</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Reliability Physics Symposium Proceedings, 2002. 40th Annual</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2002" />
+			<biblScope unit="page" from="7" to="20" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Specifying and checking file system crash-consistency models</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">James</forename><surname>Bornholt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Antoine</forename><surname>Kaufmann</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jialin</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arvind</forename><surname>Krishnamurthy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Emina</forename><surname>Torlak</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xi</forename><surname>Wang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM SIGPLAN Notices</title>
+		<imprint>
+			<biblScope unit="volume">51</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="83" to="98" />
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Novel read disturb failure mechanism induced by FLASH cycling</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adam</forename><surname>Brand</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ken</forename><surname>Wu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sam</forename><surname>Pan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Chin</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Reliability Physics Symposium, 1993. 31st Annual Proceedings., International</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="1993" />
+			<biblScope unit="page" from="127" to="132" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">Error Patterns in MLC NAND Flash Memory: Measurement, Characterization, and Analysis</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yu</forename><surname>Cai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Erich</forename><forename type="middle">F</forename><surname>Haratsch</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Onur</forename><surname>Mutlu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ken</forename><surname>Mai</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Conference on Design, Automation and Test in Europe, DATE &apos;12</title>
+		<meeting>the Conference on Design, Automation and Test in Europe, DATE &apos;12<address><addrLine>San Jose, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>EDA Consortium</publisher>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="521" to="526" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Neighbor-cell assisted error correction for MLC NAND flash memories</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yu</forename><surname>Cai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gulay</forename><surname>Yalcin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Onur</forename><surname>Mutlu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Erich</forename><forename type="middle">F</forename><surname>Haratsch</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Osman</forename><surname>Unsal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adrian</forename><surname>Cristal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ken</forename><surname>Mai</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">In ACM SIGMET-RICS Performance Evaluation Review</title>
+		<imprint>
+			<biblScope unit="volume">42</biblScope>
+			<biblScope unit="page" from="491" to="504" />
+			<date type="published" when="2014" />
+			<publisher>ACM</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">A generic framework for testing parallel file systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jinrui</forename><surname>Cao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Simeng</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dong</forename><surname>Dai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mai</forename><surname>Zheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yong</forename><surname>Chen</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 1st Joint International Workshop on Parallel Data Storage &amp; Data Intensive Scalable Computing Systems</title>
+		<meeting>the 1st Joint International Workshop on Parallel Data Storage &amp; Data Intensive Scalable Computing Systems<address><addrLine>Piscataway, NJ, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>IEEE Press</publisher>
+			<date type="published" when="2016" />
+			<biblScope unit="volume">16</biblScope>
+			<biblScope unit="page" from="49" to="54" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Scalable testing of file system checkers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">João Carlos Menezes</forename><surname>Carreira</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rodrigo</forename><surname>Rodrigues</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">George</forename><surname>Candea</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rupak</forename><surname>Majumdar</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 7th ACM European Conference on Computer Systems, EuroSys &apos;12</title>
+		<meeting>the 7th ACM European Conference on Computer Systems, EuroSys &apos;12<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="239" to="252" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Understanding intrinsic characteristics and system implications of flash memory based solid state drives</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Feng</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><forename type="middle">A</forename><surname>Koufaty</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xiaodong</forename><surname>Zhang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM SIGMETRICS</title>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">Using crash hoare logic for certifying the fscq file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Haogang</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Daniel</forename><surname>Ziegler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tej</forename><surname>Chajed</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adam</forename><surname>Chlipala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Frans</forename><surname>Kaashoek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nickolai</forename><surname>Zeldovich</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 25th Symposium on Operating Systems Principles</title>
+		<meeting>the 25th Symposium on Operating Systems Principles</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="18" to="37" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">RAID: high-performance, reliable secondary storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Peter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Edward</forename><forename type="middle">K</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Garth</forename><forename type="middle">A</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Randy</forename><forename type="middle">H</forename><surname>Gibson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><forename type="middle">A</forename><surname>Katz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Patterson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Comput. Surv</title>
+		<imprint>
+			<biblScope unit="volume">26</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="145" to="185" />
+			<date type="published" when="1994-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Optimistic Crash Consistency</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vijay</forename><surname>Chidambaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thanumalayan</forename><surname>Sankaranarayana Pillai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi</forename><forename type="middle">H</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 24th ACM Symposium on Operating Systems Principles (SOSP &apos;13)</title>
+		<meeting>the 24th ACM Symposium on Operating Systems Principles (SOSP &apos;13)<address><addrLine>Farmington, PA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2013-11" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">Consistency Without Ordering</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vijay</forename><surname>Chidambaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tushar</forename><surname>Sharma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi</forename><forename type="middle">H</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 10th Conference on File and Storage Technologies (FAST&apos;12)</title>
+		<meeting>the 10th Conference on File and Storage Technologies (FAST&apos;12)<address><addrLine>San Jose, California</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2012-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">Ashvin Goel, and Angela Demke Brown. Recon: Verifying File System Consistency at Runtime</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Daniel</forename><surname>Fryer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kuei</forename><surname>Sun</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rahat</forename><surname>Mahmood</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tinghao</forename><surname>Cheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shaun</forename><surname>Benjamin</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 10th Conference on File and Storage Technologies (FAST&apos;12)</title>
+		<meeting>the 10th Conference on File and Storage Technologies (FAST&apos;12)<address><addrLine>San Jose, California</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2012-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">Tackling intracell variability in TLC flash through tensor product codes</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ryan</forename><surname>Gabrys</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eitan</forename><surname>Yaakobi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Laura</forename><forename type="middle">M</forename><surname>Grupp</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steven</forename><surname>Swanson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lara</forename><surname>Dolecek</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ISIT&apos;12</title>
+		<imprint>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="1000" to="1004" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<analytic>
+		<title level="a" type="main">The Google File System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanjay</forename><surname>Ghemawat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Howard</forename><surname>Gobioff</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shun-Tak</forename><surname>Leung</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Nineteenth ACM Symposium on Operating Systems Principles, SOSP &apos;03</title>
+		<meeting>the Nineteenth ACM Symposium on Operating Systems Principles, SOSP &apos;03<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2003" />
+			<biblScope unit="page" from="29" to="43" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Characterizing flash memory: anomalies, observations, and applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Laura</forename><forename type="middle">M</forename><surname>Grupp</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adrian</forename><forename type="middle">M</forename><surname>Caulfield</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joel</forename><surname>Coburn</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steven</forename><surname>Swanson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eitan</forename><surname>Yaakobi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Paul</forename><forename type="middle">H</forename><surname>Siegel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jack</forename><forename type="middle">K</forename><surname>Wolf</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 42nd Annual IEEE/ACM International Symposium on Microarchitecture, MI-CRO 42</title>
+		<meeting>the 42nd Annual IEEE/ACM International Symposium on Microarchitecture, MI-CRO 42<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="24" to="33" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<analytic>
+		<title level="a" type="main">Sqck: A declarative file system checker</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Haryadi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Abhishek</forename><surname>Gunawi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Rajimwale</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi</forename><forename type="middle">H</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arpacidusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 8th USENIX Conference on Operating Systems Design and Implementation, OSDI&apos;08</title>
+		<meeting>the 8th USENIX Conference on Operating Systems Design and Implementation, OSDI&apos;08<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2008" />
+			<biblScope unit="page" from="131" to="146" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">Eio: Error handling is occasionally correct</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cindy</forename><surname>Haryadi S Gunawi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Rubio-González</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Remzi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ben</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Liblit</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FAST</title>
+		<imprint>
+			<date type="published" when="2008" />
+			<biblScope unit="volume">8</biblScope>
+			<biblScope unit="page" from="1" to="16" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<analytic>
+		<title level="a" type="main">Wear unleveling: improving nand flash lifetime by balancing page endurance</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xavier</forename><surname>Jimenez</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Novo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Paolo</forename><surname>Ienne</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FAST</title>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="47" to="59" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">Parity lost and parity regained</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrew</forename><surname>Krioukov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Lakshmi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Garth</forename><forename type="middle">R</forename><surname>Bairavasundaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kiran</forename><surname>Goodson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Randy</forename><surname>Srinivasan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Thelen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arpacidusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FAST</title>
+		<imprint>
+			<date type="published" when="2008" />
+			<biblScope unit="volume">8</biblScope>
+			<biblScope unit="page" from="1" to="15" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<analytic>
+		<title level="a" type="main">The impact of random telegraph signals on the scaling of multilevel flash memories</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Kurata</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Otsuga</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Kotabe</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Kajiyama</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Osabe</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Sasago</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Narumi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Tokami</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O</forename><surname>Kamohara</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Tsuchiya</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">VLSI Circuits, 2006. Digest of Technical Papers. 2006 Symposium on</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2006" />
+			<biblScope unit="page" from="112" to="113" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<monogr>
+		<title level="m" type="main">How much can data compressibility help to improve nand flash memory lifetime? In FAST</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jiangpeng</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kai</forename><surname>Zhao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xuebin</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jun</forename><surname>Ma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ming</forename><surname>Zhao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tong</forename><surname>Zhang</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="227" to="240" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<analytic>
+		<title level="a" type="main">A study of linux file system evolution</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lanyue</forename><surname>Lu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Remzi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shan</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Lu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 11th USENIX Conference on File and Storage Technologies, FAST&apos;13</title>
+		<meeting>the 11th USENIX Conference on File and Storage Technologies, FAST&apos;13</meeting>
+		<imprint>
+			<date type="published" when="2013" />
+			<biblScope unit="page" from="31" to="44" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b36">
+	<analytic>
+		<title level="a" type="main">Extending the lifetime of flash-based storage through reducing write amplification from file systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Youyou</forename><surname>Lu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jiwu</forename><surname>Shu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Weimin</forename><surname>Zheng</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FAST</title>
+		<imprint>
+			<date type="published" when="2013" />
+			<biblScope unit="volume">13</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b37">
+	<analytic>
+		<title level="a" type="main">ffsck: The fast file system checker</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ao</forename><surname>Ma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chris</forename><surname>Dragga</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi</forename><forename type="middle">H</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Presented as part of the 11th USENIX Conference on File and Storage Technologies (FAST 13)</title>
+		<meeting><address><addrLine>San Jose, CA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX</publisher>
+			<date type="published" when="2013" />
+			<biblScope unit="page" from="1" to="15" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b38">
+	<analytic>
+		<title level="a" type="main">A fast file system for unix</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Marshall</forename><forename type="middle">K</forename><surname>Mckusick</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">William</forename><forename type="middle">N</forename><surname>Joy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Samuel</forename><forename type="middle">J</forename><surname>Leffler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><forename type="middle">S</forename><surname>Fabry</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Trans. Comput. Syst</title>
+		<imprint>
+			<biblScope unit="volume">2</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<biblScope unit="page" from="181" to="197" />
+			<date type="published" when="1984-08" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b39">
+	<analytic>
+		<title level="a" type="main">Crosschecking semantic correctness: The case of finding file system bugs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Changwoo</forename><surname>Min</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanidhya</forename><surname>Kashyap</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Byoungyoung</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chengyu</forename><surname>Song</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Taesoo</forename><surname>Kim</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 25th Symposium on Operating Systems Principles</title>
+		<meeting>the 25th Symposium on Operating Systems Principles</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="361" to="377" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b40">
+	<analytic>
+		<title level="a" type="main">Aries: A transaction recovery method supporting fine-granularity locking and partial rollbacks using write-ahead logging</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Mohan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Don</forename><surname>Haderle</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bruce</forename><surname>Lindsay</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hamid</forename><surname>Pirahesh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Peter</forename><surname>Schwarz</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Trans. Database Syst</title>
+		<imprint>
+			<biblScope unit="volume">17</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="94" to="162" />
+			<date type="published" when="1992-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b41">
+	<analytic>
+		<title level="a" type="main">Erratic Erase In ETOX/sup TM/ Flash Memory Array</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Ong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Frazio</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Mielke</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Pan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Righos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Atwood</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Lai</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Symposium on VLSI Technology, VLSI&apos;93</title>
+		<imprint>
+			<date type="published" when="1993" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b42">
+	<analytic>
+		<title level="a" type="main">IRON File Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Vijayan Prabhakaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Lakshmi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nitin</forename><surname>Bairavasundaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Haryadi</forename><forename type="middle">S</forename><surname>Agrawal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Gunawi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi</forename><forename type="middle">H</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arpacidusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 20th ACM Symposium on Operating Systems Principles (SOSP&apos;05)</title>
+		<meeting>the 20th ACM Symposium on Operating Systems Principles (SOSP&apos;05)<address><addrLine>Brighton, United Kingdom</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2005-10" />
+			<biblScope unit="page" from="206" to="220" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b43">
+	<analytic>
+		<title level="a" type="main">Coerced cache eviction and discreet mode journaling: Dealing with misbehaving disks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Abhishek</forename><surname>Rajimwale</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vijay</forename><surname>Chidambaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Deepak</forename><surname>Ramamurthi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi H Arpaci-Dusseau</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Dependable Systems &amp; Networks (DSN), 2011 IEEE/IFIP 41st International Conference on</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2011" />
+			<biblScope unit="page" from="518" to="529" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b44">
+	<analytic>
+		<title level="a" type="main">Disk failures in the real world: What does an MTTF of 1,000,000 hours mean to you?</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bianca</forename><surname>Schroeder</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Garth</forename><forename type="middle">A</forename><surname>Gibson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 5th USENIX Conference on File and Storage Technologies (FAST&apos;07)</title>
+		<meeting>the 5th USENIX Conference on File and Storage Technologies (FAST&apos;07)</meeting>
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b45">
+	<analytic>
+		<title level="a" type="main">Flash reliability in production: The expected and the unexpected</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bianca</forename><surname>Schroeder</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Raghav</forename><surname>Lagisetty</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arif</forename><surname>Merchant</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">14th USENIX Conference on File and Storage Technologies (FAST 16)</title>
+		<meeting><address><addrLine>Santa Clara, CA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2016-02" />
+			<biblScope unit="page" from="67" to="80" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b46">
+	<analytic>
+		<title level="a" type="main">Push-button verification of file systems via crash refinement</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Helgi</forename><surname>Sigurbjarnarson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">James</forename><surname>Bornholt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Emina</forename><surname>Torlak</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xi</forename><surname>Wang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of 12th USENIX Symposium on Operating Systems Design and Implementation (OSDI&apos;16)</title>
+		<meeting>12th USENIX Symposium on Operating Systems Design and Implementation (OSDI&apos;16)</meeting>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b47">
+	<analytic>
+		<title level="a" type="main">Understanding the impact of power loss on flash memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Huang-Wei</forename><surname>Tseng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Laura</forename><forename type="middle">M</forename><surname>Grupp</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steven</forename><surname>Swanson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 48th Design Automation Conference (DAC&apos;11)</title>
+		<meeting>the 48th Design Automation Conference (DAC&apos;11)</meeting>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b48">
+	<analytic>
+		<title level="a" type="main">Emulating Realistic Flash Device Errors with High Fidelity</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Simeng</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jinrui</forename><surname>Cao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Danny</forename><forename type="middle">V</forename><surname>Murillo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yiliang</forename><surname>Shi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mai</forename><surname>Zheng</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">IEEE International Conference on Networking, Architecture and Storage (NAS&apos;16</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b49">
+	<analytic>
+		<title level="a" type="main">Write once, get 50% free: Saving ssd erase costs using wom codes</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gala</forename><surname>Yadgar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eitan</forename><surname>Yaakobi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Assaf</forename><surname>Schuster</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FAST</title>
+		<imprint>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="257" to="271" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b50">
+	<analytic>
+		<title level="a" type="main">EX-PLODE: a lightweight, general system for finding serious storage system errors</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Junfeng</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Can</forename><surname>Sar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dawson</forename><surname>Engler</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Seventh Symposium on Operating Systems Design and Implementation (OSDI &apos;06)</title>
+		<meeting>the Seventh Symposium on Operating Systems Design and Implementation (OSDI &apos;06)</meeting>
+		<imprint>
+			<date type="published" when="2006-11" />
+			<biblScope unit="page" from="131" to="146" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b51">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yiying</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Leo</forename><forename type="middle">Prasath</forename><surname>Arulraj</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi H Arpaci-Dusseau</forename></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b52">
+	<analytic>
+		<title level="a" type="main">De-indirection for flash-based ssds with nameless writes</title>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX Conference on File and Storage Technologies (FAST&apos;12)</title>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b53">
+	<analytic>
+		<title level="a" type="main">End-to-end Data Integrity for File Systems: A ZFS Case Study</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yupu</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Abhishek</forename><surname>Rajimwale</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi</forename><forename type="middle">H</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 8th USENIX Conference on File and Storage Technologies, FAST&apos;10</title>
+		<meeting>the 8th USENIX Conference on File and Storage Technologies, FAST&apos;10<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="3" to="3" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b54">
+	<analytic>
+		<title level="a" type="main">Torturing Databases for Fun and Profit</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mai</forename><surname>Zheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joseph</forename><surname>Tucek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dachuan</forename><surname>Huang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Feng</forename><surname>Qin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mark</forename><surname>Lillibridge</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Elizabeth</forename><forename type="middle">S</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shashank</forename><surname>Zhao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Singh</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">11th USENIX Symposium on Operating Systems Design and Implementation (OSDI 14)</title>
+		<meeting><address><addrLine>Broomfield, CO</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="449" to="464" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b55">
+	<analytic>
+		<title level="a" type="main">Understanding the robustness of SSDs under power fault</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mai</forename><surname>Zheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joseph</forename><surname>Tucek</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 11th USENIX Conference on File and Storage Technologies (FAST&apos;13)</title>
+		<meeting>the 11th USENIX Conference on File and Storage Technologies (FAST&apos;13)</meeting>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+	<note>Feng Qin, and Mark Lillibridge</note>
+</biblStruct>
+
+<biblStruct xml:id="b56">
+	<analytic>
+		<title level="a" type="main">Reliability Analysis of SSDs under Power Fault</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mai</forename><surname>Zheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joseph</forename><surname>Tucek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Feng</forename><surname>Qin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mark</forename><surname>Lillibridge</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Bill</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Elizabeth</forename><forename type="middle">S</forename><surname>Zhao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Yang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM Transactions on Computer Systems (TOCS)</title>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

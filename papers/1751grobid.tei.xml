@@ -1,0 +1,432 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:09+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Enforcing Murphy&apos;s Law for Advance Identification of Run-time Failures *</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zach</forename><surname>Miller</surname></persName>
+							<email>zmiller@cs.wisc.edu</email>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">University of Wisconsin-Madison</orgName>
+								<orgName type="institution" key="instit2">University of Wisconsin-Madison</orgName>
+								<orgName type="institution" key="instit3">University of Wisconsin-Madison</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Todd</forename><surname>Tannenbaum</surname></persName>
+							<email>tannenba@cs.wisc.edu</email>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">University of Wisconsin-Madison</orgName>
+								<orgName type="institution" key="instit2">University of Wisconsin-Madison</orgName>
+								<orgName type="institution" key="instit3">University of Wisconsin-Madison</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ben</forename><surname>Liblit</surname></persName>
+							<email>liblit@cs.wisc.edu</email>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">University of Wisconsin-Madison</orgName>
+								<orgName type="institution" key="instit2">University of Wisconsin-Madison</orgName>
+								<orgName type="institution" key="instit3">University of Wisconsin-Madison</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Enforcing Murphy&apos;s Law for Advance Identification of Run-time Failures *</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Applications do not typically view the kernel as a source of bad input. However, the kernel can behave in unusual (yet permissible) ways for which applications are badly unprepared. We present Murphy, a language-agnostic tool that helps developers discover and isolate run-time failures in their programs by simulating difficult-to-reproduce but completely-legitimate interactions between the application and the kernel. Murphy makes it easy to enable or disable sets of kernel interactions, called gremlins, so developers can focus on the failure scenarios that are important to them. Gremlins are implemented using the ptrace interface, intercepting and potentially modifying an application&apos;s system call invocation while requiring no invasive changes to the host machine. We show how to use Murphy in a variety of modes to find different classes of errors, present examples of the kernel interactions that are tested, and explain how to apply delta debugging techniques to isolate the code causing the failure. While our primary goal was the development of a tool to assist in new software development, we successfully demonstrate that Murphy also has the capability to find bugs in hardened, widely-deployed software.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1.1">Motivation</head><p>Despite extensive in-house regression testing, buggy software is still released for a variety of reasons including incomplete test coverage, unexpected user inputs, and different run-time environments. Software developers want to systematically discover, identify, and fix application run-time failures before they affect users in the field. One * Supported in part by DoE contract DE-SC0002153, LLNL contract B580360, and NSF grant CCF-0953478. Opinions, findings, conclusions, or recommendations expressed herein are those of the authors and do not necessarily reflect the views of NSF or other institutions. challenge towards accomplishing this lofty goal is nondeterministic behavior at the level between the application and the kernel. A typical application makes thousands of calls into the kernel, and most of the time these calls respond in a repeatable manner. However, under certain run-time environment conditions, system calls into the kernel that typically succeed may return with legitimate but unexpected values.</p><p>A simple example is the write() system call: it usually succeeds when given valid input parameters, but fails if the disk is full. Does a given program behave in an acceptable and predictable manner in the event of a full disk? Often development teams only learn the answer when users report failures in the field. Another example is the read() system call, which can legitimately return fewer bytes than requested by the caller. This may happen if an interrupt occurs or if a slow device does not have all requested data immediately available. Do programs always check the number of bytes returned by a read() and react appropriately?</p><p>Complicating the situation is the fact that environmental conditions which bring about unexpected return values from the kernel are often hard to replicate in a typical automated testing environment. For instance, how should a regression test suite validate proper behavior in the event of a full disk? Actually filling the disk to capacity causes problems for other processes on the machine. Mounting a loopback device volume requires superuser privileges <ref type="bibr" target="#b11">[12]</ref>. Even creating a virtual machine with a full disk may not solve the problem, as this could cause faults in the test harness itself. Other environmental conditions can be even more challenging to reproduce. The consequence is that developers fail to perform continuous integration testing under these conditions. Across many imperfect human endeavors, Murphy's Law pessimistically predicts that "If anything can go wrong, it will." Unfortunately, this does not apply when testing software. Testing would find more bugs sooner if Murphy's Law were more strictly enforced.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1.2">Approach</head><p>Given the observation that a program ultimately interacts with its environment via the kernel interface, we offer a tool, called Murphy, to serve as an interposition agent between the application being tested and the kernel interface. Interposing at the kernel interface allows us to simulate a wide variety of environmental events. We allow enabling and disabling different sets of system call transformations, or gremlins, so developers can focus on the failure scenarios that are important to them. For example, when the application requests bytes from a file descriptor, the readone gremlin rewrites the system call to ask for and return one byte at a time.</p><p>Beyond the gremlins themselves, Murphy offers several additional mechanisms to steer its behavior. A flexible activation policy language lets developers focus gremlin activity based on the call location, values of actual arguments to the call, and various other run-time properties. A replayable gremlin activation log allows deterministic reproduction of failures and iterative root-cause analysis via delta debugging <ref type="bibr" target="#b18">[17]</ref>. The Murphy run-time API lets programs under test dynamically steer Murphy's actions based on the program's own internal state, further supporting automated testing and debugging.</p><p>The remainder of this paper is organized as follows. Section 2 describes the architecture of Murphy, including example gremlins and run-time steering mechanisms. Section 3 provides our results running Murphy, and related work is presented in Section 4. We conclude and suggest future work in Section 5.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Architecture and Implementation</head><p>Our descriptions here are necessarily brief; additional details appear in a companion technical report <ref type="bibr" target="#b9">[10]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">System Call Interposition</head><p>We use a customized version of the Parrot Virtual File System tool <ref type="bibr" target="#b15">[15]</ref> as the basis for our interposition mechanism. Parrot handles core tasks such as intercepting I/O-related system calls, decoding arguments, and replacing selected calls with new functionality. All of these actions are performed in user-space with no kernel modifications or special administrative privileges. Most uses of Parrot concern I/O virtualization for large-scale, distributed systems. We use Parrot here to simplify building gremlins.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1.1">Use of ptrace</head><p>Our implementation uses the ptrace interface to optionally modify interactions with the kernel, essentially acting as a "system interface interposition agent." <ref type="bibr" target="#b6">[7]</ref> When the application under test invokes a system call, the kernel suspends that process and passes control to Murphy, which intercepts and inspects the call. At this point, Murphy may decide to tamper with the program's execution by using the ptrace mechanism to peek (read) or poke (write) bytes into the traced program's address space. Depending upon the system call trapped and which gremlins are configured to be active, Murphy will either 1. pass the system call to the kernel and then pass the response back to the application without any modification of the input or output arguments;</p><p>2. immediately return a failure to the application without actually passing the request to the kernel; or 3. modify the input arguments to the system call before passing the call to the kernel, and pass the actual response back to the application.</p><p>Murphy is able to track and trace entire process families by trapping fork(), clone(), getppid() and others, and forwarding signals and process exit codes.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1.2">Trade-offs of ptrace Interposition</head><p>Our system call interposition approach has pros and cons. There is great ubiquity by trapping via ptrace, and great flexibility by interposing in user-space. One major benefit is being language agnostic: Murphy works with applications written in any language, including increasingly popular managed languages such as Python and Java. No source code is required, and environmental failures can be simulated without root privileges and without impacting other processes on the system not targeted for testing. Because Murphy supports tracing entire process trees, it is possible to test software stacks (such as LAMP) consisting of many different programs written in different languages, in addition to programs that are statically linked and/or linked with C run-times other than glibc.</p><p>This approach also has challenges. The Linux system call interface does not necessarily correspond neatly to application actions. For example, all of the network socket calls are multiplexed into one (complicated) system call. Similarly, the mapping between thread creation and coordination as familiarly described by the POSIX threads API manifests itself via a strange brew of clone() and futex() system calls. When developing new gremlins, figuring out how these APIs map onto the system call interface can be a time-consuming exercise. Furthermore, recent versions of the Linux kernel introduced vsyscall and vDSO mechanisms to accelerate system calls that do not require any real level of privilege to run, such as gettimeofday() <ref type="bibr" target="#b0">[1]</ref>. Calls that use these mechanisms do not cross the user/kernel boundary and therefore are invisible to Murphy.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">Gremlins</head><p>We implement several example gremlins within this general framework. These include gremlins that immediately return legitimate error codes such as errno EINTR or errno EAGAIN; gremlins that modify read() and write() to simulate interrupted I/O; gremlins that introduce different amounts of latency; and special-purpose gremlins that span multiple system calls, for example simulating a full disk partition by returning errno ENOSPC in situations where that would make sense. In general, gremlins can further be divided into two categories: halting and non-halting. Halting gremlins typically prevent the application from making any further progress, such as enospc that simulates a full disk. When enabling halting gremlins, a developer can test that an application does not simply crash or abort, but instead correctly handles the situation by shutting down in an acceptable manner and reporting the error to the end-user. On the other hand, non-halting gremlins such as readone (causes read() to return one byte at a time) should not typically cause program failure. If a program's regression test suite passes with no gremlins, it should continue to pass with any non-halting gremlins activated.</p><p>Gremlins require defined composition and precedence rules. For example, both the enospc and the writeone gremlins tamper with the write() system call. If two or more gremlins trap the same system call, can their behaviors be combined, and if not, which one should have priority? In our current implementation, composition and precedence rules are hard-coded into Murphy.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2.1">Challenges to Writing Realistic Gremlins</head><p>Implementation of a single gremlin may require trapping multiple system calls. For instance, consider the enospc gremlin. Trapping just write() is not sufficient to simulate a full disk. open(), mknod(), mkdir(), rename() and over a dozen other system calls could fail due to a full disk. Murphy traps all of these.</p><p>Other gremlins may need to trap and record data from multiple system calls in order to correctly reconstruct kernel state and keep interactions legitimate. For example, consider the cwdlongpath gremlin that simulates executing the program with the current directory set to a very long path. At first blush, this sounds simple: just trap the getcwd() system call and return errno ERANGE if the size of the caller's buffer is smaller than the maximum allowed POSIX path length. But what if the program explicitly does a chdir() to /usr, and then invokes getcwd()? If /usr is not a symbolic link, the caller may safely assume that a smaller buffer is sufficient.</p><p>Another example is our desire for gremlins which operate on file descriptors to be conditionally activated based on the fully qualified path name referenced by the descriptor. To accomplish this, Murphy always traps open() to maintain mappings from file descriptors to file names. At later calls, these mappings allow "decoding" file descriptors so that they can be made available as file names for use with gremlin conditional activation (see Section 2.3). Argument decoding requires extra care for gremlins that operate on multiple system calls, as the meanings of arguments vary from one call to another. Finally, to make this useful in practice (for example, simulating /tmp being full), Murphy also needs to store path names that are fully qualified and canonicalized, meaning Murphy needs to track the current working directory, resolve relative paths, and expand symbolic links.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.3">Use, Configuration, and Run-time API</head><p>To use Murphy, a developer simply invokes it with the name of the program to debug as a command-line argument. Optional command-line switches can specify the location of a configuration file and/or request the creation or replay of a gremlin activation log (see Section 2.4).</p><p>Each gremlin can be independently configured to be active, inactive, or conditionally active using a text-based configuration file. Activation conditions can be expressed in the ClassAd declarative policy language <ref type="bibr" target="#b14">[14]</ref>, providing great flexibility. A condition can be as simple as a random activation probability or can be more complex such as "activate when the file descriptor passed to this call corresponds to a file name that matches lib * .so."</p><p>A run-time API complements and extends static configuration. By calling into this API, the application under test can set arbitrary metadata, which is included in the gremlin activation log. Metadata might include source location information or relevant program state variables. Additional API functions allow the configuration described above to be modified dynamically for fine-grained, program-directed control over gremlin activation. Lastly, API functions allow the program to detach from Murphy and either suspend execution or immediately attach a debugger to the program under test. This helps the programmer follow their code into an area where they suspect it misbehaves. Taken together, the facilities offered by Murphy's run-time API help bridge the gap between an observed failure and the real root cause.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.4">Reproduction of Failures</head><p>Reliably reproducing failures is essential to software testing and debugging. If Murphy is to assist developers beyond just alerting them to the existence of a bug, it must be able to reproduce the problem on demand. Note that even if a program's system call profile is deterministic, the interleaving of system calls across multiple processes is decidedly non-deterministic. In order to reproduce gremlin-induced failures in multi-process code, we minimize non-deterministic behavior as follows:</p><p>1. Each gremlin has a separate pseudo-random number generator (PRNG) seed and state. Invoking the readone gremlin any number of times does not affect the PRNG for the writeone gremlin.</p><p>2. Multiple invocations of Murphy yield the same sequence of pseudo-random numbers.</p><p>3. For each process spawned by the application under test, Murphy maintains distinct system call statistics, gremlin states, PRNG state, and metadata.</p><p>4. Because the process ID (pid) assigned by the operating system changes during each re-run, Murphy assigns each newly spawned processes a virtual, monotonically increasing pid, or vpid. System call activity by this process is tracked using the tuple (pid, vpid).</p><p>Murphy can log an event whenever a gremlin modifies a system call. This log, called the gremlin activation log, contains a record indexed by the tuple (gremlin name, vpid) with the following fields: (1) how many times this particular gremlin was consulted to see if it wanted to modify the system call, (2) how many times Murphy has actually modified the system call, (3) the total count of all system system calls invoked by this vpid, and (4) the current value of user-supplied metadata for this process. Because this log uses the virtualized pid, and keeps track of the various system call statistics per vpid, successive runs of Murphy tracing the same program yield the same results, provided the program itself is deterministic.</p><p>Murphy can be instructed to replay the gremlin activation log while executing the program again, which produces the same results for deterministic programs. Murphy prints a warning if the count of total system calls for a given process does not match the log when a gremlin activation is replayed, letting the user know that things are not replaying identically. However, this is not fatal. In fact, it must be allowed later when minimizing the replay log (Section 2.5): removing certain gremlin invocations (such as readone) can affect how many subsequent system calls (such as read()) occur.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.5">Fixing Failures</head><p>One disadvantage of interposing at the system-call level is a disconnect between these calls and the application developer's view of the operations being performed. This disconnect could create an understanding gap when it comes time for the developer to localize and fix errant behavior discovered by Murphy. While we assert that the mere existence of a tool that can discover such errors on a multi-process and possibly multi-language application is of value, we also support an automated strategy to help bridge this gap.</p><p>The first step is to use delta debugging <ref type="bibr" target="#b18">[17]</ref> to shrink the failure-inducing gremlin activation log, thereby isolating just a few system calls that need to be manipulated to reproduce the failure. The second step uses Murphy to replay the minimized gremlin activation log, but now configured to suspend and detach from the application immediately upon replaying the last event in the log.</p><p>Delta debugging makes it easy for the programmer to focus their attention on the important system calls that behaved differently under Murphy. However, while very effective at minimizing gremlin activity, this does not completely bridge the gap between kernel interactions and source code. Thus, suspending after the last event leaves the program in a state where things are just about to go wrong. The user can attach with a debugger and directly observe the program's response to the manipulated system calls. In our experiments, this often results in a stack trace that pinpoints the exact line of buggy code.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Experimental Results</head><p>We applied Murphy to a variety of heavily-used open source packages. We ran the regression test suites of these packages primarily with non-halting gremlins enabled, and considered failed tests as bug candidates. We applied delta debugging per Section 2.5 to narrow down the code to be inspected. Often the activation log shrank to just a single system call, correlated with exactly one line of code. For example, we found a Perl interpreter bug by starting with an activation log containing 114,019 interleaved read and write system calls; delta debugging reduced this to just one vulnerable call that sufficed to cause the failure.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Ability to Detect and Pinpoint Bugs</head><p>Practically everything we tested failed with the eagain and eintr gremlins enabled. We could not run a single regression test suite with these gremlins active, as many test harnesses rely on tools like make that failed under the influence of these gremlins. The man pages for various system calls clearly document that they may return errnos EAGAIN or EINTR. Yet it seems that almost nothing actually checks for them. We also decided to forgo systematic testing with the latency-introducing gremlins given the limited time available for experimentation, because these obviously make the test suites run much slower.</p><p>Given the above, we focused our efforts primarily on testing with the readone and writeone gremlins. We found that even widely-used software failed to check for (or retry after) short reads or writes. Bash and Perl failed with short writes, while the widely-used OpenSSL library failed with short reads. The ubiquitous glibc also failed with short reads: the Linux dynamic loader failed if it could not read an executable or shared library's ELF header in one read(). Even the trivial /bin/true program failed in this manner. This is a sobering sign that the problems Murphy targets are truly endemic, affecting even the most basic functionality of the system.</p><p>Problems were by no means limited to C code, or even to compiled code in general: short writes caused failures in both the Perl and Python regression test suites. The Perl and Python interpreters propagated Murphy-induced unusual behavior up into scripts. This is consistent with both interpreters' documented behavior, but the scripts themselves were unprepared for the consequences. Across a variety of application domains and languages, the methodology discussed in Section 2.5 allowed us to quickly and easily pinpoint each bug in the source code. We have reported some bugs to upstream developers and expect to report more in the future. <ref type="bibr" target="#b0">1</ref> </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Performance</head><p>Instrumenting a Linux process through ptrace incurred overhead due to the nature of trapping every system call: this requires several context switches between user and kernel space even if Murphy leaves the call unchanged. To get a feel for this overhead, we measured the wall-clock time of running the OpenSSL test suite with and without Murphy instrumentation. First we ran the test suite with no gremlins enabled. This measured the ptrace overhead exclusive of any repercussions from manipulating the system calls. This took 34 seconds instead of the nonMurphy baseline of 6 seconds, for a slowdown of about 5.7×. Next we ran the test suite with the non-halting gremlins enabled. This incurred significant overhead: 325 seconds, or a 54× slowdown from the baseline. This was primarily due to readone and writeone: these gremlins dramatically increased the number of system calls that are actually invoked over the lifetime of a process.</p><p>To mitigate the performance impact of adding system calls, we added stateful gremlins similar to readone and writeone, called readone_s and writeone_s. These read/write one byte on the first invocation, and also remember the count of bytes that were requested but not read/written. If the next dynamic invocation asks to transmit exactly that remainder, then this suggests that the program under test is noticing the incomplete read/write and looping accordingly. It is likely that the program will continue to do so until its original request is fully satisfied. Therefore, when we see such a compensating invocation, we pass that second call into the kernel unmolested and reset the gremlin state for the next call.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">Validity</head><p>A bug candidate can be a false positive if Murphy simulates behavior which is truly impossible, not merely unusual. This may be due to platform-specific semantics of certain I/O devices or other POSIX mechanisms not reflected in Murphy gremlin logic. For example, Linux pipes are explicitly documented as atomic for small writes (i.e. smaller than PIPE_BUF). Therefore the writeone gremlin is overly pessimistic for writes to Linux pipes.</p><p>Another example is reading from the pseudo-random number source, /dev/urandom. Some specifications require that reads from this pseudo-device block until enough system entropy is available to satisfy the entire request. This is not a settled matter, however, and has been debated among highly knowledgeable developers <ref type="bibr" target="#b2">[3]</ref>. We suggest that the mere existence of this debate argues in favor of programming defensively, regardless of what the developers may eventually decide.</p><p>Beyond validity on any one platform, one goal of Murphy is to identify problematic code before it reaches an environment in which it fails. If code is ported to a new platform, the specialized semantics of one OS may not apply. For example, an OS for embedded devices may have smaller buffers and may make weaker guarantees than our reference platform. Some platforms may not support all of POSIX.1, or may not support the most recently ratified standard. Part of Murphy's value is its ability to identify these potential problems even on a platform where such behavior is impossible. Thus Murphy is especially helpful when cross-platform portability is a goal.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Related Work</head><p>Our work is closely related to software fault injection (SFI), which traps certain calls and introduces faults <ref type="bibr" target="#b5">[6]</ref>. Some SFI work actually corrupts memory, registers, or returned data <ref type="bibr" target="#b3">[4]</ref>. We return rare-but-legitimate values, never corrupting an otherwise-valid system. SFI often targets only specific areas of the system, using custom device drivers <ref type="bibr" target="#b16">[16]</ref> or operating at the boundary between shared libraries and the application <ref type="bibr" target="#b7">[8]</ref>. Murphy traps at the ptrace level and can intercept all system calls, allowing a much broader range of faults to be injected.</p><p>Fuzz testing runs programs on random inputs, often triggering failures due to lax input validation <ref type="bibr" target="#b8">[9]</ref>. However, programmers rarely view the kernel itself as potentially disruptive; our work shows the risks of this oversight by "fuzzing" the program from an unexpected direction. In addition, while fuzz inputs are often invalid, Murphy interferes in unusual but technically valid ways.</p><p>Dynamic memory-access checkers detect a narrow class of errors relating to pointer abuse <ref type="bibr" target="#b4">[5,</ref><ref type="bibr" target="#b10">11,</ref><ref type="bibr" target="#b12">13]</ref>. They cannot expose errors that occur only rarely in adverse environments unless the program is actually run in such an adverse environment. Murphy is complementary, as it creates exactly these adverse environments. Using Murphy and a memory-access checker simultaneously may reveal additional memory bugs that only manifest under the unusual circumstances that Murphy brings forth.</p><p>Many testing tools require access to the program's source code. Our approach is purely black box, suitable for robustness testing even of commercial, off-the-shelf (COTS) executables. Another black-box alternative is to add gremlins directly into an operating system, such as by modifying the User Mode Linux (UML) virtual machine <ref type="bibr" target="#b1">[2]</ref>. However, this would not provide any more information than we can get via ptrace. It could also destabilize components not targeted for testing, making the entire analysis less deterministic.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Conclusions and Future Work</head><p>Murphy helps application developers trigger, reproduce, and diagnose bugs arising from legitimate but unexpected kernel responses. Our approach uncovers several bugs even in widely deployed and well-tested code. Given this, we anticipate this approach will be even more valuable in the hardening and testing of new software.</p><p>Clearly, additional gremlins will expose more classes of bugs. Gremlins that simulate temporary network problems may be especially fruitful. Richer information about system call contexts will allow finer-grained gremlin activation and thus a more targeted hunt for some specific bugs. Additional state tracking by existing gremlins may reduce false positives and improve performance.</p><p>Murphy reveals pervasive bugs even in well-tested programs. Nothing we tested handled errnos EINTR or EAGAIN without failure. This raises an important question: is it naïve for a kernel to return these responses if nothing is going to deal with them correctly? Perhaps instead these types of failures should be squashed in the OS or run-time libraries before returning to the application. Our experience shows that this may be the only practical means to ensure these cases are handled correctly.</p><p>We wish to explore the creation of a defensive softwarehardening tool that squashes exactly the sort of errors that Murphy simulates. So many programs seem to have problems correctly handling various responses, especially errnos EAGAIN and EINTR. Therefore perhaps there is a need for such a hardening tool, complete with its own policy language describing how to handle errors (retry, block until success, timeout, no change, etc.). A more comprehensive survey of existing applications' behavior under Murphy would improve our understanding of software's implicit assumptions. This may motivate further research on mitigation strategies.</p></div>
+			<note place="foot" n="1"> http://lists.gnu.org/archive/html/bug-bash/ 2012-01/msg00066.html, http://sourceware.org/ bugzilla/show_bug.cgi?id=13601</note>
+		</body>
+		<back>
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title level="m" type="main">On vsyscalls and the vDSO</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Corbet</surname></persName>
+		</author>
+		<ptr target="http://lwn.net/Articles/446528/" />
+		<imprint>
+			<date type="published" when="2011-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title level="m" type="main">User Mode Linux</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Dike</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2006" />
+			<publisher>Prentice Hall</publisher>
+			<pubPlace>Upper Saddle River, NJ</pubPlace>
+		</imprint>
+	</monogr>
+	<note>ISBN 0131865056</note>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">U</forename><surname>Drepper</surname></persName>
+		</author>
+		<ptr target="https://lkml.org/lkml/2005/1/13/485" />
+		<imprint>
+			<date type="published" when="2005-01" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+		<title level="m" type="main">DOCTOR: an integrated software fault injection environment for distributed real-time systems. Computer Performance and Dependability Symposium, International, 0:0204</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Han</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><forename type="middle">G</forename><surname>Shin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">A</forename><surname>Rosenberg</surname></persName>
+		</author>
+		<idno type="doi">1087-2191.doi:10.1109/IPDS.1995.395831</idno>
+		<imprint>
+			<date type="published" when="1995" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Purify: Fast detection of memory leaks and access errors</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Hastings</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Joyce</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the Winter 1992 USENIX Conference</title>
+		<meeting>of the Winter 1992 USENIX Conference</meeting>
+		<imprint>
+			<date type="published" when="1991" />
+			<biblScope unit="page" from="125" to="138" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Fault injection techniques and tools</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M.-C</forename><surname>Hsueh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">K</forename><surname>Tsai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">K</forename><surname>Iyer</surname></persName>
+		</author>
+		<idno type="doi">0018-9162.doi:10.1109/2.585157</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Computer</title>
+		<imprint>
+			<biblScope unit="volume">30</biblScope>
+			<biblScope unit="page" from="75" to="82" />
+			<date type="published" when="1997-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Interposition agents: Transparently interposing user code at the system interface</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">B</forename><surname>Jones</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 14th ACM Symposium on Operating Systems Principles</title>
+		<meeting>the 14th ACM Symposium on Operating Systems Principles</meeting>
+		<imprint>
+			<date type="published" when="1993" />
+			<biblScope unit="page" from="80" to="93" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">LFI: A practical and general librarylevel fault injector</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">D</forename><surname>Marinescu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">C</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Intl. Conference on Dependeable Systems and Networks (DSN)</title>
+		<meeting>the Intl. Conference on Dependeable Systems and Networks (DSN)<address><addrLine>Lisbon, Portugal</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2009-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">An empirical study of the reliability of UNIX utilities</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">P</forename><surname>Miller</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Fredriksen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>So</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Workshop of Parallel and Distributed Debugging</title>
+		<meeting>the Workshop of Parallel and Distributed Debugging</meeting>
+		<imprint>
+			<date type="published" when="1990" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<monogr>
+		<title level="m" type="main">Murphy: An environment for advance identification of run-time failures</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Miller</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Tannenbaum</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Liblit</surname></persName>
+		</author>
+		<idno>1770</idno>
+		<imprint>
+			<date type="published" when="2012-04" />
+		</imprint>
+		<respStmt>
+			<orgName>Department of Computer Sciences, University of WisconsinMadison</orgName>
+		</respStmt>
+	</monogr>
+<note type="report_type">Technical Report</note>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Valgrind: A program supervision framework</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Nethercote</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Seward</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Third Workshop on Runtime Verification (RV)</title>
+		<imprint>
+			<date type="published" when="2003" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<monogr>
+		<title level="m" type="main">Loopback devices in linux</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Nguyen</surname></persName>
+		</author>
+		<ptr target="http://csulb.pnguyen.net/loopbackDev.html" />
+		<imprint>
+			<date type="published" when="2010-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<monogr>
+		<title level="m" type="main">Electric Fence</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Perens</surname></persName>
+		</author>
+		<ptr target="http://perens.com/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">/</forename><surname>Freesoftware/Electricfence</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Sept</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Matchmaking: Distributed resource management for high throughput computing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Raman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Livny</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Solomon</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Seventh IEEE International Symposium on High Performance Distributed Computing (HPDC7)</title>
+		<meeting>the Seventh IEEE International Symposium on High Performance Distributed Computing (HPDC7)<address><addrLine>Chicago, IL</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="1998-07" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Parrot: An application environment for data-intensive computing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Thain</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Livny</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Journal of Parallel and Distributed Computing Practices</title>
+		<imprint>
+			<date type="published" when="2004" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">Measuring fault tolerance with the FTAPE fault injection tool</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Tsai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Iyer</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Quantitative Evaluation of Computing and Communication Systems</title>
+		<editor>H. Beilner and F. Bause</editor>
+		<imprint>
+			<biblScope unit="volume">977</biblScope>
+			<biblScope unit="page" from="26" to="40" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<monogr>
+		<title/>
+		<idno type="doi">doi:10.1007/BFb0024305</idno>
+		<imprint>
+			<date type="published" when="1995" />
+			<publisher>Springer</publisher>
+			<pubPlace>Berlin / Heidelberg</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Simplifying and isolating failureinducing input</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Zeller</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Hildebrandt</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE TRANSACTIONS ON SOFTWARE ENGI-NEERING</title>
+		<imprint>
+			<biblScope unit="volume">28</biblScope>
+			<date type="published" when="2002" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

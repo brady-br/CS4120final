@@ -1,0 +1,883 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:49+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Unikernel Monitors: Extending Minimalism Outside of the Box</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dan</forename><surname>Williams</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">IBM T.J. Watson Research Center</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ricardo</forename><surname>Koller</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">IBM T.J. Watson Research Center</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Unikernel Monitors: Extending Minimalism Outside of the Box</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Recently, unikernels have emerged as an exploration of minimalist software stacks to improve the security of applications in the cloud. In this paper, we propose extending the notion of minimalism beyond an individual virtual machine to include the underlying monitor and the interface it exposes. We propose unikernel monitors. Each unikernel is bundled with a tiny, specialized monitor that only contains what the unikernel needs both in terms of interface and implementation. Unikernel monitors improve isolation through minimal interfaces, reduce complexity, and boot unikernels quickly. Our initial prototype, ukvm, is less than 5% the code size of a traditional monitor, and boots MirageOS unikernels in as little as 10ms (8× faster than a traditional monitor).</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Minimal software stacks are changing the way we think about assembling applications for the cloud. A minimal amount of software implies a reduced attack surface and a better understanding of the system, leading to increased security. Even better, if the minimal amount of software necessary to run an application is calculated automatically, inevitable human errors (and laziness) when trying to follow best practices can be avoided. Recently this sort of automated, application-centered, dependency-based construction of minimal systems has been explored to what some believe is its fullest extent: unikernels <ref type="bibr" target="#b18">[21]</ref> are stand-alone, minimal system images-built entirely from fine-grained modules that the application depends on-that run directly on virtual hardware.</p><p>Yet the exploration of minimal systems for the cloud via unikernels is only complete when viewed within a box: the box in this case being a virtual machine <ref type="bibr">(VM)</ref>. In this paper, we think outside the box and ask, in terms of the dependency-based construction of minimal systems, why stop at VM images? Is the interface between <ref type="figure">Figure 1</ref>: The unit of execution in the cloud as (a) a unikernel, built from only what it needs, running on a VM abstraction; or (b) a unikernel running on a specialized unikernel monitor implementing only what the unikernel needs. the application (unikernel) and the rest of the system, as defined by the virtual hardware abstraction, minimal? Can application dependencies be tracked through the interface and even define a minimal virtual machine monitor (or in this case a unikernel monitor) for the application, thus producing a maximally isolated, minimal execution unit for the application on the cloud? How would that work?</p><p>As shown in <ref type="figure">Figure 1</ref>, we propose that executables for the cloud should contain both the application (e.g., a unikernel) and a monitor. The monitor is responsible both for efficiently launching the application in an isolated context and providing a specialized interface for the application to exit out of the context (e.g., for I/O), containing only what the application needs, no more, no less. The bundling of each application with its own custom monitor enables better isolation than either VMs or containers, with a simple, customized, high-performing interface. The ability of a unikernel monitor to boot unikernels quickly (as low as 10ms) makes them well suited for future cloud needs, including transient microservices <ref type="bibr" target="#b2">[3,</ref><ref type="bibr" target="#b4">5]</ref> and zero-footprint <ref type="bibr" target="#b3">[4]</ref> operation.</p><p>In this position paper, we discuss how unikernel monitors could be automatically assembled from modules; specifically, how techniques used in package management to track application dependencies could extend through interface modules as well as monitor implementations. We also discuss the dangers and difficulties of running many different monitors in the cloud and how the small size of unikernel monitors (0.2% of a unikernel binary and 5% of the code base of traditional monitors like QEMU <ref type="bibr" target="#b9">[11]</ref>) admits mitigation techniques like code analysis and certification. Finally, we discuss how our prototype implementation, ukvm, demonstrates the feasibility of unikernel monitors by efficiently booting MirageOS unikernels <ref type="bibr" target="#b18">[21]</ref> with specialized interfaces.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Why Specialize the Monitor?</head><p>We argue that applications in the cloud should sit on top of specialized interfaces and the software layer underneath it, the monitor, should not be general-purpose. The desire to eliminate general-purpose OS abstractions is not new <ref type="bibr" target="#b11">[13]</ref>. As such, there have been many approaches to specialize application software stacks for performance or isolation, from seminal library OS work <ref type="bibr" target="#b12">[14,</ref><ref type="bibr">19]</ref> to its more recent incarnation on the cloud under the unikernel moniker <ref type="bibr" target="#b19">[22,</ref><ref type="bibr" target="#b20">23,</ref><ref type="bibr" target="#b26">29,</ref><ref type="bibr" target="#b24">27,</ref><ref type="bibr" target="#b10">12,</ref><ref type="bibr" target="#b14">16,</ref><ref type="bibr" target="#b6">8,</ref><ref type="bibr" target="#b5">7</ref>]. Yet specializing the underlying monitor has been less studied.</p><p>The cloud suffers from unnecessary problems because applications use general-purpose monitors and interfaces. Current clouds try to fit all applications as VMs with the x86 interface, or as containers with the POSIX interface. Despite an extremely wide range of possible interface levels to explore, we argue that any generalpurpose abstraction will suffer the same issues. More specifically, in this section, we describe how general purpose abstractions are not minimal, impose unnecessary complexity, and may introduce performance overheads.</p><p>Minimal Interfaces. In today's clouds, the interface to the rest of the system-whether full virtualization <ref type="bibr" target="#b9">[11]</ref>, paravirtualization <ref type="bibr" target="#b8">[10]</ref>, or OS-level (i.e., containers) <ref type="bibr" target="#b21">[24]</ref>-is wide and general-purpose, including many unnecessary entry points into the monitor. Since each application has different requirements, a generalpurpose interface cannot be minimal. For example, the virtual hardware abstraction exposed by KVM/QEMU is not minimal for an application because the VMM does not know whether a guest VM (application) will require a particular virtual device or interface. Exposing virtual device interfaces when they are not necessary can be disastrous for security, as demonstrated by the VENOM vulnerability in QEMU <ref type="bibr" target="#b7">[9]</ref>. With VENOM, a bug in virtual floppy drive emulation code could be exploited to break out of the guest, regardless of whether a virtual floppy drive is instantiated.</p><p>A specialized monitor can expose a minimal interface, determined by what the application needs, resulting in fewer vulnerabilities available to exploit. A specialized monitor exposes an off-by-default interface. Rather than trying to block interface exit points via a blacklist-style policy (e.g., Default Allow in AppArmor <ref type="bibr" target="#b1">[2]</ref>), exit points are explicitly introduced due to application needs, more like a whitelist.</p><p>In some cases, it may even be possible to eliminate seemingly-fundamental interfaces, like the network. Suppose a number of microservices in the cloud are intended to be chained together to implement a larger service. In today's clouds, each microservice would utilize the network to communicate. By specializing the monitor, network interfaces could be eliminated in favor of simpler serial input and output in a familiar pattern:</p><formula xml:id="formula_0">echo 1 | bundle1 | bundle2 | bundle3</formula><p>Even in the case of compromise, each microservice would not have a network device available to use for communication with the outside world.</p><p>Simplicity. Regardless of the width or the level of the interface, general-purpose monitors adhere to a generalpurpose interface. Any implementation in the monitor (underneath the interface) must be general enough to work for the full range of applications above, thereby introducing complexity. Simplicity is somehow related to the choice of interface level: any functionality implemented underneath the interface (in the monitor) must pay a "generality tax". For example, for an interface at the TCP level, the monitor must manage multiple tenants and resource sharing in the network stack. At the packet level, the monitor must only multiplex a NIC. In general, a lower-level interface needs to pay less "generality tax". However, even at the low layer, general-purpose monitors are still complex. Virtual hardware devices adhere to legacy standards (BIOS, PCI devices, DMA address restrictions, memory holes, etc.) so that general-purpose guests can operate them.</p><p>Specialized monitors, on the other hand, create opportunities to simplify both the guest and the monitor. Legacy standards are unnecessary for most applications in the cloud. For example, both the virtio <ref type="bibr" target="#b22">[25]</ref> frontend (in the guest) and back-end (in the monitor) can be completely removed in lieu of simpler, direct packetsending interfaces. Furthermore, with a specialized monitor, complex VM introspection techniques <ref type="bibr" target="#b13">[15]</ref>, which are brittle and suffer from inconsistencies and synchronization issues <ref type="bibr" target="#b25">[28]</ref>, can be replaced by introducing interfaces to facilitate introspection techniques and deal with</p><formula xml:id="formula_1">/* UKVM_PORT_NETWRITE */ struct ukvm_netwrite { void *data; /* IN */ int len; /* IN */ int ret; /* OUT */ };</formula><p>Figure 2: An example interface to send a network packet. synchronization issues. Finally, specialized interfaces to integrate with software written for general-purpose operating systems <ref type="bibr" target="#b23">[26]</ref> could simplify certain applications and their development.</p><p>It may be still advised to implement low-level interfaces rather than high-level interfaces in specialized monitors for security reasons (see Section 3), but specialized monitors do not incur a "generality tax".</p><p>Faster Boot Time. Boot time is especially important for emerging application domains including the Internet of Things (IoT) <ref type="bibr" target="#b17">[20]</ref>, network function virtualization (NFV) <ref type="bibr" target="#b19">[22]</ref>, and event triggered, subsecond-metered services like Amazon Lambda <ref type="bibr" target="#b2">[3]</ref>. In such environments, cloud-based services are expected to be created on the fly and then destroyed after they have performed their function. 1 As described above, guests running on general-purpose monitors often perform cumbersome virtual hardware negotiation and emulation, which-in addition to adding complexity-also increases boot time (e.g., to enumerate the virtual PCI bus). Efforts to improve the boot time on general-purpose monitors <ref type="bibr" target="#b0">[1]</ref> will eventually hit a limit where any further specialization of the monitor and guest to eliminate common discovery and negotiation may diminish the set of guests supported by the monitor. Such specialization is unacceptable for today's cloud, where there is one monitor that must support all guest workloads.</p><p>In situations where further specialization is acceptable-including the bundling of applicationspecific monitors with the applications themselves as we suggest-better performance has been demonstrated. For example, unikernels like ClickOS <ref type="bibr" target="#b19">[22]</ref> and MirageOS <ref type="bibr" target="#b18">[21]</ref> with Jitsu <ref type="bibr" target="#b17">[20]</ref> have been shown to boot in as low as 20ms on modified (specialized) VMM toolstacks.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Unikernel Monitors</head><p>We propose that each unikernel be distributed with its own specialized monitor. This monitor should have two tasks: 1) creating an isolated context to run the unikernel, and 2) taking action whenever the unikernel exits the isolated context. The monitor thereby maintains complete control over the unikernel. One of the actions the monitor may take is to destroy the unikernel.</p><p>A straightforward implementation of a unikernel monitor is as a specialized virtual machine monitor. In this case, hardware protection provides an isolated context, using hardware support for virtualization. If the unikernel exits its context for any reason (e.g., an I/O port operation, an illegal instruction, etc.) the hardware will trap into the monitor.</p><p>The default behavior for a monitor is to maintain complete isolation for the unikernel. A completely selfcontained unikernel is bundled with an extremely simple monitor. The monitor simply sets up the hardwareisolated context and runs the unikernel. It does not expose any interfaces to the unikernel: every unikernel exit results in the monitor immediately destroying the unikernel and reclaiming its resources. At this time, since the monitor is specialized for the (now destroyed) unikernel, the monitor no longer has work to do and can safely exit.</p><p>Of course, a unikernel that runs in complete isolation may not be terribly useful for the cloud. Interfaces between the unikernel and monitor are provided on a perapplication basis and do not need to adhere to established standards. Interfaces can exploit the fact that the monitor is able to access the memory contents of the unikernel. For instance, <ref type="figure">Figure 2</ref> shows an example interface to send a network packet. By writing the address of an instance of this structure to the I/O port defined by UKVM PORT NETWRITE, a unikernel will exit to the monitor. The monitor directly accesses the network packet in the unikernel's memory at the specified memory location, checks or sanitizes the packet, and then sends the packet to the physical network.</p><p>Building Monitors. In theory, a unikernel strives to be a single application assembled with a minimal amount of software to allow it to run. Simply running a library operating system is insufficient for minimalism. In addition, only the functions needed by the application should be included in the library OS for any specific unikernel. Some unikernel approaches apply a clever use of package management and dependency tracking to approximate a minimal build.</p><p>For example, MirageOS <ref type="bibr" target="#b18">[21]</ref>, which produces OCamlbased unikernels, leverages the OCaml package manager, OPAM, to track dependencies between components of their library OS. As depicted in <ref type="figure" target="#fig_0">Figure 3(a)</ref>, even modules that would typically be included by default in a monolithic OS, such as the TCP stack, are packages with tracked dependencies. In this example, the application requires TCP, so at compile time, the toolchain selects both TCP and a network interface driver to interface with the virtual NIC exposed by the VMM. Since the application does not use a filesystem, the toolchain ex- cludes filesystem modules and block device driver modules from the build. It is important to note that the back-end virtual devices and their interfaces may still be present in the overall system regardless of whether the application needs them. In <ref type="figure" target="#fig_0">Figure 3</ref>, dark gray boxes are included by default, whereas white boxes are selected based on application dependencies.</p><p>We propose extending the dependency-tracking notion through the monitor interface, more specifically by modifying the toolchain and the package manager. <ref type="figure" target="#fig_0">Figure 3(b)</ref> shows the same application that depends on TCP. At build time, the modified toolchain selects TCP and a network interface driver. Unlike the standard unikernel in <ref type="figure" target="#fig_0">Figure 3(a)</ref>, the network interface spans the unikernel and monitor; it is not written assuming a generic virtual network device implementation such as virtio <ref type="bibr" target="#b22">[25]</ref>. Furthermore, the network interface module carries an explicit dependency on the backend network implementation via a TAP device <ref type="bibr" target="#b16">[18]</ref>. In this case, the toolchain not only excludes filesystem modules and device driver modules from the unikernel, but from the monitor as well. If the application did not have a dependency chain to the network tap device, the toolchain would have excluded the tap driver, the interface, and the TCP module from the unikernel and monitor. The only default component in the monitor, guest setup, is the component that is responsible for booting the unikernel (and destroying it on any unhandled exit).</p><p>To realize such a system, there are many interesting issues to solve around how to specify or encode packages, especially those that span the interface, what granularity packages should be, and how to automatically build an entire unikernel monitor from such packages.</p><p>Securing the Monitors Unlike traditional virtual machine monitors in the cloud, there is not a single unikernel monitor for the cloud. From a cloud operation perspective, this implies that the cloud must evolve to support multiple monitors, a potentially different one for each unikernel. At first glance, this is a daunting proposition: it's hard enough to maintain a single virtual machine monitor in production, it would be near impossible to maintain a boundless number! However, after further reflection, we believe that monitors are small enough to be bundled with unikernels and safely run on the ubiquitous Linux KVM system. Implementation-wise, the unikernel monitor can be similar to a type-II hypervisor: essentially a userspace program that leverages the host for most resource management. For example, a unikernel monitor that occupies the same place in the stack as QEMU in a standard Linux KVM/QEMU system can run on any Linux host with the KVM module. As we describe in Section 4, our prototype is indeed similar to a type-II hypervisor.</p><p>It should be noted that, in this circumstance, the monitor will execute in the isolation context of a normal user process, which may not be secure enough for multitenant clouds. Given the fact that the interface between the monitor and the unikernel is customized, the lessthan-ideally-isolated monitor appears to be a straightforward channel for a unikernel to bypass its hardwarebased isolation. We believe that well-defined interfaces and a modular, minimal approach to monitor construction will help assuage these fears. Unikernels are already touted to be small, but the overall size of the monitor is but a fraction of the size of the unikernel, making them amenable to formal verification <ref type="bibr" target="#b15">[17]</ref> or audit. For example, our prototype monitor is just over 1000 lines of code, with a binary just .02% of a MirageOS-based static Web server unikernel binary. A cloud provider could mandate that each monitor be built from a set of certified modules.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">A Prototype: ukvm</head><p>In order to show the feasibility of this new unit of execution on the cloud, we now describe a prototype implementation of a unikernel monitor called ukvm. The source code is freely available <ref type="bibr">[6]</ref>. ukvm boots and acts as a monitor for a unikernel based on Solo5 <ref type="bibr">[6]</ref>, a thin opensource unikernel base, written in C, that (among other things) supports the MirageOS <ref type="bibr" target="#b18">[21]</ref> runtime and components. A Mirage application binary (compiled from OCaml code) is statically linked to the Solo5 kernel.</p><p>ukvm is a specialized monitor for a Solo5-based unikernel.</p><p>Architecturally, ukvm is a replacement for QEMU (specifically the user level side of a KVM/QEMU system   <ref type="figure">Figure 2</ref>. They provide zero-copy IO by allowing any address of memory to be used as a buffer (of any size), and making the call with no more than a single VM exit (no need to probe if the PCI bus is ready, as would be done with virtio). We implemented basic disk and network backends in ukvm by using TAP <ref type="bibr" target="#b16">[18]</ref> and host file reads and writes. <ref type="table">Table 4</ref> shows the lines of code needed for implementing Solo5 on top of QEMU versus ukvm. Most of the reduction in Solo5 comes by removing virtio and the loader. Also, notice how an application configured not to use the network would have 10% less code in ukvm. For a concrete estimate of the size of the monitor in relation to the unikernel, the ukvm binary is 23KB compared to the 11MB Solo5 executable image when linked against the www Mirage application (only 0.2%).</p><p>Our prototype implementation does not automatically select the minimal configuration needed to run; automatic selection is limited to the MirageOS components.</p><p>Boot Time. We measured boot time for ukvm and compared it against traditional virtualization approaches like QEMU, and to the more recent lkvm (used by kvmtool in clear containers <ref type="bibr" target="#b0">[1]</ref>). QEMU exposes a physical machine abstraction and lkvm is a more lightweight monitor that skips the BIOS and bootloader phase and jumps directly to the 64-bit kernel. lkvm and QEMU were configured to use virtio network and block devices. The three monitors were configured to use 512 MB of memory, and one 2.90GHz CPU core. Furthermore, the monitors were instrumented to trace the first VM instruction, the first serial output, the first network output, and the final halt instruction. <ref type="figure" target="#fig_1">Figure 4</ref> shows the boot times for QEMU, lkvm, and ukvm for 3 MirageOS applications: hello (prints "hello" to the console then exits), block (tests disk reads and writes), and www (serves static Web pages).</p><p>The gray bars on the left show the time spent on monitor initialization. As expected, QEMU takes the longest, with 80ms compared to lkvm that takes an average of 45ms, and ukvm with 10ms. ukvm and lkvm load the 64-bit kernel immediately, so the kernel produces its first serial output (the 's') quicker than QEMU, which unpacks an ISO file in real mode to load the kernel. The www bars show that ukvm is able to do real work as soon as the kernel starts as the kernel sends its first network packet (the 'n') 18 milliseconds after its first serial output. lkvm and QEMU, on the other hand, first discover these devices, then initialize them before sending, resulting in at least 100ms delay.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: Application dependencies determine software that is assembled into (a) a standard unikernel; or (b) a unikernel and monitor bundle. Dark boxes are included by default.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: Boot times for ukvm (U), lkvm (L), and QEMU (Q) for some applications. 's' and 'n' indicate the first serial and network output, respectively.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_1" validated="false"><head>Table 1 :</head><label>1</label><figDesc></figDesc><table>Lines of code for the kernel and the monitor for 
+the general-purpose QEMU, and the specialized ukvm. 
+
+a regular C main(). The memory and register setup in-
+cludes setting a linear page table (a unikernel has a single 
+address space), a stack, and loading registers with some 
+arguments for the kernel (like the memory size). 
+The I/O interfaces between ukvm and Solo5 look like 
+the one in </table></figure>
+
+			<note place="foot" n="1"> This is sometimes called a zero-footprint cloud. [4]</note>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Conclusion</head><p>We propose a new unit of execution for the cloud, built from the bundling of unikernels and specialized unikernel monitors. As a first step, with our prototype monitor, ukvm, we have shown that such monitors can be small and simple, yet powerful enough to run real unikernels. We believe the advantages of specializing cloud software stacks-including the monitor-are key to realizing the security and responsiveness needs of future clouds.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title level="m" type="main">An introduction to Clear Containers</title>
+		<ptr target="https://lwn.net/Articles/644675/.(Accessedon" />
+		<imprint>
+			<biblScope unit="page" from="2016" to="2019" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Apparmor</surname></persName>
+		</author>
+		<ptr target="http://wiki.apparmor.net/index.php/Main_Page" />
+		<imprint>
+			<biblScope unit="page" from="2016" to="2019" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aws</forename><surname>Lambda</surname></persName>
+		</author>
+		<ptr target="https://aws.amazon.com/lambda/.(Ac-cessedon2016-03-04" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Erlang On Xen</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ibm</forename><surname>Openwhisk</surname></persName>
+		</author>
+		<ptr target="https://developer.ibm.com/open/openwhisk/.(Accessedon" />
+		<imprint>
+			<biblScope unit="page" from="2016" to="2019" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title level="m" type="main">Javascript library operating system for the cloud</title>
+		<ptr target="http://runtimejs.org/" />
+		<imprint>
+			<date type="published" when="2015-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<monogr>
+				<ptr target="http://github.com/rumpkernel/rumprun" />
+		<title level="m">The rumprun unikernel and toolchain for various platforms</title>
+		<imprint>
+			<date type="published" when="2015-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>The</surname></persName>
+		</author>
+		<ptr target="http://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2015-3456" />
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Xen and the Art of Virtualization</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Barham</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Dragovic</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Fraser</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Hand</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Harris</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Ho</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Neugebauer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Pratt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Warfield</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of ACM SOSP</title>
+		<meeting>of ACM SOSP<address><addrLine>Bolton Landing, NY</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2003-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">QEMU, a fast and portable dynamic translator</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bellard</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX Annual Technical Conf. (FREENIX Track</title>
+		<meeting>of USENIX Annual Technical Conf. (FREENIX Track<address><addrLine>Anaheim, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2005-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<monogr>
+		<title level="m" type="main">Includeos: A minimal, resource efficient unikernel for cloud services</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bratterud</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Walla</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A.-A</forename><surname>Haugerud</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Engel-Stad</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">E</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Begnum</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Exterminate all operating system abstractions</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Engler</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">R</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kaashoek</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">F</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX HotOS</title>
+		<meeting>of USENIX HotOS<address><addrLine>Orcas Island, WA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="1995-05" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Exokernel: An operating system architecture for application-level resource management</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Engler</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">R</forename><surname>Kaashoek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">F</forename><surname>And O&amp;apos;toole</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">W</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of ACM SOSP (Copper Mountain</title>
+		<meeting>of ACM SOSP (Copper Mountain</meeting>
+		<imprint>
+			<date type="published" when="1995-12" />
+		</imprint>
+		<respStmt>
+			<orgName>CO</orgName>
+		</respStmt>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Terra: A virtual machine-based platform for trusted computing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Garfinkel</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Pfaff</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Chow</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Rosenblum</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Boneh</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">In ACM SIGOPS Operating Systems Review</title>
+		<imprint>
+			<biblScope unit="volume">37</biblScope>
+			<biblScope unit="page" from="193" to="206" />
+			<date type="published" when="2003" />
+			<publisher>ACM</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Osvoptimizing the operating system for virtual machines</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kivity</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Laor</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Costa</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Enberg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Harel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Marti</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zolotarov</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2014 usenix annual technical conference</title>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="61" to="72" />
+		</imprint>
+	</monogr>
+	<note>usenix atc 14</note>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Formal verification of an OS kernel</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Klein</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Elphinstone</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Heiser</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Andronick</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Cock</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Derrin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Elkaduwe</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Engelhardt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Kolanski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Norrish</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Sewell</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Tuch</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Winwood</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of ACM SOSP</title>
+		<meeting>of ACM SOSP<address><addrLine>Big Sky, MT</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2009-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">K42: building a complete operating system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Krasnyansky</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Universal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tun</forename><surname>Krieger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O</forename><surname>Auslander</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Rosenburg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Wis-Niewski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">W</forename><surname>Xenidis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Da</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Silva</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Ostrowski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Appavoo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Butrico</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Mergen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">T</forename><surname>Al</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">In ACM SIGOPS Operating Systems Review</title>
+		<imprint>
+			<biblScope unit="volume">40</biblScope>
+			<biblScope unit="page" from="133" to="145" />
+			<date type="published" when="1999" />
+			<publisher>ACM</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Just-in-time summoning of unikernels</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Madhavapeddy</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Leonard</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Skjegstad</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Gaza-Gnaire</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Sheets</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Scott</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Mortier</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Chaudhry</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Singh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Ludlam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Crowcroft</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Leslie</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Jitsu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX NSDI</title>
+		<meeting>of USENIX NSDI<address><addrLine>Oakland, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2015-05" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Unikernels: Library operating systems for the cloud</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Madhavapeddy</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Mortier</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Rotsos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Scott</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Singh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Gazagnaire</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Smith</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Hand</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Crowcroft</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of ACM ASPLOS</title>
+		<meeting>of ACM ASPLOS<address><addrLine>Houston, TX</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2013-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">ClickOS and the art of network function virtualization</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Martins</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Ahmed</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Raiciu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Olteanu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Honda</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Bifulco</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Huici</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX NSDI</title>
+		<meeting>of USENIX NSDI<address><addrLine>Seattle, WA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2014-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Rethinking the library os from the top down</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Porter</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">E</forename><surname>Boyd-Wickizer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Howell</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Olinsky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hunt</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">C</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM SIGPLAN Notices</title>
+		<imprint>
+			<biblScope unit="volume">46</biblScope>
+			<biblScope unit="page" from="291" to="304" />
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">Solaris Zones: Operating system support for consolidating commercial workloads</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Price</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tucker</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX LISA</title>
+		<meeting>of USENIX LISA<address><addrLine>Atlanta, GA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2004-11" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Towards a de-facto standard for virtual I/O devices</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Russell</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Virtio</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">SIGOPS OSR</title>
+		<imprint>
+			<biblScope unit="volume">42</biblScope>
+			<biblScope unit="page" from="95" to="103" />
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">A way forward: Enabling operating system innovation in the cloud</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Schatzberg</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Cadden</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Krieger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Appavoo</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX HotCloud</title>
+		<meeting>of USENIX HotCloud<address><addrLine>Philadelphia, PA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2014-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">Esseos: Haskell-based tailored services for the cloud</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stengel</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Schmaus</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kapitza</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 12th International Workshop on Adaptive and Reflective Middleware</title>
+		<meeting>the 12th International Workshop on Adaptive and Reflective Middleware<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2013" />
+			<biblScope unit="volume">4</biblScope>
+			<biblScope unit="page" from="1" to="4" />
+		</imprint>
+	</monogr>
+	<note>ARM &apos;13, ACM</note>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<monogr>
+		<title level="m" type="main">Exploring vm introspection: Techniques and trade-offs. SIGPLAN Not</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Suneja</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Isci</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>De</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lara</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bala</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2015-03" />
+			<biblScope unit="volume">50</biblScope>
+			<biblScope unit="page" from="133" to="146" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">Cooperation and security isolation of library oses for multi-process applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tsai</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C.-C</forename><surname>Arora</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><forename type="middle">S</forename><surname>Bandi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Jain</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Jannen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>John</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Kalodner</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">A</forename><surname>Kulkarni</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Oliveira</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Porter</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">E</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Ninth European Conference on Computer Systems</title>
+		<meeting>the Ninth European Conference on Computer Systems</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2014" />
+			<biblScope unit="page">9</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

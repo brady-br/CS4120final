@@ -1,0 +1,730 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:51+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">The Case for Unifying Data Loading in Machine Learning Clusters</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aarati</forename><surname>Kakaraparthy</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Wisconsin</orgName>
+								<address>
+									<settlement>Madison</settlement>
+								</address>
+							</affiliation>
+							<affiliation key="aff1">
+								<orgName type="laboratory">Microsoft Gray Systems Lab</orgName>
+								<address>
+									<settlement>Madison</settlement>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Abhay</forename><surname>Venkatesh</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Wisconsin</orgName>
+								<address>
+									<settlement>Madison</settlement>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amar</forename><surname>Phanishayee</surname></persName>
+							<affiliation key="aff2">
+								<orgName type="institution">Microsoft Research</orgName>
+								<address>
+									<settlement>Redmond</settlement>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shivaram</forename><surname>Venkataraman</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Wisconsin</orgName>
+								<address>
+									<settlement>Madison</settlement>
+								</address>
+							</affiliation>
+						</author>
+						<title level="a" type="main">The Case for Unifying Data Loading in Machine Learning Clusters</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Training machine learning models involves iteratively fetching and pre-processing batches of data. Conventionally, popular ML frameworks implement data loading within a job and focus on improving the performance of a single job. However, such an approach is inefficient in shared clusters where multiple training jobs are likely to be accessing the same data and duplicating operations. To illustrate this, we present a case study which reveals that for hyper-parameter tuning experiments , we can reduce up to 89% I/O and 97% pre-processing redundancy. Based on this observation, we make the case for unifying data loading in machine learning clusters by bringing the isolated data loading systems together into a single system. Such a system architecture can remove the aforementioned redundancies that arise due to the isolation of data loading in each job. We introduce OneAccess, a unified data access layer and present a prototype implementation that shows a 47.3% improvement in I/O cost when sharing data across jobs. Finally we discuss open research challenges in designing and developing a unified data loading layer that can run across frameworks on shared multi-tenant clusters, including how to handle distributed data access, support diverse sampling schemes, and exploit new storage media.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>With the widespread success of large scale machine learning for applications ranging from machine translation, image recognition to robotics, software frameworks like Tensorflow and Pytorch are being rapidly adopted by enterprises. Efficiently executing training jobs on shared enterprise clusters is thus an important requirement for developer productivity and resource utilization. Correspondingly, a number of previous efforts have focused on lowering the time spent in computation and communication <ref type="bibr" target="#b0">[1,</ref><ref type="bibr" target="#b4">4]</ref>.</p><p>In this paper, we study the role of data loading in machine learning frameworks and characterize how the data access patterns and data pre-processing steps contribute to overall performance. In existing machine learning clusters, we find that distributed storage systems typically store raw input files, and data loading and pre-processing is performed independently by each job that runs on the cluster. While this approach is suitable for standalone clusters running individual training workloads, there are a number of opportunities for improving data access in shared, multi-tenant clusters based on the specific properties of machine learning workloads:</p><p>• Temporally co-located jobs: We find that a number of machine learning jobs are generated by parameter tuning experiments <ref type="bibr" target="#b11">[11,</ref><ref type="bibr" target="#b17">17]</ref>. These jobs often share the same input files and are spawned to run in parallel. Our analysis of a workload trace from Microsoft ( §2.1) shows that up to 20 concurrent jobs are spawned by 40% of the experiments. On average we find that we can reduce up to 89% of I/O and 97% of pre-processing by unifying data loading.</p><p>• Data pre-processing overheads: Further, a number of machine learning models perform pre-processing on the input data to generate representations that are suitable for model training. Examples of this include cropping images or tokenizing text data <ref type="bibr" target="#b16">[16]</ref>. Reusing pre-processed data could especially be effective for temporally colocated jobs.</p><p>• Random data access patterns: Finally, machine learning algorithms are typically iterative and at each iteration sample a random subset of the input data. Frameworks usually support a number of sampling methods including sampling at every iteration or shuffling the data at end of every epoch. This provides an opportunity to convert random access into sequential access by considering the sampling method.</p><p>Based on these opportunities, we propose developing a unified data loading layer for machine learning clusters. As shown in <ref type="figure" target="#fig_0">Figure 1</ref>, we propose, OneAccess, a new data loading layer that can support multiple machine learning jobs and amortize the random sampling and data pre-processing across jobs. We present the design of OneAccess and using a prototype implementation, we find that OneAccess can improve data access I/O time by 47.3% while running two jobs in parallel.</p><p>There are a number of open challenges in building such a unified data loading layer and we present some initial ideas on extending our system to span across multiple machines, supporting additional random sampling methods, and managing lifetime of samples generated.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Background</head><p>In this section, we first motivate our study by analyzing concurrent jobs that read same input data ( §2.1). Following that, we describe the two main functions of data loading in machine learning frameworks ( §2.2) and discuss how these functions are implemented in widely used ML frameworks ( §2.3).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">Concurrent Jobs in the Cloud</head><p>To help us understand the importance of unifying data loading, we attempt to quantify how many concurrent jobs access the same dataset in a shared cluster. One class of concurrent jobs comes from hyperparameter 1 tuning workloads, which involve exploring the model configuration space to find the best fit for a given problem. Hyperparameter tuning is an important step in building machine learning models, and data scientists typically use frameworks like HyperDrive <ref type="bibr" target="#b17">[17]</ref> or Hyperband <ref type="bibr" target="#b11">[11]</ref> to submit parameter tuning experiments.</p><p>We conduct a study of the experiments performed on HyperDrive over a period of 30 days. Each hyperparameter tuning experiment consists of multiple jobs, each of which performs training on a different configuration of the model independently. We calculate the total number of jobs launched by each experiment and also compute how many of these jobs are run concurrently on a shared cluster. We observe that on an average, each experiment has about 35 jobs <ref type="figure" target="#fig_2">(Fig. 2a)</ref>. Although each experiment has multiple jobs, not all of them are launched simultaneously. We find that on an average, about 9 jobs are run concurrently <ref type="figure" target="#fig_2">(Fig. 2b)</ref>.</p><p>All the jobs launched for an experiment run on the same dataset and perform the same steps of fetching and preprocessing data, thus performing repetitive computation and redundant I/O calls. This study reveals the potential for saving (1 − 1 /9) = 89% of I/O calls if concurrent jobs share data during an epoch, and (1 − 1 /35) = 97% of the pre-processing computation performed if pre-processed data is persisted across jobs. Given the significant benefits that can be realized from unifying data loading, we next discuss the two main steps in loading data in machine learning frameworks.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">Data Loading for ML: Two Pieces</head><p>Machine learning models are typically trained in an iterative manner <ref type="bibr" target="#b10">[10]</ref> on batches of data over multiple epochs <ref type="figure">(Fig. 3)</ref>. The data loading module in a framework is responsible for generating batches, which are used for computing gradients and updating the model. On taking a closer look, there are two steps that need to be performed for generating batches.</p><p>The first step is fetching data from the underlying storage, which imposes a fundamental tradeoff between true randomness and the timely availability of data. As shown by previous work <ref type="bibr" target="#b13">[13,</ref><ref type="bibr" target="#b20">19]</ref>, the ordering of data points has a significant impact on the training process, with random sampling across the entire dataset having superior convergence guarantees. However, this requirement inherently contradicts with the behavior of persistent storage devices, where sequential accesses are much more desirable <ref type="bibr" target="#b1">[2,</ref><ref type="bibr" target="#b19">18]</ref>. Randomly accessing persistent storage is significantly slower than computation, and can potentially become a bottleneck. In distributed cloud settings, fetching data incurs an additional (non-uniform) latency of network transfer time, as the data can be spread across multiple machines. Thus, performing random access across the entire dataset becomes extremely challenging in the cloud.</p><p>Once the data has been fetched, the next step is preprocessing the data. In order to obtain a standard input format and also robustly train machine learning models, data scientists often apply operations such as cropping images, removing stop words from text, etc., on the data. This computation is fairly deterministic and repetitive across epochs, unless pre-processed data is persisted in some way.</p><p>In summary, optimizing data subsystems in machine learning frameworks requires studying data access patterns to persistent storage, and the computation required in preprocessing.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.3">Existing ML Frameworks</head><p>We study two popular ML frameworks, with particular focus on how data loading and preprocessing is performed. Based on this we determine the features that need to be supported by a unified data loading layer.  </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Training</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Fetch Data Preprocess</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Data Loading</head><p>Compute Gradients</p><p>Update Model</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Batches End</head><p>Figure 3: Iterative training of a model. The data loading module is responsible for fetching and preprocessing data, to generate batches used in training. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Number of Workers</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.3.1">PyTorch</head><p>PyTorch <ref type="bibr" target="#b15">[15]</ref> provides a base data loading module which needs to be extended for different datasets, as each of them can potentially have different storage formats. Data points are accessed one at a time using the __getitem__ interface, which is overwritten for each dataset. Preprocessing is performed individually for every data point before it is returned, and there is no built-in support for buffering pre-processed data.</p><p>The framework provides multiple sampling schemes (such as sequential, globally random, random within a subset), that determine the order in which points are accessed. However, the efficiency with which data is fetched is not optimized by the framework, and depends on the implementation of the data loading module for a given dataset.</p><p>A noteworthy technique incorporated into the base data loading module of PyTorch, is the utilization of multiprocessing to keep the operation of the data loading module independent from training. Multiple worker processes can be launched to fetch data in parallel, and repeatedly populate shared memory queues with batches that are used for training. An example of how this helps is shown in <ref type="table">Table 1</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.3.2">Tensorflow</head><p>Similar to PyTorch ( §2.3.1), the data sub-system of Tensorflow <ref type="bibr" target="#b0">[1]</ref> runs independently from the training process. However, Tensorflow provides a richer API for fetching and iterating over datasets. Multiple storage formats and sources of data are supported (e.g., images, text) by the framework, the most noteworthy being the TFRecord format which stores data linearly in a 100-200MB file for efficient access.</p><p>By default, data points in a dataset are accessed one at a time in a sequential order. However, applying a shuffle operation to the dataset provides some randomness by maintaining a fixed size buffer where data points are enqued sequentially and dequed in a random order. This approach leads to random sampling within a window, and is not random over all the points in the dataset. The API also provides the option to prefetch data points into a fixed size buffer for faster access.</p><p>Preprocessing is performed individually on each data point through the map operation. There are no built-in techniques for caching preprocessed data, and the map function on each point is repeated over epochs. However, preprocessed data can be optionally serialized and persisted as TFRecord files, in order to avoid repetitive computation.</p><p>In summary, both frameworks support a number of sampling schemes but they do not amortize data pre-processing, and do not optimize for concurrent jobs accessing the same data. While our prior discussion on concurrent jobs focused on jobs using the same framework, we also observe that we can amortize data loading for jobs across different frameworks.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Unified Data Access with OneAccess</head><p>OneAccess is an attempt towards building a unified data system for machine learning frameworks. Along with optimizing the process of fetching and preprocessing data, the framework also adds support for multiple ML training jobs running simultaneously sharing the same data. <ref type="figure" target="#fig_3">Fig. 4</ref> shows the architecture of OneAccess on a single machine.</p><p>OneAccess optimizes the process of fetching data through reservoir sampling <ref type="bibr" target="#b21">[20]</ref>. Reservoir sampling is a technique to generate uniformly random samples of data, while accessing the data sequentially. Thus, to realize the benefits of reservoir sampling, as well as to avoid repetitive computation, preprocessed data is serialized and stored in files on disk. There are two major sub-tasks performed independently by two types of processes.</p><p>First, sample creators running at each storage device, perform reservoir sampling on the data/samples from the layer below, and generate more compact samples to be stored in the layer above (sample creator 1 &amp; 2 in <ref type="figure" target="#fig_0">Fig. 1)</ref>. Second, the batch creator process generates batches of data from the reservoir samples in memory; batches are then consumed by multiple ML training processes. All of these processes run independently and replenish batches/samples once they are depleted. Given this design, the noteworthy features that OneAccess realizes are:</p><p>• Support for multiple jobs: OneAccess adds support for multiple ML training jobs running on the same data, so that steps related to fetching and preprocessing data are not duplicated. This is especially relevant in the cloud settings, where multiple concurrent programs could be replicating the same operations ( §2.1).</p><p>• Sequential storage of pre-processed data: Sequential accesses have significantly better performance when it comes to persistent storage devices. In OneAccess, we pre-process the data and store it sequentially in files on disk, which we refer to as the serialized intermediate data. Persisting pre-processed data eliminates repetitive computation.</p><p>• Uniform randomness while performing sequential accesses: OneAccess recursively performs reservoir sampling 2 across the memory hierarchy to fetch compact and uniformly random samples into memory. Through this approach, only sequential accesses are performed on persistent storage devices while creating samples, and all random accesses during batch creation are restricted to main memory.  of size 32GB. We benchmark and compare the time taken for generating batches by both the frameworks ( §4.1), and also measure the total I/O time saved when multiple concurrent processes use the same data system ( §4.2).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">Benchmarking Batch Creation</head><p>We compare OneAccess against the built-in dataloader of PyTorch for the MS-COCO Detection dataset <ref type="bibr" target="#b12">[12]</ref>. This dataset has 118K images of variable sizes, which need to be cropped to size 224×224. We measure the total time taken by both the frameworks to generate batches of 32 images during one epoch over the dataset.</p><p>Prior to creating batches, OneAccess generates a serialized intermediate data representation ( §3) which results in a one-time initial overhead of 24 minutes. The serialized representation for MS-COCO consists of nine files each around 2GB in size, consisting of about 13K cropped images. <ref type="table" target="#tab_1">Table 2</ref> shows the total time taken for creating batches over one epoch by both PyTorch and OneAccess. PyTorch was run with 1, 2, and 4 workers, whereas OneAccess has a single sample creator process alongside the batch creator (as we have a two-level storage hierarchy). The sample creator process repeatedly fills in an in-memory reservoir of size   <ref type="figure" target="#fig_0">(Fig. 1b)</ref> for two independent training jobs running on the CIFAR-10 dataset. When using a shared instance, the total I/O time is amortized between the jobs. We obtain an overall reduction of 47.3% against using separate instances of OneAccess.</p><p>12.8K images (400 batches), which are then consumed by the batch creator. Random sampling over entire dataset is used by both the frameworks in this experiment. We find that OneAccess is 3.6X and 1.9X faster compared to PyTorch with 1 and 2 workers respectively <ref type="table" target="#tab_1">(Table 2</ref>). This speed-up is the result of performing sequential accesses and persisting pre-processed data in a serialized manner. Although OneAccess has an initial overhead for generating the serialized intermediate representation, it is evident that this will be adequately amortized over a few epochs.</p><p>To test a distributed setup, We repeated the same experiment with two VMs on Amazon EC2 (m5d.2xlarge and p2.xlarge) running a NFS server and client. We found that OneAccess is around 1.7x faster than Pytorch with 1 worker and 1.1X slower than Pytorch with 2 workers. We found that the ratio of sequential to random SSD throughput resulted in lower benefits when running on AWS. We also plan to extend OneAccess to use multiple worker threads in the future.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Supporting Multiple Jobs</head><p>To evaluate the benefits of using a common data system, we run two independent training jobs in PyTorch, first with the conventional approach of using separate instances of OneAccess (similar to <ref type="figure" target="#fig_0">Fig. 1a)</ref>, and compare the total I/O time to that of a shared setup using a common instance of OneAccess (similar to <ref type="figure" target="#fig_0">Fig. 1b)</ref>. Both the jobs independently train a convolutional neural network on the CIFAR-10 dataset <ref type="bibr" target="#b9">[9]</ref>. OneAccess was configured to run with a single in-memory reservoir size of 3.2K images (100 batches), with a serialized intermediate representation of CIFAR-10 created beforehand.</p><p>In this case we observe that the total training time remains the same but we observe a significant reduction in the total I/O time ( <ref type="table" target="#tab_3">Table 3</ref>). The training time is unaffected as training is performed by a separate CPU thread. The smaller image sizes of CIFAR-10 (32x32) and use of CPU for training mean that the storage access time is smaller than time taken for compute. However, we do see that I/O is performed by the common instance of OneAccess and the overhead is amortized between the two processes. As expected, we find that the total I/O time reduces by 47.3% (the theoretical best would be 50%), showing the potential of our system for eliminating redundancy in storage access. We discuss more about data loading vs compute bottlenecks in the topics for discussion.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Future Work</head><p>There are a number of research challenges in building a machine learning data system. We next outline some of these challenges and propose some initial ideas to address them. Sampling schemes, convergence: Our prototype implementation of OneAccess has been focused on supporting random sampling with replacement over the entire dataset. However, recent theoretical research shows that other sampling schemes could result in faster convergence for algorithms like SGD <ref type="bibr" target="#b13">[13]</ref> and coordinate descent <ref type="bibr" target="#b7">[7]</ref>. Thus it is important for the data loading layer to be flexible and support custom sampling schemes. We plan to investigate creating a developer API that can be used to install new sampling schemes that can be used across framweorks. Distributed Data Access Systems: Our results presented in §4.2 assume that OneAccess has a centralized view of the data being accessed by different jobs. In order to build a unified data loading system for a large cluster, we plan to split our design into a control plane that monitors which samples are created and accessed by jobs, and a data plane that performs the sampling operation and serves batches to workers. For performance efficiency we would also need to investigate how to integrate our system with underlying distributed file systems, blob stores, databases etc. New Storage Media: The performance and sample sizes chosen by the sample creator module in OneAccess is determined by the type of media that is used to store data. With the widespread availability of NVMe based SSDs and introduction of Intel Optane drives <ref type="bibr" target="#b8">[8]</ref>, we plan to investigate how sample creation can automatically be tuned based on the device characteristics. Sample lifecycle: While the creation of samples in the background and caching pre-processed data can improve performance, they also lead to increase in storage requirements. We plan to develop techniques to automatically manage the lifecyle of samples created by coordinating with the cluster scheduler and plan to build upon prior work in data provenance <ref type="bibr" target="#b5">[5]</ref>, and derived dataset management <ref type="bibr" target="#b6">[6]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Conclusion</head><p>In conclusion, we make the case for unifiying data loading across machine learning frameworks deployed in shared clusters. We observe the ubiquity of machine learning experiments with a high number of concurrent jobs, and our analysis shows the potential for 89% of I/O operations and 97% of preprocessing computation that can be saved by unifying data loading across jobs. We propose a novel unified data loading system called OneAccess that serves as a first step towards achieving such savings. Our results using OneAccess running on CIFAR-10 that show an overall reduction of 47.3% in total I/O time of two concurrent jobs, thus showing the potential of a unified system.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Discussion Topics</head><p>This paper is likely to generate a discussion regarding the advantages and disadvantages of using a unified data loading system for machine learning jobs in the cloud. The main issues that we believe will generate discussion are Data loading vs. compute bottlenecks Pipelining data loading with computing of gradients means that the slower of the two steps will determine the overall latency of running an iteration. Trends in how storage media is getting faster vs. availability of more compute resources will make this an interesting discussion point. Further it will be interesting to discuss other benefits of avoiding I/O requests in terms of power savings or sharing resources with other datacenter applications.</p><p>Unifying data pre-processing across frameworks. While saving I/O costs and pre-processings costs for jobs using the same framework is relatively straightforward, our proposal of sharing pre-processing across frameworks will likely generate discussion on how we can handle different languages, and if a format like Apache Arrow can be used to achieve this.</p><p>Synchronizing data access across jobs. A potential challenge for training ML systems in the wild might be synchronizing data access across jobs. If the hyperparameter variation leads to a variation in training duration, and if we are synchronously loading data then jobs could be blocked on the slowest job. Some preliminary approaches to avoid this would be to relax sampling guarantees or have an in-memory cache that can handle requests from slower jobs.</p><p>Importance of locality. OneAccess is most applicable to a cluster computing scenario as that is where we can find the most redundancy in job execution. However, there might be challenges in implementing random sampling methods due to additional latency when fetching data across a number of machines. While prior work <ref type="bibr" target="#b3">[3,</ref><ref type="bibr" target="#b14">14]</ref> has shown that locality concerns can be overcome for big data analytics and filesystems, it remains to be seen how locality will affect random sampling.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: OneAccess: A unified data loading layer for machine learning. In (a), we show the design of current systems with standalone data loading; we're proposing a dedicated data loading layer in (b).</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head></head><label></label><figDesc>Distribution of number of jobs launched per experi- ment. We find that most experiments have 20, 50, and 100 jobs. On an average, each experiment has about 35 jobs. (b) Distribution of number of jobs launched concurrently. We observe that HyperDrive frequently launches 5, 10, or 20 jobs simultaneously. On an average, about 9 jobs are run concurrently for an experiment.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: Experiments running on HyperDrive over 30 days. We measure the number of jobs launched by each experiment, and how many of them run concurrently.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: The architecture of OneAccess. The Sample Creator1 process generates reservoir samples from data on disk, and stores them on SSD. These samples are consumed by Sample Creator 2, which creates smaller reservoir samples held in memory. The Batch Creator process consumes the samples in DRAM to generate batches used by multiple jobs. Framework Total Time (min) Pytorch (with 1 worker) 23 PyTorch (with 2 workers) 12 PyTorch (with 4 workers) 6.8 OneAccess (sample size 400) 6.4</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_1" validated="false"><head>Table 2 :</head><label>2</label><figDesc></figDesc><table>Benchmarking batch creation time for MS-COCO. We 
+
+measure the time taken to generate batches of size 32 for one 
+epoch. OneAccess is 3.6x and 1.9x faster compared to PyTorch 
+with 1 and 2 workers respectively. 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_3" validated="false"><head>Table 3 : Measuring the reduction in I/O time when using a</head><label>3</label><figDesc></figDesc><table>shared instance of OneAccess </table></figure>
+
+			<note place="foot" n="1"> A hyperparameter defines the configuration of the model, and does not change during training. For example, the learning rate, momentum, number of hidden layers, etc. are hyperparameters found in many deep learning models.</note>
+
+			<note place="foot" n="4"> Preliminary Results All the experiments in this section have been run on a single machine with a two-level storage hierarchy comprised of Samsung 960 EVO NVMe 500GB SSD, and a main memory 2 All points have equal probability of being present in the resulting reservoir sample. Additionally, it can also be proved that all subsets of data (of reservoir sample size) have equal probability of being the final sample.</note>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgements</head><p>We would like to thank the reviewers for their valuable feedback. This work is supported by the National Science Foundation (CNS-1838733). Shivaram Venkataraman is also supported by a Facebook faculty research award and support for this research was also provided by the Office of the Vice Chancellor for Research and Graduate Education at the University of Wisconsin, Madison with funding from the Wisconsin Alumni Research Foundation.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">Tensorflow: A system for large-scale machine learning</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Martín</forename><surname>Abadi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Paul</forename><surname>Barham</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jianmin</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhifeng</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andy</forename><surname>Davis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeffrey</forename><surname>Dean</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matthieu</forename><surname>Devin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanjay</forename><surname>Ghemawat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Geoffrey</forename><surname>Irving</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Isard</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">12th {USENIX} Symposium on Operating Systems Design and Implementation ({OSDI} 16)</title>
+		<imprint>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="265" to="283" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title level="m" type="main">Design tradeoffs for ssd performance</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nitin</forename><surname>Agrawal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vijayan</forename><surname>Prabhakaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ted</forename><surname>Wobber</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><forename type="middle">D</forename><surname>Davis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mark</forename><surname>Manasse</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rina</forename><surname>Panigrahy</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+				<title level="m">Annual Technical Conference, ATC&apos;08</title>
+		<meeting><address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2008" />
+			<biblScope unit="page" from="57" to="70" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Disk-locality in datacenter computing considered irrelevant</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ganesh</forename><surname>Ananthanarayanan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ali</forename><surname>Ghodsi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Scott</forename><surname>Shenker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ion</forename><surname>Stoica</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">HotOS</title>
+		<imprint>
+			<date type="published" when="2011" />
+			<biblScope unit="volume">13</biblScope>
+			<biblScope unit="page" from="12" to="12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">TVM: An automated endto-end optimizing compiler for deep learning</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tianqi</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thierry</forename><surname>Moreau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ziheng</forename><surname>Jiang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lianmin</forename><surname>Zheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eddie</forename><surname>Yan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Haichen</forename><surname>Shen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Meghan</forename><surname>Cowan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Leyuan</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yuwei</forename><surname>Hu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Luis</forename><surname>Ceze</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Carlos</forename><surname>Guestrin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arvind</forename><surname>Krishnamurthy</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">13th USENIX Symposium on Operating Systems Design and Implementation (OSDI 18)</title>
+		<meeting><address><addrLine>Carlsbad, CA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="578" to="594" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Dqbarge: Improving dataquality tradeoffs in large-scale internet services</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Chow</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kaushik</forename><surname>Veeraraghavan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Cafarella</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jason</forename><surname>Flinn</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">12th USENIX Symposium on Operating Systems Design and Implementation (OSDI 16)</title>
+		<meeting><address><addrLine>Savannah, GA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="771" to="786" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Nectar: Automatic management of data and computation in datacenters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pradeep</forename><surname>Kumar Gunda</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lenin</forename><surname>Ravindranath</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chandramohan</forename><forename type="middle">A</forename><surname>Thekkath</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yuan</forename><surname>Yu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Li</forename><surname>Zhuang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 9th USENIX Conference on Operating Systems Design and Implementation, OSDI&apos;10</title>
+		<meeting>the 9th USENIX Conference on Operating Systems Design and Implementation, OSDI&apos;10<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="75" to="88" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mert</forename><surname>Gurbuzbalaban</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Asuman</forename><surname>Ozdaglar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Nuri Denizcan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stephen J</forename><surname>Vanli</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Wright</surname></persName>
+		</author>
+		<idno type="arXiv">arXiv:1803.08200</idno>
+		<title level="m">Randomness and permutations in coordinate descent methods</title>
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+<note type="report_type">arXiv preprint</note>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Platform storage performance with 3d xpoint technology</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><forename type="middle">T</forename><surname>Hady</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Foong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Veal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Williams</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Proceedings of the IEEE</title>
+		<imprint>
+			<biblScope unit="volume">105</biblScope>
+			<biblScope unit="issue">9</biblScope>
+			<biblScope unit="page" from="1822" to="1833" />
+			<date type="published" when="2017-09" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<monogr>
+		<title level="m" type="main">Learning multiple layers of features from tiny images</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alex</forename><surname>Krizhevsky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Geoffrey</forename><surname>Hinton</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2009" />
+			<publisher>Citeseer</publisher>
+		</imprint>
+	</monogr>
+<note type="report_type">Technical report</note>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Imagenet classification with deep convolutional neural networks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alex</forename><surname>Krizhevsky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ilya</forename><surname>Sutskever</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Geoffrey</forename><forename type="middle">E</forename><surname>Hinton</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Advances in Neural Information Processing Systems</title>
+		<editor>F. Pereira, C. J. C. Burges, L. Bottou, and K. Q. Weinberger</editor>
+		<imprint>
+			<publisher>Curran Associates, Inc</publisher>
+			<date type="published" when="2012" />
+			<biblScope unit="volume">25</biblScope>
+			<biblScope unit="page" from="1097" to="1105" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lisha</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kevin</forename><surname>Jamieson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Giulia</forename><surname>Desalvo</surname></persName>
+		</author>
+		<idno type="arXiv">arXiv:1603.06560</idno>
+		<title level="m">Afshin Rostamizadeh, and Ameet Talwalkar. Hyperband: A novel bandit-based approach to hyperparameter optimization</title>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+<note type="report_type">arXiv preprint</note>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Microsoft coco: Common objects in context</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tsung-Yi</forename><surname>Lin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Maire</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Serge</forename><surname>Belongie</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">James</forename><surname>Hays</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pietro</forename><surname>Perona</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Deva</forename><surname>Ramanan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Piotr</forename><surname>Dollár</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C Lawrence</forename><surname>Zitnick</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">European conference on computer vision</title>
+		<imprint>
+			<publisher>Springer</publisher>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="740" to="755" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Convergence analysis of distributed stochastic gradient descent with shuffling</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Qi</forename><surname>Meng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wei</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yue</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhi-Ming</forename><surname>Ma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tieyan</forename><surname>Liu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Neurocomputing</title>
+		<imprint>
+			<date type="published" when="2019" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Flat datacenter storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeremy</forename><surname>Edmund B Nightingale</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jinliang</forename><surname>Elson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Owen</forename><surname>Fan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jon</forename><surname>Hofmann</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yutaka</forename><surname>Howell</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Suzue</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Presented as part of the 10th {USENIX} Symposium on Operating Systems Design and Implementation ({OSDI} 12)</title>
+		<imprint>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="1" to="15" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<monogr>
+		<title level="m" type="main">Automatic differentiation in pytorch</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adam</forename><surname>Paszke</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sam</forename><surname>Gross</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Soumith</forename><surname>Chintala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gregory</forename><surname>Chanan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Edward</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zachary</forename><surname>Devito</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zeming</forename><surname>Lin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alban</forename><surname>Desmaison</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Luca</forename><surname>Antiga</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adam</forename><surname>Lerer</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<monogr>
+		<title level="m" type="main">The effectiveness of data augmentation in image classification using deep learning</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Luis</forename><surname>Perez</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jason</forename><surname>Wang</surname></persName>
+		</author>
+		<idno type="arXiv">arXiv:1712.04621</idno>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+<note type="report_type">arXiv preprint</note>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Hyperdrive: Exploring hyperparameters with pop scheduling</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeff</forename><surname>Rasley</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yuxiong</forename><surname>He</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Feng</forename><surname>Olatunji Ruwase</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Yan</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 18th</title>
+		<meeting>the 18th</meeting>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Acm/Ifip/Usenix Middleware</forename><surname>Conference</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2017" />
+			<publisher>ACM</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">An introduction to disk drive modeling</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chris</forename><surname>Ruemmler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><surname>Wilkes</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Computer</title>
+		<imprint>
+			<biblScope unit="volume">27</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<biblScope unit="page" from="17" to="28" />
+			<date type="published" when="1994-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Breaking locality accelerates block gauss-seidel</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stephen</forename><surname>Tu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shivaram</forename><surname>Venkataraman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Ashia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alex</forename><surname>Wilson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Gittens</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Benjamin</forename><surname>Michael I Jordan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Recht</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 34th International Conference on Machine Learning</title>
+		<meeting>the 34th International Conference on Machine Learning</meeting>
+		<imprint>
+			<date type="published" when="2017" />
+			<biblScope unit="volume">70</biblScope>
+			<biblScope unit="page" from="3482" to="3491" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">Random sampling with a reservoir</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Jeffrey</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Vitter</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Mathematical Software (TOMS)</title>
+		<imprint>
+			<biblScope unit="volume">11</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="37" to="57" />
+			<date type="published" when="1985" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

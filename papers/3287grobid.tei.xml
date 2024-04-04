@@ -1,0 +1,1237 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T03:07+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Split/Merge: System Support for Elastic Execution in Virtual Middleboxes</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shriram</forename><surname>Rajagopalan</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dan</forename><surname>Williams</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hani</forename><surname>Jamjoom</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrew</forename><surname>Warfield</surname></persName>
+						</author>
+						<author>
+							<affiliation key="aff0">
+								<orgName type="institution">IBM T. J. Watson Research Center</orgName>
+								<address>
+									<settlement>Yorktown Heights</settlement>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<affiliation key="aff1">
+								<orgName type="institution">NY ‡ University of British Columbia</orgName>
+								<address>
+									<settlement>Vancouver</settlement>
+									<country key="CA">Canada</country>
+								</address>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Split/Merge: System Support for Elastic Execution in Virtual Middleboxes</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Developing elastic applications should be easy. This paper takes a step toward the goal of generalizing elasticity by observing that a broadly deployed class of software-the network middlebox-is particularly well suited to dynamic scale. Middleboxes tend to achieve a clean separation between a small amount of per-flow network state and a large amount of complex application logic. We present a state-centric, systems-level abstraction for elastic middleboxes called Split/Merge. A virtual middle-box that has appropriately classified its state (e.g., per-flow state) can be dynamically scaled out (or in) by a Split/Merge system, but remains ignorant of the number of replicas in the system. Per-flow state may be transparently split between many replicas or merged back into one, while the network ensures flows are routed to the correct replica. As a result, Split/Merge enables load-balanced elasticity. We have implemented a Split/Merge system, called FreeFlow, and ported Bro, an open-source intrusion detection system, to run on it. In controlled experiments , FreeFlow enables a 25% reduction in maximum latency while eliminating hotspots during scale-out and a 50% quicker scale-in than standard approaches.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>The prevalence of Infrastructure as a Service (IaaS) clouds has given rise to a new breed of applications that better support elasticity: the ability to scale in or out to handle variations in workloads <ref type="bibr" target="#b16">[17]</ref>. Fundamental to achieving elasticity is the ability to create or destroy virtual machine (VM) instances, or replicas, and partitioning work between them <ref type="bibr" target="#b13">[14,</ref><ref type="bibr" target="#b33">34]</ref>. For example, a 3-tier Web application may scale out the middle tier and balance requests between them. Consequently, the-virtual-middleboxes that these applications rely on (such as firewalls, intrusion detection systems, and protocol accelerators) must scale in a similar fashion.</p><p>A recent survey of 57 enterprise networks of various sizes found that scalability was indeed critical for middleboxes <ref type="bibr" target="#b23">[24]</ref>.</p><p>Due to the diversity of cloud applications, supporting elasticity has been mostly the burden of the application or application-level framework <ref type="bibr" target="#b6">[7]</ref>. For example, it is their responsibility to manage replicas and ensure that each replica will be assigned the same amount of work <ref type="bibr" target="#b0">[1]</ref>. In the worst case, imbalances between replicas can result in inefficiencies, hotspots (e.g., overloaded replicas with degraded performance) or underutilized resources <ref type="bibr" target="#b32">[33]</ref>.</p><p>Unlike generic cloud applications, middleboxes share a unique property that can be exploited to achieve efficient, balanced elasticity. Despite the complex logic involved in routing or detecting intrusions, middleboxes are often implemented around the idea that each individual flow is an isolated context of execution <ref type="bibr" target="#b21">[22,</ref><ref type="bibr" target="#b25">26,</ref><ref type="bibr" target="#b30">31]</ref>. Middleboxes typically classify packets to a specific flow, and then interact with data specific to that flow <ref type="bibr" target="#b8">[9,</ref><ref type="bibr" target="#b29">30]</ref>. By replicating a middlebox and adjusting the flows that each replica receives from the network-and the associated state held by each replica-any middlebox can maintain balanced load between replicas as the middlebox scales in or out.</p><p>To this end, we present a new hypervisor-level abstraction for virtual middleboxes called Split/Merge. A Split/Merge-aware middlebox may be replicated at will, yet remains oblivious to the existence of replicas. Split/Merge divides a middlebox application's state into two broad classes: internal and external. Internal state is treated similarly to application logic: it is required for a given replica to run, but is of no consequence outside that replica's execution. External state describes the application state that is actually scaled, and can be thought of as a large distributed data structure that is managed across all replicas. It can be further subdivided into to classes: partitioned and coherent state. Partitioned state is exclusively accessed, flow-specific data, and is the fun-damental unit of reconfiguration in a Split/Merge system. Coherent state describes additional, often "global" state such as counters, that must remain consistent-either strongly or eventually-among all replicas.</p><p>We have designed and implemented FreeFlow, a system that implements Split/Merge to provide efficient, balanced elasticity for virtual middleboxes. FreeFlow splits flow-specific state among replicas and dynamically rebalances both existing and new flows across them. To enable middlebox applications to identify external state, associate it with network flows, and manage the migration of partitioned state between replicas, we have implemented an application-level FreeFlow library. In addition, we have implemented a Split/Merge-aware software defined network (SDN) that enables FreeFlow to partition the network such that each replica receives the appropriate network traffic even as partitioned state migrates between replicas.</p><p>FreeFlow enables elasticity by creating and destroying VM replicas, while balancing load between them. We have ported Bro <ref type="bibr" target="#b18">[19]</ref>, a real-world intrusion detection system, and built two synthetic middleboxes on FreeFlow. Using these middleboxes, we show that FreeFlow eliminates hotspots created during scale-out and inefficiencies during scale-in. In particular, it reduces the maximum latency by 25% after rebalancing flows during scale-out and achieves 50% quicker scale-in than standard approaches.</p><p>To summarize, the contributions of this paper are:</p><p>• a new hypervisor-level state abstraction that enables flow-related middlebox state to be identified, split, and merged between replica instances,</p><p>• a network abstraction that ensures that network input related to a particular flow-related piece of middlebox state arrives at the appropriate replica, and</p><p>• a system, FreeFlow, that implements Split/Merge alongside VM scale-in and scale-out to enable balanced elasticity for middleboxes.</p><p>The rest of this paper is organized as follows. Section 2 describes middleboxes and the Split/Merge abstraction. Section 3 describes the design and implementation of FreeFlow. Section 4 describes our experience in porting and building middleboxes for FreeFlow. Section 5 evaluates FreeFlow, Section 6 surveys related work, and Section 7 concludes.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Split/Merge</head><p>In this section, we describe the common structure in which middlebox state is organized. Motivated by this common structure, we define the three types of states exposed by the Split/Merge abstraction. We then describe how robust elasticity is achieved by tagging state and transparently partitioning network input across virtual middlebox replicas. We conclude the section with design challenges.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">Anatomy of a Virtual Middlebox</head><p>A middlebox is defined as "any intermediary device performing functions other than the normal, standard functions of an IP router on the datagram path between a source host and destination host" <ref type="bibr" target="#b3">[4]</ref>. Middleboxes can vary drastically in their function, performing such diverse tasks as network address translation, intrusion detection, packet filtering, protocol acceleration, and acting as a network proxy. However, middleboxes typically process packets and share the same basic structure <ref type="bibr" target="#b8">[9,</ref><ref type="bibr" target="#b11">12,</ref><ref type="bibr" target="#b29">30]</ref>. <ref type="figure" target="#fig_0">Figure 1</ref> shows the basic structure of a middlebox. State held by a middlebox can be characterized as policy and configuration data or as run-time responses to network flows <ref type="bibr" target="#b8">[9,</ref><ref type="bibr" target="#b25">26,</ref><ref type="bibr" target="#b29">30,</ref><ref type="bibr" target="#b30">31]</ref>. The former is provisioned, and can include, for example, firewall rules or intrusion detection rules. The latter, called flow state is created on-the-fly when packets of a new flow are received for the first time or through an explicit request. Flow state can vary in size. For example, on seeing a packet from a new flow, a middlebox may generate some small state like a firewall pinhole or a NAT translation entry, or it may begin to maintain a buffer to reconstruct a TCP stream.</p><p>Flow state is stored in a flow table data structure and accessed using flow identifiers (packet headers) as keys. <ref type="figure" target="#fig_0">(Figure 1</ref>) Models of middleboxes have been developed that represent state as a key-value database indexed by addresses (e.g., a standard IP 5-tuple) <ref type="bibr" target="#b11">[12]</ref>. A middlebox may have multiple flow tables (e.g., per network interface). It may also contain timers that refer to flow state, for example, to clean up stale flows.</p><p>We have performed a detailed analysis of the source code or specifications of several middleboxes to confirm that they fit into this model. We discuss three of them below:</p><p>Bro. <ref type="bibr">Bro [19]</ref> is a highly stateful intrusion detection system. It maintains a flow table in the form of a dictionary of Connection objects, indexed by the standard IP 5-tuple without the protocol field. Inside the Connection objects, flow-related state varies depending on the protocol analyzers that are being used. Analyzer objects contain state machine data for a given protocol (e.g., HTTP) and reassembly buffers to reconstruct a request/response payload, leading to tens of kilobytes per flow in the common case. A dictionary of timers is maintained for each Connection object. Bro also contains statistics and configuration settings. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">The Split/Merge Abstraction</head><p>The Split/Merge abstraction enables transparent and balanced elasticity for virtual middlebox applications. Using Split/Merge, middlebox applications can continue to be written and configured oblivious to the number of replicas that may be instantiated. Each replica perceives an identical VM abstraction, down to the details of the MAC address on the virtual network interface card.</p><p>As depicted <ref type="figure" target="#fig_1">Figure 2</ref>, using Split/Merge, the output of a middlebox application remains consistent, regardless of the number of replicas that have been instantiated or destroyed throughout its operation. Slightly more formally: Definition. Let a VM be represented by a state machine that accepts input from the network, reads or writes some internal state, and produces output back to the network. A Split/Merge-aware VM is abstractly defined as a set of identical state machine replicas; the aggregate output of which-modulo some reordering-is identical to that of a single machine, despite the partitioning of the input between the replicas. Consistency is achieved by ensuring that each replicated state machine can access the state required to produce the appropriate output in response to its share of the input.</p><p>There are two types of state in a Split/Merge-aware VM <ref type="figure" target="#fig_0">(Figure 1</ref>): internal and external state. Internal state is relevant only to a single replica. It can also be thought of as "ephemeral" <ref type="bibr" target="#b4">[5]</ref>; its contents can deviate between replicas of the state machine without affecting the consistency of the output. Examples of internal state include background operating system processes, cache contents, and temporary side effects. External state, on the other hand, transcends a single replica. If accessed by any replica, external state cannot deviate from what it would have been in a single, non-replicated state machine without affecting output consistency. For example, a NAT may look up the port translation for a particular flow. Any deviation in the value of this state would cause the middlebox to malfunction, violating consistency. As depicted in <ref type="figure" target="#fig_0">Figure 1</ref>, external state can take two forms: partitioned or coherent. Partitioned state is made up of a collection of sub-states, each of which are intrinsically tied to a subset of the input and therefore only need to be accessed by the state machine replica that is handling that input. The NAT port translation state is an example of partitioned state, because only the replica handling the network flow in question must access the state. Coherent state, on the other hand, is accessed by multiple state machine replicas, regardless of how the input is partitioned. In <ref type="figure" target="#fig_0">Figure 1</ref>, the flow table and timers reside in partitioned state, while configuration information and statistics reside in coherent state.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.3">Using Split/Merge for Elasticity</head><p>Figure 3 depicts how the state of a middlebox VM is split and merged when elastically scaling out and in. On scale-out, internal state is replicated with the VM, but begins to diverge as each replica runs independently. Coherent state is also replicated with the VM, but remains consistent (or eventually consistent) because access to coherent state from each replica is transparently coordinated and controlled. Partitioned state is split among the VM replicas, allowing each replica to work in parallel with its own sub-state. At the same time, the input to the VM is partitioned, such that each replica receives only the input pertinent to its partitioned sub-state.</p><p>On scale-in, one of the replicas is selected to be destroyed. Internal state residing at the replica can be safely discarded, since it is not needed for consistent output. Coherent state may be discarded when any outstanding updates are pushed to other replicas. The sub-states of the partitioned state residing at the dying replica are merged into a surviving replica. At the same time, the input that was destined for the dying replica is also redirected to the surviving replica now containing the partitioned sub-state.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.4">Challenges</head><p>To implement a system that supports Split/Merge for virtual middleboxes, several challenges need to be met.</p><p>C1. VM state must be classified. For virtual middlebox applications to take advantage of Split/Merge, each application must identify which parts of its VM state are internal vs. external. Fortunately, the structure of middleboxes ( <ref type="figure" target="#fig_0">Figure 1</ref>) is naturally well-suited to this task. The flow table of middleboxes already associates partitioned state with a subset of the input, namely network flows.</p><p>C2. Transactional boundaries must be respected. In some cases, a middlebox application may need to convey that it finished processing relevant input before partitioned state can be moved from one VM to another. For example, an IDS may continuously record information about a connection's state; such write operations must complete before the state can be moved. Other cases, such as a NAT looking up a port translation, do not have such transactional constraints.</p><p>C3. Partitioned state must be able to move between replicas. Merging partitioned state from multiple replicas requires at the most primitive level the ability to move the responsibility for a flow from one replica to another. In addition to moving the flow state, the replica receiving the flow must update its flow table data structures and timer structures so that it can readily access the state.</p><p>C4. Traffic must be routed to the correct replica. As partitioned state-associated with network flowsis split between VM replicas, the network must ensure that the appropriate flows arrive at the replica holding the state associated with those flows. Routing is complicated by the fact that partitioned state may move between replicas and each replica shares the same IP and MAC address.</p><p>The Split/Merge abstraction can be thought of in two parts: splitting and merging VM state between replicas ( <ref type="figure" target="#fig_2">Figure 3</ref>), and splitting and merging network input between replicas ( <ref type="figure" target="#fig_1">Figure 2</ref>). As such, the challenges can also be classified into those that deal with state management (C1, C2, C3) and those that deal with network management (C4). </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">FreeFlow</head><p>FreeFlow implements the Split/Merge abstraction to enable virtual middleboxes to achieve transparent, balanced elasticity. The design of FreeFlow is shown in <ref type="figure" target="#fig_3">Fig- ure 4</ref>. It consists of four components. First, the state aspects of the Split/Merge abstraction are implemented via the application-level FreeFlow library, which addresses the state-related challenges (C1, C2,C3). In particular, through the interface to the library, a middlebox application classifies its state as internal or external and communicates its transactional requirements. Additionally, the library manages all aspects of external state, including the migration of partitioned sub-states. Second, the network aspects of the Split/Merge abstraction are implemented in FreeFlow's Split/Merge-aware software defined network (SDN). The SDN addresses the final challenge (C4) and ensures that the correct network flows are routed to the replica maintaining the corresponding partitioned sub-state. Third, the orchestrator implements an elasticity policy: it decides when to create or destroy VM replicas and when to migrate flows between them. Finally, VMM agents perform the actual creation and destruction of replicas. The four components communicate with each other over a control network, distinct from the Split/Merge-aware SDN.</p><p>We have implemented a prototype of FreeFlow, including all of its components shown in <ref type="figure" target="#fig_3">Figure 4</ref>. Each physical machine runs Xen <ref type="bibr" target="#b1">[2]</ref> as a VMM and Open vSwitch <ref type="bibr" target="#b19">[20]</ref> as an OpenFlow-compatible software switch. In all components, flows are identified using the IP 5-tuple. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Guest Library: State Management</head><p>Middlebox applications interact with the FreeFlow library in order to classify state as external and identify transaction boundaries on such state. The interface to the library is shown in <ref type="figure">Figure 5</ref>. Behind the scenes, the library interfaces with the rest of the FreeFlow system to split and merge partitioned state between replicas and control access to coherent state.</p><p>To fulfill the task of identifying external state, the library acts a memory allocator, and is therefore the only mechanism the middlebox application can use to obtain partitioned or coherent sub-state. Partitioned state in middlebox applications generally consists of a flow table and a list of timers related to flow state; therefore, the library manages both. The library provides an interface, create flow to allocate a new entry in the flow table against a flow key, which is usually an IP 5-tuple. A new timer (and its callback) can be allocated against a flow key using flow timer. Coherent sub-state is allocated against a key by invoking create shared, but the key is not necessarily associated with a network flow.</p><p>Transaction boundaries are inferred by maintaining reference counts for external sub-states. Using get flow or get shared, the middlebox application accesses external sub-state from the library, at which point a reference counter (refcnt) is incremented. When the application finishes with a transaction on the sub-state, it informs the library with put flow or put shared, which decrements the reference counter. The application must avoid dangling references to partitioned state. If it fails to inform the library that a transaction is complete, the state will be pinned to the current replica.</p><p>The library may copy partitioned sub-state across the control network to another replica in response to a notification from the orchestrator ( § 3.3). When instructed to migrate a flow-identified with a flow key and a unique network address for a target replica on the control network-the library waits for the reference counter on the state to become zero, then copies the flow table entry and any timers across the control network. The flow table at the source is updated to record the fact that the particular flow state has migrated. Upon future get flow calls, the library returns an error code indicating that the flow has migrated and the packet should be dropped. Similarly, when the target library receives flow dataand the flow key for it to be associated with-during a flow migration, the flow table and timer list are updated and the orchestrator is notified. At any one time, only one library instance maintains an active copy of the flow data for a particular flow.</p><p>The library also manages the consistency of coherent state across replicas. In most cases, strong consistency is not required. For example, the application can read and write counters or statistics locally most of the time (using the LOCAL flag on get shared). Periodically, the application may require a consistent view of a counter. For example, an IDS may need to check an attack threshold value has not been exceeded. For periodic merging of coherent state between replicas, FreeFlow supports combiners <ref type="bibr" target="#b6">[7,</ref><ref type="bibr" target="#b15">16]</ref>. On create shared, an application can specify a callback (cb) function, which takes a list of coherent state elements as an argument and combines them in an application specific way. In most cases, this function simply adds the values of the counters in the coherent state. The combiner will be invoked automatically by the library when a replica is about to be destroyed. It can also be invoked explicitly by the application either before a reference to the coherent state is obtained (using the PULL flag on get shared) or after a transaction is complete (using the PUSH flag on put shared).</p><p>The combiner never runs in the middle of a transaction; get shared using PULL may block until other replicas finish their transaction and the state can be safely read. In the rare case that strong consistency is required, the application does not specify a combiner, and library instead interacts with a distributed locking service <ref type="bibr" target="#b2">[3,</ref><ref type="bibr" target="#b10">11]</ref>. On get shared (with the SYNCH flag), the library obtains the lock associated with the specified key and ensures that it has the most recent copy of the coherent data. The library releases the lock on put shared and the system registers the local copy of the coherent data as the most recent version.</p><p>We have implemented the FreeFlow library as a C library.</p><p>In doing so, we addressed the implementation challenge of allowing flow state to include self-referential pointers to other parts of the flow state. To support unmodified pointers, the library must ensure that the flow state resides at same virtual address range regardless of which replica it is in. To accomplish this, the library allocates a large virtual address space before notifying the VMM agent to compute the initial snapshot. Within the virtual address range, the orchestrator provides each replica with a non-overlapping region to service new flow related memory allocations obtained with create flow.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Split/Merge-Aware SDN: Network Management</head><p>The Split/Merge-aware SDN implements the networking part of the Split/Merge abstraction. Each replica VM contains an identical virtual network interface. In particular, every replica has the same MAC and IP address. Maintaining consistent addresses in the replicas avoids breaking OS or application level address dependencies in the internal state within a VM.</p><p>As depicted in <ref type="figure" target="#fig_5">Figure 6</ref>  </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">Orchestrator: Splitting and Merging</head><p>The orchestrator implements the most fundamental primitive for enabling the splitting and merging of partitioned state between replicas: flow migration. <ref type="figure" target="#fig_6">Figure 7</ref> shows the migration of a flow �b� between two replicas. The orchestrator interacts with other parts of the system as follows. It:</p><p>• instructs the SDN to suspend the flow �b� such that no traffic of the flow will reach either replica.</p><p>• instructs the guest library in Replica 2 to transfer the partitioned state associated with �b� to Replica 1.</p><p>• instructs the SDN to resume the flow by modifying the routing of flow �b� such that any new traffic belonging to the flow will arrive at Replica 1.</p><p>It is possible, although rare in practice, that some packets will arrive at Replica 2 after the flow state has been migrated to Replica 1. For example, packets may be buffered in the networking stack in the kernel of Replica 2 and not yet have reached the application. In case the application receives a packet after the flow state is migrated, it should drop the packet. <ref type="bibr" target="#b1">2</ref> The orchestrator triggers the creation or destruction of replicas by the VMM Agent ( §3.4) in order to scale in or out as part of an elasticity policy. It can trigger these operations automatically based on utilization (resembling the Autoscale functionality in Amazon EC2 <ref type="bibr" target="#b33">[34]</ref>) or explicitly in response to user input.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.4">VMM Agent: Scaling In and Out</head><p>The VMM agent creates or destroys replica VMs in response to instructions from the orchestrator. Replica VMs are instantiated from a point-in-time snapshot of the first instantiation of the middlebox VM, before it began processing packets. During library initialization, after variables in the internal state are initialized but before the VM has allocated any external state, the FreeFlow library instructs the VMM agent to compute the snapshot. By definition, the internal state in the replica VM can diverge from the snapshot.</p><p>We have implemented the VMM agent in Xen's control domain (Domain 0). Communication with the library is implemented using Xenstore, a standard, nonnetwork based virtual communication channel used between guest VMs and Domain 0 in Xen. Checkpoints are computed with the xm save command, and replicas are instantiated with the xm restore command. <ref type="bibr" target="#b2">3</ref> The time to create a new fully operational replica is on the order of a few seconds; it may be possible to reduce this delay with rapid VM cloning techniques <ref type="bibr" target="#b13">[14]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.5">Limitations</head><p>Virtual middleboxes cannot use FreeFlow (or the Split/Merge paradigm in general) unless their structure roughly matches that described in <ref type="figure" target="#fig_0">Figure 1</ref>. While most middleboxes we have examined do fit this architecture, it should be noted that some middleboxes are more difficult to adapt to FreeFlow than others. The main cause of difficulty is how the middleboxes deal with partitioning granularity and coherent state.</p><p>Middleboxes can be composed of numerous layers and modules, each of which may refer to flows using a different granularity. For example, in an IDS, like Bro, one module may store coarse-grained state (e.g., concerning all traffic in an IP subnet), while another may store finegrained state (e.g., individual connection state). There are two approaches to adapting such a middlebox to FreeFlow. First, the notion of a flow could be expanded to the largest granularity of all modules. In the preceding example, this would mean using the same flow key for all data related to all flows in an IP subnet, fundamentally limiting FreeFlow's ability to balance load. Second, a fine-grained flow key could be used to identify partitioned state, causing the coarse-grained state to be classified as coherent. If strong consistency is required for the coarse-grained state or a combiner cannot be specified, this approach may cause high overhead due to state synchronization.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Experience Building Split/Merge Capable Middleboxes</head><p>To validate that the Split/Merge abstraction is well suited to virtual middleboxes, we have ported Bro, an opensource intrusion detection system, to run on FreeFlow.</p><p>To evaluate a wider range of middleboxes, we have also implemented two synthetic FreeFlow middleboxes. After ensuring partitioned state was allocated in FreeFlow-managed memory, we checked for external references to it. The only two references were from the global dictionary of Connection objects and the global dictionary of timers. Since FreeFlow manages access to flow-related objects and timers, we could replace these two global collections. We found that Bro always accesses flow-related state in the context of processing a single packet, and therefore has well-defined transactional boundaries. References from FreeFlow-managed classes to external memory occur only to read static configuration data (internal state).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">Bro</head><p>As expected, there was very little data that we classified as coherent state. We used FreeFlow's support for combiners for non-critical global statistics counters. The combiners were configured to only be invoked by the system (i.e., on replica VM destruction). We did not find any variables that required strong consistency or realtime synchronization across replicas.</p><p>Verification. To validate the correctness of the modified system, we used a setup consisting of a client and a webserver, separated by two middlebox replicas running the modified version of Bro. At a high level, we used the client to issue a single flow of HTTP requests containing SQL injection exploits while FreeFlow migrated the flow between the two replicas multiple times. We check for the integrity of state and execution by ensuring (a) Bro generates an alert, (b) the number of exploits detected exactly matches those sent by the client (c) both replicas remain operational after each flow migration. Assuming Bro sees all packets on the flow, the first two conditions cannot be satisfied if the state becomes corrupted during migration. Additionally, the system would crash on flow migration when objects inside FreeFlow memory refer to external memory that does not exist on the local replica.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Synthetic Middlebox Applications</head><p>We built two synthetic FreeFlow based middlebox applications that capture the essence of commonly used real world middlebox applications. The first application is compute-bound. It performs a set of computations on each packet of a flow, resembling the compute intensive behavior of middlebox applications like an Intrusion Prevention System (IPS) or WAN optimizer. The second application modifies packets in a flow in both directions, using a particular application-level (layer 7) protocol, resembling a NAT or Application Layer Gateway. Both middleboxes were built in userspace using the Linux netfilter <ref type="bibr" target="#b38">[39]</ref> framework to interpose on packets arriving at the VM. The userspace applications inspect and/or modify packets before forwarding them to the target. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Evaluation</head><p>FreeFlow enables balanced elasticity by leveraging the Split/Merge abstraction to distribute-and migrateflows between replicas. In this section, we evaluate FreeFlow with the following goals:</p><p>• demonstrate FreeFlow's ability to provide dynamic and stateful elasticity to complex real world middleboxes ( § 5.1),</p><p>• demonstrate FreeFlow's ability to alleviate hotspots created by a highly skewed load distribution across replicas ( § 5.2),</p><p>• measure the gain in resource utilization when scaling in a deployment using FreeFlow ( § 5.3), and</p><p>• quantify the performance overhead of migrating a single flow under different application loads ( § 5.4).</p><p>In our experimental setup, a set of client and server VMs are placed on different subnets. Traffic-TCP or UDPis routed between the VMs via a middlebox. We evaluate FreeFlow using Bro or one of the synthetic middleboxes described in Section 4.2. We compare three scenarios: a single Bro instance that handles the entire load burst, a pair of Bro replicas that share load (flows are assigned to replicas in a round-robin fashion), and Bro running with FreeFlow. The FreeFlow scenario begins with a single replica and FreeFlow is configured to create a new replica and split flows and state between them when the number of flows handled by the replica exceeds 60. Similarly, it is configured to merge flows and state and destroy a replica when the number of flows handled by a replica drops below 40.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1">Stateful Elasticity with Split/Merge</head><p>As shown in <ref type="figure" target="#fig_7">Figure 8</ref>, until the load burst at t = 45s, all three configurations have a 100% detection rate. During the load burst, the performance of the single replica reduces drastically because packets are dropped and attacks are missed. The two replica cluster does not experience any degradation as it has enough capacity and the load is well balanced between the two replicas.</p><p>The FreeFlow version of Bro behaves in the same manner as a single replica, until the load burst is detected around t = 45s. While partitioned state is being split to a new replica, packets are dropped and attacks are missed. However, the detection rate quickly rises because the two replicas have enough capacity for the load burst. After the load burst (t = 85s), FreeFlow detects a drop in load, so merges partitioned state and destroys one of the replicas. The FreeFlow version of Bro continues to detect attacks at the base load with a single replica. FreeFlow therefore enables Bro to handle the load burst without wasting resources by running two replicas throughout the entire experiment.  <ref type="figure" target="#fig_0">Figure 10</ref>: Performance impact of FreeFlow's load rebalancing on hotspots</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2">Hotspot Elimination</head><p>In this experiment, we demonstrate FreeFlow's ability to eliminate hotspots that arise when the load distribution across middleboxes becomes skewed. For the purpose of this discussion, we define a hotspot as the degradation in network performance due to high CPU or network bandwidth utilization at the middlebox.</p><p>We use the compute-bound middlebox application described in Section 4.2 under load from 1 Mbps UDP flows. We define our scale-out policy to create a new replica once the number of flows in a replica reaches 100 (totaling 100 Mbps per replica). Flows are gradually added to the system every 500 ms up to a total of 101 flows. After scaling out, the system has two replicas: one with 100 flows and another with just one flow.</p><p>As expected, the replica handling 100 flows experiences much higher load than the other replica. The resulting hotspot is reflected by highly erratic packet latencies experienced by the clients, shown in <ref type="figure">Figure 9</ref> and <ref type="figure" target="#fig_0">Figure 10</ref>. <ref type="figure">Figure 9</ref> shows the maximum latency, while <ref type="figure" target="#fig_0">Figure 10</ref> shows the fluctuations in the average latency during the last 40s of the experiment. FreeFlow splits the flows evenly among the two replicas thereby redistributing the load and alleviating the hotspot. Ultimately, FreeFlow achieves a 26% reduction in the average maximum latency during the hotspot, with a 73% lower standard deviation.</p><p>Irrespective of flow duration and traffic patterns, without FreeFlow's ability to balance flows, an over-conservative scale-out policy may be used to ensure hotspots do not occur, leading to low utilization and wasted resources. By balancing flows, FreeFlow enables less conservative scale-out policies leading to higher overall utilization. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.3">Efficient Consolidation</head><p>In this experiment, we show how FreeFlow's ability to statefully merge flows between two or more replicas can be used to consolidate resources during low load and improve overall system utilization. We measure how quickly FreeFlow can scale in compared to a standard kill-based technique, in which a replica is killed only when all its flows have expired. We also measure the average system utilization per live replica during scale in, shown in <ref type="figure" target="#fig_0">Figure 11</ref>.</p><p>We start with 4 replicas running the compute-bound middlebox application ( §4.2), handling 50 UDP flows of 1 Mbps each. One flow expires every 500 ms according to a best case or worst case scenario.</p><p>In the best case scenario, the first 50 flows expire from the first replica in the first 25 seconds, enabling the kill-based technique to destroy the replica. The second 50 flows expire from the second replica in the next 25 seconds, enabling the second replica to be destroyed, and so on. In this case, the average system utilization remains high throughout the scale-in process, with a sawtooth pattern as shown in <ref type="figure" target="#fig_0">Figure 11</ref>.</p><p>In the worst case scenario, flows expire from replicas in a round-robin fashion. In a kill-based system, each of the 4 replicas contains one or more flows until the very end of the experiment, preventing the system from destroying replicas. This results in steadily degrading average system utilization over the duration of the experiment.</p><p>On the other hand, even in the worst case, FreeFlow can destroy a replica every 25 seconds. To accomplish this, FreeFlow is configured with a scale-in policy that triggers once the average number of flows per replica falls below 50. When scaling in, FreeFlow kills a replica after merging its state and flows with the remaining repli- cas. Subsequently, in the worst case, FreeFlow maintains average system utilization close to that of the kill-based strategy in the best case scenario and improves the average system utilization by up to 43% in the worst case scenario. Based on the the time at which the first replica was killed in the worst case scenario, FreeFlow can scale in 50% faster than the standard kill-based system.</p><p>FreeFlow does impact the performance of flows during the experiment; in particular, packet drops are caused by flow migrations that happen when a replica is merged. However, performance impact is low: the average packet drop rate per-flow was 0.9%.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.4">Migrating Application Flow State</head><p>Flow state migration is a fundamental unit of operation in FreeFlow, when splitting or merging partitioned state between replicas. <ref type="figure" target="#fig_0">Figure 12</ref> shows the impact on TCP throughput during flow migration compared to a baseline where no migration is performed. We use the Iperf <ref type="bibr" target="#b36">[37]</ref> benchmark to drive traffic on a single TCP stream between the client and the server, through the computebound middlebox. We perform two flow migrations: one at 20th and another at 40th second, respectively. When sampled at 1 second intervals, we observe a 14 -31% drop in throughput during the migration period, lasting for a maximum of 1 second. <ref type="bibr" target="#b4">5</ref> We further study the overhead of flow migration on a For these experiments, the flows are 10 seconds in duration and the migration is initiated after three seconds from the start of the flow. The impact of a single flow migration on end-to-end latency for different flow rates is shown in <ref type="figure" target="#fig_0">Figure 13</ref>. We observe a maximum of 1 ms increase in latency during flow migration. The latency fluctuations last for a very short period of time (500 ms). <ref type="figure" target="#fig_0">Figure 14</ref> shows the overall packet drop rate for the entire duration of the flow. The overall packet drop rate is less than 1% including any disruption caused by the migration. <ref type="figure" target="#fig_0">Figure 15</ref> shows the impact on throughput as observed by the client, when the flow migration occurs. The plotted throughput is based on a 50 ms moving window. As the load on the network increases, there is an increase in throughput loss due to flow migration. However, the drop in throughput occurs only for a brief period of time and quickly ramps up to pre-migration levels.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Related Work</head><p>Split/Merge relies on the ability to identify per-flow state in middleboxes. The behavior and structure of middleboxes has been characterized through the use of models <ref type="bibr" target="#b11">[12]</ref>. In other work, state in middleboxes has been identified as global, flow-specific, or ephemeral (perpacket) <ref type="bibr" target="#b29">[30]</ref>. On a single machine granularity, MLP <ref type="bibr" target="#b30">[31]</ref>, HILTI <ref type="bibr" target="#b25">[26]</ref>, and multi-threaded Snort <ref type="bibr" target="#b20">[21,</ref><ref type="bibr" target="#b21">22]</ref> all exploit the fact that flow-related processing rarely needs access to data for other flows or synchronization with them. CoMb <ref type="bibr" target="#b22">[23]</ref> exploits middlebox structure to consolidate heterogeneous middlebox applications onto commodity hardware, but does not address the issue of scaling, parallelism, or elasticity.</p><p>Clustering techniques have traditionally been used to scale-out middleboxes. The NIDS Cluster <ref type="bibr" target="#b27">[28]</ref> is a clustered version of <ref type="bibr">Bro [19]</ref> that is capable of performing coordinated analysis of traffic, at large scale. By exposing policy layer state and events as serializable state <ref type="bibr" target="#b26">[27]</ref>, individual nodes are able to obtain a global view of the system state. The NIDS Cluster cannot scale dynami- Figure 15: Throughput overhead of flow migration (50 ms window) cally and statefully, as it lacks the ability to migrate lower layer (event engine) flow state and their associated network flows across replicas.</p><p>FreeFlow leverages OpenFlow in its Split/Merge-aware SDN. Load balancing has been implemented in an SDN using OpenFlow with FlowScale <ref type="bibr" target="#b24">[25]</ref>, and wildcard rules can accomplish load balancing in the network while reducing load on the controller <ref type="bibr" target="#b31">[32]</ref>. The Flowstream architecture <ref type="bibr" target="#b7">[8]</ref> includes modules-for example, VMsthat handle flows and can be migrated, relying on OpenFlow to redirect network traffic appropriately. However, Flowstream does not characterize external state within an application. Olteanu and Raiciu <ref type="bibr" target="#b17">[18]</ref> similarly attempt to migrate per-flow state between VM replicas without application modifications.</p><p>There are many ways in which different types of applications are dynamically scaled in the cloud <ref type="bibr" target="#b28">[29]</ref>. <ref type="bibr">Knauth and Fetzer [13]</ref> describe scaling up general applications using live VM migration <ref type="bibr" target="#b5">[6]</ref> and oversubscription. Amazon's Autoscaling <ref type="bibr" target="#b33">[34]</ref> automatically creates or destroys VMs when user-defined thresholds are exceeded. SnowFlock <ref type="bibr" target="#b13">[14]</ref> provides sub-second scale-out using a VM fork abstraction. These approaches do not enable balancing of existing load between instances, potentially resulting in load imbalance <ref type="bibr" target="#b32">[33]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Conclusion</head><p>We have described a new abstraction, Split/Merge, and a system, FreeFlow, that enables transparent, balanced elasticity for stateful virtual middleboxes. Using FreeFlow, middleboxes identify partitioned state, which can be split among replicas or merged together into a single replica. At the same time, FreeFlow partitions the network to ensure packets are routed to the appropriate replica. As networks become increasingly virtualized, FreeFlow addresses a need for elasticity in middleboxes, without introducing the configuration complexity of running a cluster of independent middleboxes. Further, as virtual servers become increasingly mobile, utilizing live VM migration across or even between data centers, the ability to migrate flows-or split and merge them between replicas-will become even more important.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: Typical structure of a middlebox</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: Split/Merge retains output consistency irrespective of the number of replicas.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: A Split/Merge-aware VM uses the different types of state to achieve transparent elasticity.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: FreeFlow Architecture</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_4"><head>/</head><label></label><figDesc>Figure 5: Interface to the FreeFlow library</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_5"><head>Figure 6 :</head><label>6</label><figDesc>Figure 6: The SDN splits network input to replica VMs based on flow rules. The SDN ensures that traffic from VM 1 arrives at VM 3 and traffic from VM 2 arrives at VM 4. For clarity, we have omitted the flow rules for routing middlebox output.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_6"><head>Figure 7 :</head><label>7</label><figDesc>Figure 7: Migrating flow �b� from Replica 2 to Replica 1</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_7"><head>Figure 8 :</head><label>8</label><figDesc>Figure 8: Splitting/Merging Bro for Stateful Elasticity</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_8"><head>Figure 8 showsFigure 9 :</head><label>89</label><figDesc>Figure 8 shows FreeFlow's ability to dynamically scale Bro out and in during a load burst, splitting and merging partitioned state. In this experiment, the generated load contains SQL injection exploits; we measure the percentage of attacks detected by Bro to determine Bro's ability to scale to handle the load burst. Load is generated by a configurable number of cURLbased [36] HTTP clients in the form of a continuous sequence of POST requests to a webserver. The requests contain SQL injection exploits; an attack comprises 31 consecutive requests. Each client is configured to generate 50 requests/second. Throughout the experiment (for 120 seconds), 30 clients generate a base load. We inject a load burst 45 seconds into the experiment by introducing an additional 30 clients and 10 UDP flows</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_9"><head>Figure 11 :</head><label>11</label><figDesc>Figure 11: Scaling in with FreeFlow</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_10"><head>Figure 12 :Figure 13 :</head><label>1213</label><figDesc>Figure 12: Impact of flow migration on TCP throughput (migration at 20s &amp; 40s) 0 0.5 1 1.5 2 2.5 3 0 1 2 3 4 5 6 7 8 9 10</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_11"><head>Figure 14 :</head><label>14</label><figDesc>Figure 14: Packet drop rate during flow migration</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_1" validated="false"><head></head><label></label><figDesc>When a flow migration notification is received from the orchestrator, rules to route the flow are deleted from all network elements in the current path traversed by the flow. The flow is then considered suspended. Packets arriving from the switches are temporarily buffered at the OpenFlow controller until the flow is resumed by the controller, at the new replica. The flow is not resumed until partitioned sub-state has arrived at its new destina- tion. The controller resumes a flow by calculating a new path for the flow that traverses the new replica, installing forwarding rules in the switches on the path, and inject- ing any buffered packets directly into the virtual switch connected to the new replica. 1</figDesc><table>, FreeFlow leverages OpenFlow-
+enabled [41] network elements (e.g., switches [20], 
+routers) to enforce routing to various replicas. As pack-
+ets flow through the OpenFlow network, each network 
+element searches a local forwarding table for rules that 
+match the headers of the packet, indicating they belong 
+to a particular flow. If an entry is found, the network el-
+ement forwards the packets along the appropriate inter-
+face on the fast path. If no entry exists, the packet (or just 
+its header) is forwarded to an OpenFlow controller. The 
+OpenFlow controller has a global view of the network 
+and can make a routing decision for the new flow. The 
+controller then pushes a new rule to one or more network elements so that future packets belonging to the flow can 
+be forwarded without consulting the controller. 
+
+The Split/Merge-aware SDN must ensure that packets ar-
+rive at the appropriate replica even as partitioned flow 
+state migrates between replicas. To do this, FreeFlow 
+contains a customized OpenFlow controller that commu-
+nicates with the orchestrator ( § 3.3). When a flow is mi-
+grated between replicas, the orchestrator interfaces with 
+the OpenFlow controller to communicate the new for-
+warding rules for the flow. Packets belonging to new 
+flows are forwarded to the OpenFlow controller by de-
+fault. The OpenFlow controller picks a replica toward 
+which the new flow should be routed and notifies the or-
+chestrator. 
+
+We implemented the SDN in a module on top of 
+POX [42], a python version of the popular NOX [10] 
+OpenFlow controller. The controller provides a simple 
+web API that allows it to receive notifications from the 
+orchestrator about events like middlebox creation and 
+deletion, or instructions to migrate one or more flows 
+from one replica to another. We addressed three imple-
+mentation challenges. First, the controller cannot use 
+MAC learning techniques for middleboxes because ev-
+ery replica shares a MAC address. Instead, when repli-
+cas are created, the VMM agent registers a replica in-
+terface on a virtual switch port with the controller. Sec-
+ond, ARP broadcast requests may cause multiple repli-
+cas to respond or unexpected behavior, since they share a 
+MAC address. To avoid this, the controller intercepts and 
+replies to ARP requests that refer to the middlebox IP. 
+Finally, the controller decides which replica a new flow 
+is routed to, so must ensure that bi-directional flows are 
+assigned to the same replica. This is achieved by main-
+taining a table that maps each flow to its replica that is 
+checked before assigning new flows to replicas. </table></figure>
+
+			<note place="foot" n="1"> Alternately, buffering could occur at the destination hypervisor and the controller could update the path immediately upon suspend, thereby reducing its load.</note>
+
+			<note place="foot" n="2"> In this case, the library returns an error code when flow-specific state is accessed ( § 3.1). 3 In our prototype, the distribution of VM disk images to physical hosts is performed manually.</note>
+
+			<note place="foot" n="4"> For ease of implementation, we ported the event handler to C++ instead of using the Bro scripting language.</note>
+
+			<note place="foot" n="236"> 10th USENIX Symposium on Networked Systems Design and Implementation (NSDI &apos;13) USENIX Association</note>
+
+			<note place="foot" n="5"> Due to Iperf&apos;s limitation on the minimum reporting interval, (1 second), we are unable to calculate the exact duration of the performance impact.</note>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="8">Acknowledgments</head><p>We would like to thank our shepherd, Mike Freedman, and the anonymous referees for their helpful comments.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">Reining in the Outliers in Map-Reduce Clusters using Mantri</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ananthanarayanan</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Kandula</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Greenberg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Stoica</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Lu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Saha</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Harris</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX Symposium on Operating Systems Design &amp; Implementation (OSDI)</title>
+		<meeting>of USENIX Symposium on Operating Systems Design &amp; Implementation (OSDI)</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Xen and the Art of Virtualization</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Barham</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Dragovic</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Fraser</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Hand</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Harris</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Ho</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Neugebauer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Pratt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Warfield</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of ACM Symposium on Operating Systems Principles (SOSP)</title>
+		<meeting>of ACM Symposium on Operating Systems Principles (SOSP)</meeting>
+		<imprint>
+			<date type="published" when="2003" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">The Chubby Lock Service for Loosely-Coupled Distributed Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Burrows</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX Symposium on Operating Systems Design &amp; Implementation (OSDI</title>
+		<meeting>of USENIX Symposium on Operating Systems Design &amp; Implementation (OSDI</meeting>
+		<imprint>
+			<date type="published" when="2006" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Carpenter</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>And Brim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Middleboxes</surname></persName>
+		</author>
+		<ptr target="https://tools.ietf.org/rfc/rfc3234.txt" />
+	</analytic>
+	<monogr>
+		<title level="j">Taxonomy and Issues. RFC</title>
+		<imprint>
+			<biblScope unit="volume">3234</biblScope>
+			<date type="published" when="2002" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">The Collective: A Cache-Based System Management Architecture</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chandra</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Zeldovich</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Sapuntzakis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lam</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX Symposium on Networked Systems Design &amp; Implementation (NSDI)</title>
+		<meeting>of USENIX Symposium on Networked Systems Design &amp; Implementation (NSDI)</meeting>
+		<imprint>
+			<date type="published" when="2005" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Live Migration of Virtual Machines</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Clark</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Fraser</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Hand</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Hansen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">G</forename><surname>Jul</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Limpach</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Pratt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Warfield</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX Symposium on Networked Systems Design &amp; Implementation (NSDI)</title>
+		<meeting>of USENIX Symposium on Networked Systems Design &amp; Implementation (NSDI)</meeting>
+		<imprint>
+			<date type="published" when="2005" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Simplified Data Processing on Large Clusters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dean</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ghemawat</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Mapreduce</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Communications of ACM</title>
+		<imprint>
+			<biblScope unit="volume">51</biblScope>
+			<biblScope unit="page">1</biblScope>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Flow Processing and the Rise of Commodity Network Hardware</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Greenhalgh</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Huici</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Hoerdt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Papadimitriou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Handley</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mathy</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM SIGCOMM Computer Communications Review</title>
+		<imprint>
+			<biblScope unit="volume">39</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<monogr>
+		<title level="m" type="main">A Framework and Problem Statement for Flow-associated Middlebox State Migration</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">U</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Shore</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sivakumar</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+		<ptr target="http://tools.ietf.org/html/draft-gu-statemigration-framework-02" />
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">NOX: Towards an Operating System for Networks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gude</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Koponen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Pettit</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Pfaff</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Casado</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Mckeown</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shenker</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM SIGCOMM Computer Communications Review</title>
+		<imprint>
+			<biblScope unit="volume">38</biblScope>
+			<biblScope unit="page">3</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">ZooKeeper: Wait-free Coordination for Internet-scale Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hunt</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Konar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Junqueira</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><forename type="middle">P</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Reed</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX Annual Technical Conference (ATC)</title>
+		<meeting>of USENIX Annual Technical Conference (ATC)</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joseph</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stoica</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><forename type="middle">Modeling</forename><surname>Middleboxes</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Network</title>
+		<imprint>
+			<biblScope unit="volume">22</biblScope>
+			<biblScope unit="page">5</biblScope>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Scaling non-elastic Applications Using Virtual Machines</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Knauth</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fetzer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">IEEE International Conference on Cloud Computing</title>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">SnowFlock: Rapid Virtual Machine Cloning for Cloud Computing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lagar-Cavilla</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">A</forename><surname>Whitney</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">A</forename><surname>Scannell</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">M</forename><surname>Patchin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Rumble</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">M</forename><surname>De</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lara</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Brudno</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Satyanarayanan</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of ACM European Conference on Computer Systems (EuroSys</title>
+		<meeting>of ACM European Conference on Computer Systems (EuroSys</meeting>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<monogr>
+		<title level="m" type="main">Stateful NAT64: Network Address and Protocol Translation from IPv6 Clients to IPv4 Servers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Bagnulo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Matthews</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><forename type="middle">V B</forename></persName>
+		</author>
+		<ptr target="http://tools.ietf.org/id/draft-ietf-behave-v6v4-xlate-stateful-12.txt" />
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Pregel: A System for Large-Scale Graph Processing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Malewicz</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Austern</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">H</forename><surname>Bik</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">J</forename><surname>Dehnert</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">C</forename><surname>Horn</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Leiser</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Czajkowski</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of ACM SIGMOD</title>
+		<meeting>of ACM SIGMOD</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">The NIST Definition of Cloud Computing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mell</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Grance</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">National Institute of Standards and Technology Special Publication</title>
+		<imprint>
+			<date type="published" when="2011" />
+			<biblScope unit="page" from="800" to="145" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Efficiently Migrating Stateful Middleboxes</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Olteanu</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><forename type="middle">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Raiciu</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM SIGCOMM -Demo</title>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">A System for Detecting Network Intruders in Real-Time</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Paxson</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Bro</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Computer Networks</title>
+		<imprint>
+			<biblScope unit="volume">31</biblScope>
+			<biblScope unit="page" from="23" to="24" />
+			<date type="published" when="1999" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Extending Networking into the Virtualization Layer</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pfaff</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Pettit</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Koponen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Amidon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Casado</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shenker</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of ACM Workshop on Hot Topics in Networks</title>
+		<meeting>of ACM Workshop on Hot Topics in Networks</meeting>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Snort -Lightweight Intrusion Detection for Networks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Roesch</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX Conference on System Administration</title>
+		<meeting>of USENIX Conference on System Administration</meeting>
+		<imprint>
+			<date type="published" when="1999" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">Conservative vs. optimistic parallelization of stateful network intrusion detection</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Schuff</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">L</forename><surname>Choe</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><forename type="middle">R</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pai</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><forename type="middle">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of ACM Symposium on Principles and Practice of Parallel Programming</title>
+		<meeting>of ACM Symposium on Principles and Practice of Parallel Programming</meeting>
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Design and Implementation of a Consolidated Middlebox Architecture</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sekar</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Egi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Ratnasamy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Reiter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">K</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shi</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX Symposium on Networked Systems Design &amp; Implementation (NSDI)</title>
+		<meeting>of USENIX Symposium on Networked Systems Design &amp; Implementation (NSDI)</meeting>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<monogr>
+		<title level="m" type="main">A Survey of Enterprise Middlebox Deployments</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sherry</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ratnasamy</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2012" />
+			<pubPlace>Berkeley</pubPlace>
+		</imprint>
+		<respStmt>
+			<orgName>EECS Department, University of California</orgName>
+		</respStmt>
+	</monogr>
+<note type="report_type">Tech. Rep. UCB/EECS-2012-24</note>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Small</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Flowscale</surname></persName>
+		</author>
+		<ptr target="http://groups.geni.net/geni/attachment/wiki/OFIU-GEC12-status/FlowScale_poster.pdf" />
+		<title level="m">GENI Engineering Conference (Poster)</title>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<monogr>
+		<title level="m" type="main">HILTI: An Abstract Execution Environment for Concurrent, Stateful Network Traffic Analysis</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sommer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Carli</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">D</forename><surname>Kothari</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Vallentin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Paxson</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename></persName>
+		</author>
+		<idno>TR-12-003</idno>
+		<imprint>
+			<date type="published" when="2012" />
+			<publisher>ICSI</publisher>
+		</imprint>
+	</monogr>
+<note type="report_type">Tech. Rep.</note>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">Exploiting Independent State For Network Intrusion Detection</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sommer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Paxson</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of Computer Security Applications Conference</title>
+		<meeting>of Computer Security Applications Conference</meeting>
+		<imprint>
+			<date type="published" when="2005" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<analytic>
+		<title level="a" type="main">The NIDS Cluster: Scalable, Stateful Network Intrusion Detection on Commodity Hardware</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vallentin</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Sommer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Leres</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Paxson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tierney</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of International Conference on Recent Advances in Intrusion Detection</title>
+		<meeting>of International Conference on Recent Advances in Intrusion Detection</meeting>
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Dynamically Scaling Applications in the Cloud</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">M</forename><surname>Vaquero</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Rodero-Merino</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Buyya</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM SIGCOMM Computer Communications Review</title>
+		<imprint>
+			<biblScope unit="volume">41</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<analytic>
+		<title level="a" type="main">Workload Characterization of Stateful Networking Applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Verd´uverd´ Verd´u</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Nemirovsky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Garc´iagarc´ia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Valero</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of International Symposium on High-Performance Computing</title>
+		<meeting>of International Symposium on High-Performance Computing</meeting>
+		<imprint>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">MultiLayer Processing -An Execution Model for Parallel Stateful Packet Processing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Verd´uverd´ Verd´u</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Nemirovsky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Valero</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of ACM/IEEE Symposium on Architectures for Networking and Communications Systems</title>
+		<meeting>of ACM/IEEE Symposium on Architectures for Networking and Communications Systems</meeting>
+		<imprint>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<analytic>
+		<title level="a" type="main">OpenFlowbased Server Load Balancing Gone Wild</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Butnariu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rexford</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX Conference on Hot Topics in Management of Internet, Cloud, and Enterprise Networks and Services</title>
+		<meeting>of USENIX Conference on Hot Topics in Management of Internet, Cloud, and Enterprise Networks and Services</meeting>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">Adaptive Overload Control for Busy Internet Servers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Welsh</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Culler</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX Symposium on Internet Technologies and Systems</title>
+		<meeting>of USENIX Symposium on Internet Technologies and Systems</meeting>
+		<imprint>
+			<date type="published" when="2003" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<monogr>
+				<ptr target="http://aws.amazon.com/autoscaling/" />
+		<title level="m">Amazon EC2: Auto Scaling</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Big-Ip Local Traffic</forename><surname>Manager</surname></persName>
+		</author>
+		<ptr target="http://www.f5.com/products/big-ip/big-ip-local-traffic-manager/" />
+		<imprint>
+			<publisher>LTM</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<monogr>
+				<ptr target="http://www.tcpdump.org/" />
+		<title level="m">The Multiprotocol File Transfer Library</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b36">
+	<monogr>
+		<title level="m" type="main">Iperf: TCP and UDP Bandwidth Performance Measurement Tool</title>
+		<ptr target="http://iperf.sourceforge.net/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b37">
+	<analytic>
+		<title/>
+		<ptr target="http://www.linuxvirtualserver.org/" />
+	</analytic>
+	<monogr>
+		<title level="j">Linux Virtual Server</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b38">
+	<monogr>
+		<title level="m" type="main">Netfilter Packet Filtering Framework</title>
+		<ptr target="http://www.netfilter.org" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b39">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Citrix</forename><surname>Netscaler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adc</forename></persName>
+		</author>
+		<ptr target="http://www.citrix.com/netscaler" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b40">
+	<analytic>
+		<title/>
+		<ptr target="http://www.openflow.org" />
+	</analytic>
+	<monogr>
+		<title level="j">The OpenFlow Switch Specification</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b41">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Pox Openflow Controller</surname></persName>
+		</author>
+		<ptr target="http://www.noxrepo.org/pox/about-pox/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

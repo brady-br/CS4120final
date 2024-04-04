@@ -1,0 +1,895 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:58+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Understanding and Finding Crash-Consistency Bugs in Parallel File Systems</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jinghan</forename><surname>Sun</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Illinois at Urbana-Champaign</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chen</forename><surname>Wang</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Illinois at Urbana-Champaign</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jian</forename><surname>Huang</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Illinois at Urbana-Champaign</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Marc</forename><surname>Snir</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Illinois at Urbana-Champaign</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Understanding and Finding Crash-Consistency Bugs in Parallel File Systems</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Parallel file systems (PFSes) and parallel I/O libraries have been the backbone of high-performance computing (HPC) infrastructures for decades. However, their crash consistency bugs have not been extensively studied, and the corresponding bug-finding or testing tools are lacking. In this paper, we first conduct a thorough bug study on the popular PFSes, such as BeeGFS and OrangeFS, with a cross-stack approach that covers HPC I/O library, PFS, and interactions with local file systems. The study results drive our design of a scalable testing framework, named PFSCHECK. PFSCHECK is easy to use with low performance overhead, as it can automatically generate test cases for triggering potential crash-consistency bugs, and trace essential file operations with low overhead. PF-SCHECK is scalable for supporting large-scale HPC clusters, as it can exploit the parallelism to facilitate the verification of persistent storage states.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Parallel file Systems are the standard I/O systems for largescale supercomputers. They aim at maximizing storage capacity as well as I/O bandwidth for files shared by parallel programs. They scale to tens of thousands of disks accessed by hundreds of thousands of processes.</p><p>To avoid data loss, various fault tolerance techniques have been proposed for PFSes, including checkpointing <ref type="bibr" target="#b11">[12,</ref><ref type="bibr" target="#b14">15,</ref><ref type="bibr" target="#b16">17]</ref> and journaling <ref type="bibr" target="#b2">[3,</ref><ref type="bibr" target="#b13">14]</ref>. However, crash consistency bugs are still happening and causing severe damages. For instance, a severe data loss took place at Texas Tech HPCC after two power outages in 2016, resulting in metadata inconsistencies in its Lustre file system <ref type="bibr" target="#b0">[1]</ref>; the most recent crash in Lustre in the Stampede Supercomputer suspended its service for six days. As supercomputing time is expensive, both long recovery time and loss of data are expensive.</p><p>To understand crash consistency bugs, researchers have conducted intensive studies on commodity file systems <ref type="bibr" target="#b1">[2,</ref><ref type="bibr" target="#b6">7,</ref><ref type="bibr" target="#b12">13,</ref><ref type="bibr" target="#b15">16]</ref>. Pillai et al. <ref type="bibr" target="#b15">[16]</ref> investigated the characteristics of crash vulnerabilities in Linux file systems, such as ext2, ext4, and btrfs. To alleviate these bugs, recent studies have applied verification techniques to develop bug-free file systems <ref type="bibr" target="#b5">[6,</ref><ref type="bibr" target="#b20">21]</ref>. Prior researchers also exploited model checking <ref type="bibr" target="#b3">[4,</ref><ref type="bibr" target="#b24">26]</ref> and fuzzing <ref type="bibr" target="#b10">[11,</ref><ref type="bibr" target="#b23">25]</ref> techniques to pinpoint crash-consistency bugs with defined specifications. However, most of these prior studies focused on the regular file systems. Few of them can be directly applied to PFSes, due to the unique architecture of PFS, its workload characteristics, and the increased complexity of HPC I/O stack. Specifically, files can be shared by all processes in a parallel job, and I/O is performed through a variety of parallel I/O libraries which may have their own crash consistency implementation. A proper attribution of application-level bugs to one layer or another in the I/O stack depends on the "contract" between each layer.</p><p>To further understand crash consistency bugs in parallel I/O, we conduct a study with popular PFSes, including BeeGFS and OrangeFS. We manually create seven typical I/O workloads with the parallel I/O library HDF5 <ref type="bibr" target="#b4">[5]</ref>, and investigate crash-consistency bugs across the I/O stack. Our study results demonstrate that workloads on PFSes suffer from much (2.6-3.8×) more from crash consistency bugs than local file system (see <ref type="table">Table 2</ref>). We also develop a study methodology to distinguish bugs in the PFS from bugs in the parallel I/O library, using a formal definition of the crash consistency contract. We find that the number of crash-consistency bugs in parallel I/O libraries is comparable to that in PFSes.</p><p>To identify crash-consistency bugs in various PFSes and parallel I/O libraries, and facilitate their design and implementation, we propose to develop a scalable and generic testing framework, named PFSCHECK, with four major goals: (1) PFSCHECK should be easy to use, with as much automation of testing as possible; (2) PFSCHECK should be lightweight, with minimal performance overhead; (3) PFSCHECK should be scalable, with the increasing complexity of PFS configurations; (4) PFSCHECK should be accurate, which can identify the exact locations of crash-consistency bugs.</p><p>To achieve these aforementioned goals, we develop PF-SCHECK with four major components: (1) a PFS-specific automated test-case generator, which will automatically generate a limited number of effective test cases for crash consistency testing. The generator follows POSIX APIs and hide the underlying I/O library details from upper-level developers; (2) a lightweight logging mechanism, which will trace the essential file operations on both client and storage server side with low overhead; (3) a fast crash state exploration mechanism, which will efficiently prune the large number of crash states brought by parallel workloads and multiple servers; (4) a bug classifier, which will properly attribute the reported crash-consistency bugs to PFS or I/O library with the given crash consistency model. We wish to develop PFSCHECK into an open-source testing platform that can facilitate the testing of developed and developing parallel file systems and parallel I/O libraries.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Background and Motivation</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">Crash Consistency in in HPC I/O</head><p>PFSes, such as BeeGFS <ref type="bibr" target="#b9">[10]</ref>, OrangeFS <ref type="bibr">[23]</ref>, Lustre <ref type="bibr" target="#b18">[19]</ref>, and GPFS <ref type="bibr" target="#b17">[18]</ref>, have been the main I/O infrastructure for supercomputers. PFSes were designed for different hardware configurations, and different workloads than distributed file systems (DFSes) like GFS <ref type="bibr" target="#b8">[9]</ref> and HDFS <ref type="bibr" target="#b19">[20,</ref><ref type="bibr" target="#b21">22]</ref>. Specifically, the I/O stack of PFSes has three different properties. First, while the "one file per process" use mode is common, PFSes are optimized for shared access to a single file by all processes in a large-scale parallel computing setting. A large file may be stripped across all storage servers. This brings challenges to enforce the ordering of filesystem operations across large-scale server machines. Second, the metadata and data blocks are managed separately. Their complicated coordination causes crash-consistency bugs, even if each server has employed transactional mechanisms to enforce local atomic storage operations. Third, PFSes have a deep software stack, which often includes specific parallel I/O libraries. For example, an application may use HDF5 <ref type="bibr" target="#b4">[5]</ref> that invokes MPI-IO <ref type="bibr" target="#b7">[8]</ref> to execute POSIX I/O operations on the PFS. The post-crash behaviors of an I/O system depend on what has been persisted before failures. Typically, PFSes rely on local file systems to hold data on each storage server, and the I/O library relies on the PFS. Thus, we need to conduct data recovery from persisted data structures layer by layer: the local file system first, followed by the PFS, and then the parallel I/O library. Crash consistency specifies what conditions should be satisfied by each one of these layers -what is the contract it obeys. The upper layer will perform its own recovery assuming that the layer below satisfied its contract. However, POSIX APIs used by file systems do not specify this contract <ref type="bibr" target="#b3">[4]</ref>, nor do PFSes clarify what they guarantee after crash recovery.</p><p>In this paper, we assume that the proper contract, which we call prefix crash consistency, is that the state of the file system after recovery is that obtained by executing correctly a prefix of the sequence of the I/O calls before the crash and none of the operations following this prefix. This prefix includes all fsync operations preceding the crash, the last operation in this prefix may be only partially completed, if it is not atomic. A similar definition can be provided for other I/O systemsone needs to define which operations are atomic and which are "persist" operations. If the I/O interface supports concurrent calls, then the order between I/O calls is the partial causality order, rather than a cut through a sequence. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">Motivating Examples</head><p>We present a crash-vulnerability scenario of PFS in <ref type="figure" target="#fig_0">Figure 1</ref>. The application attempts to replace the content of a target file by creating, modifying, and renaming a temporary file in BeeGFS (see the detailed setting in § 3.1). The file operations are issued by BeeGFS client, and forwarded to the corresponding server machines. In this motivating scenario, we reveal three crash inconsistency states. Two of them are caused by cross-node persistence reordering, one is caused by the intra-node persistence reordering.</p><p>(1) When the append to the file on storage node #1 is persisted to the disk after the rename of directory entry on the metadata node, a crash happens right before the append. In this case, BeeGFS will suffer from data loss. This introduces crash vulnerability to the application, since its assumed atomicity is broken. (2) Similar inconsistency will happen if reordering happens between rename on the metadata node and unlink of the file on the storage node. Both of these two inconsistencies cannot be resolved by beegfs-fsck. <ref type="formula">(3)</ref> The third crash vulnerability is caused by the intra-node persistence reordering on the metadata node between rename and unlink. Two directory operations cannot be reordered on ext4, but this may occur on btrfs. Remounting BeeGFS upon such a crash will result in an inconsistency state -the original file cannot be opened. Fortunately, this inconsistency can be handled by beegfs-fsck. <ref type="table">Table 2</ref>: Distribution of crash vulnerabilities in the file system BeeGFS, OrangeFS, and ext4.</p><p>File system ARVR WAL H5-create H5-delete H5-resize H5-rename <ref type="table" target="#tab_0">H5-write Total  BeeGFS  2  2  0  2  2  5  2  15  OrangeFS  1  2  0  9  1  6  0  19  ext4  0  0  0  1  1  3  0  5</ref> 3 PFS Crash-Vulnerability Characterization</p><p>To further understand the crash consistency in parallel I/O systems, we run real parallel I/O test cases and investigate the causes and consequences of identified crash vulnerabilities.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Study Methodology</head><p>We run I/O workloads on two different PFSes: BeeGFS and OrangeFS (formerly known as PVFS2). Both of the PFSes are configured with one metadata server and two storage servers. Each storage server runs ext4 locally with journaling enabled. The file striping size of storage servers is 64KB. BeeGFS stores its metadata with extended attributes by default. As for OrangeFS, we use its default Berkeley DB to store metadata. We show the test suites used in our study in <ref type="table" target="#tab_0">Table 1</ref>. They include the atomic-replace-via-rename (ARVR), write-aheadlogging (WAL) <ref type="bibr" target="#b3">[4]</ref> scenarios that have been used in prior studies for testing file systems, and several workloads that use HDF5 library <ref type="bibr" target="#b4">[5]</ref>. For each workload, we make every effort to recover it after the crash. For those tests with ARVR and WAL, we run the file system checker (fsck) of each PFS. For HDF5, we perform recovery with the official tool h5clear in addition to fsck. We report the crash vulnerabilities that cannot be fixed by existing recovery mechanisms.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Study Results</head><p>Crash vulnerability distribution. As both BeeGFS and OrangeFS are POSIX-compliant, we compare them with the local file system ext4 under the same setting of test cases. We show the results in <ref type="table">Table 2</ref>. As we expected, the number of crash vulnerabilities in parallel file systems is more (2.6-3.8×) than that in local file systems. These vulnerabilities can be easily triggered by a simple file operation, such as delete, resize, and rename. As most of the PFSes have the similar system architecture, and crash consistency guarantees, we observe that the number of crash vulnerabilities in BeeGFS is on a par with that of OrangeFS.</p><p>Crash vulnerability consequence. Similar to the consequences of crash vulnerabilities reported in commodity file systems <ref type="bibr" target="#b12">[13]</ref>, the crash vulnerabilities in PFSes will cause severe consequences as well, including data loss and inability to open/read files. Note that all the reported cases of crash inconsistency cannot be resolved with the existing recovery tools, such as fsck tool provided by PFSes and h5clear. This highly motivates us to develop new testing or bug-finding tools for parallel file systems, which will be discussed in § 4.</p><p>Crash vulnerability causes. To further investigate the root causes of these reported crash vulnerabilities in PFSes, we log the file system operations in both client and back-end metadata/storage servers when running each test case, and check the consistency of storage states after replaying them in different orders.</p><p>We categorize the crash states of PFSes into three types: (1) atomicity-related issues (AR) due to the incomplete execution of an PFS atomic operation, but persistence order obeys the happens-before order; (2) intra-node reordering (INR), in which the storage states are caused by the reordered storage operations in the local file system; (3) cross-node reordering (CNR), in which the storage states are caused by the reordered storage operations across multiple storage servers.</p><p>When we check the crash states with the traced storage operations, we begin with the checking of AR, then INR and CNR. We only report unique crash states in the study. The redundant crash states, for instance, an INR on a inconsistent AR state, are not reported.</p><p>When testing the stack of PFS+HDF5, we distinguish the reordering of the storage operations that satisfy the prefix crash consistency requirement for the PFS from those that do not. If the bug appears only for the reordering of the later category, we attribute it to the PFS; if it appears for the reordering in the first category, we attribute it to HDF5.</p><p>We report the detailed study results in <ref type="table" target="#tab_1">Table 3</ref>. We observe that (1) the number of crash vulnerabilities caused by the CNR is larger than that caused by INR. This is due to the difficulty of executing operations across multiple servers in proper order. (2) AR vulnerabilities are a large portion (58.8%) of the crashes, this is because most of PFSes today do not provide transactional guarantees for user-level file operations. (3) The crash vulnerabilities can be due to both PFS (55.8%) and HDF5 (44.1%). HDF5 would introduce a large number of crash vulnerabilities, even if the underlying PFS fully enforced crash consistency.</p><p>To identify crash vulnerabilities, prior works have developed model checking, system verification, and testing techniques in commodity file systems. However, they cannot be directly applied to the PFS stack due to the unique design and implementation of PFSes, motivating us to exploit an alternative approach to address this challenge. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Legal replay</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Crash</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Record</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Test Classification</head><p>File system images that satisfy the given consistency model </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">PFSCHECK Overview</head><p>We demonstrate the system architecture of PFSCHECK in <ref type="figure" target="#fig_1">Figure 2</ref>. PFSCHECK takes five steps to check crash vulnerability for each benchmark. In the first phase ( 1 ), PFSCHECK will trace both I/O and network operations when running each test case. The trace includes both server-side and client-side operations. PFSCHECK will perform correlation analysis to associate each client request to the corresponding storage operations on PFS storage servers. In the second phase ( 2 ), PFSCHECK will generate all possible crash states, based on the recorded execution. We will apply pruning algorithm to avoid redundancy of crash states in the search space. In the third phase ( 3 ), PFSCHECK will recover the system from crash states, and then test its consistency with multiple checkers (e.g., fsck, h5check). To further identify the root cause of the reported crash vulnerability, PFSCHECK will perform legal replay in the fourth phase ( 4 ), it will produce legal crash states where PFS obeys given crash consistency models. PFSCHECK will utilize these legal crash states to classify whether the reported crash vulnerability happens in parallel I/O library or not ( 5 ). We will further discuss each of these phases as follows, respectively.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Generating Test Cases Automatically</head><p>Generating test cases in a manual manner will not be sufficient to systematically reveal crash consistency bugs in PFSes.</p><p>In PFSCHECK, we develop an automatic test-case generation mechanism by minimizing the efforts required from developers and testers. To achieve this, we take two essential steps to generate test cases. First, we use the popular POSIX APIs to hide the diversity of parallel I/O libraries. Given a specific parallel I/O library in our test setting, PFSCHECK will transfer the POSIX-based I/O programs to the lower-level parallel I/O programs. This will not only ease the programmability of generating new test cases, but also enable the code reuse for different PFSes and parallel I/O libraries. Second, PF-SCHECK will adjust the parameters (e.g., access granularity) used in the test cases based on the PFS configurations, such that we can explore corner cases in our testing.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.3">Recording I/O Operations</head><p>After we generate essential test cases, PFSCHECK will trace the I/O operations to explore crash states in the follow-up analysis. It will trace at least two types of I/O operations for PFS services: storage operations that modified the storage state, and the network operations for the communications between metadata and data servers. This is because they will determine the happens-before order of these I/O operations. The order we observe on the server side will reflect one possible interleaving of client-side parallel I/O operations. In order to explore all possible interleavings, PFSCHECK uses the Recorder tracing tool <ref type="bibr" target="#b22">[24]</ref> to trace all relevant client-side I/O operations (including HDF5, MPI-IO and POSIX), and then build a mapping between each client-side operation and server-side operations.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.4">Emulating Crash States</head><p>As discussed in § 4.3, PFSCHECK will record the I/O operations involved in each test case. However, different persistence ordering of those I/O operations may expose different crash vulnerabilities across the PFS stack. In order to cover all potential crash vulnerabilities, a straightforward way is to use the brute-force approach to explore all possible crash states of these I/O operations. However, this will produce a large exploration space, and is time consuming. To address this challenge, we will determine which I/O operations can be reordered by studying the history of executed test cases. Specifically, PF-SCHECK will replay the collected I/O operation trace, and reorder these I/O operations during the replay. PFSCHECK will maintain a list to track the reordered cases that have been executed, such that we can avoid redundant emulations. Additionally, in order to avoid frequent PFS restart, we also propose to provide an incremental crash state reconstruction mechanism to reduce the number of restart operations. In the reconstruction, PFSCHECK will also be careful with serverside cache coherence to its disk state, it will invalidate the cache when necessary.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.5">Verifying Storage States</head><p>After we finish the emulation of crash states, PFSCHECK will check their data consistency. It performs necessary recovery for each crash state by running multiple recovery tools (e.g., fsck, h5clear) after remounting the PFS. PFSCHECK allows developers to use library-specific data recovery tools to test the crash consistency for different parallel I/O libraries. If these tools fail to recover the PFS or access the user data, we assume that crash vulnerabilities happen.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.6">Pinpointing the Root Cause</head><p>As discussed, crash vulnerabilities could happen across the entire PFS stack. Their root causes may lie in parallel I/O libraries, or the PFS, or the local file system running on each storage server. To help PFSCHECK pinpoint the root cause of these crash vulnerabilities, we propose the legal replay technique, in which it produces legal storage states where PFS exactly follows the prefix crash consistency model. For each legal storage state, PFS will also satisfy its contract with the upper-level parallel I/O library. In this case, if a vulnerable crash state matches with any of those legal states, PFSCHECK believes that the vulnerability is located in the parallel I/O library. This is because the legal storage state has indicated that there is no crash inconsistency happening in the PFS. If a vulnerable crash state does not match with any of those legal states, PFSCHECK believes that the vulnerability is located in the PFS. Therefore, legal replay performs as a classifier in PFSCHECK to pinpoint the location of the crash vulnerabilities. With all these proposed components, PFSCHECK is able to detect PFS crash vulnerabilities in an automatic, efficient, and accurate way.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Discussion and Future Work</head><p>The work described in this paper suggests many future directions to strengthen the the development of PFSCHECK. PFSCHECK Implementation. We plan to fully implement its key components with increased automation. We will enable PFSCHECK to support more parallel I/O libraries, such as NetCDF and MPI-IO, as well as more parallel file systems like Lustre and GPFS. Our ultimate goal is to develop PFSCHECK into a general testing framework, such that the community can use it to conduct crash-vulnerability tests for the existing and newly developed PFSes. We also plan to open source our PFSCHECK framework, such that developers can extend it to support other I/O libraries and file systems.</p><p>PFSCHECK Evaluation. We plan to evaluate the efficiency of PFSCHECK at different aspects. They include (1) the performance that indicates how much time it will take to finish each test case; (2) the accuracy that indicates whether PFSCHECK can identify the root cause of reported crash vulnerabilities; (3) the completeness that indicates whether PFSCHECK can identify all the potential crash vulnerabilities; (4) the scalability that indicates whether PFSCHECK can scale, as we increase the number of storage servers or update the configuration of PFS and I/O libraries.</p><p>Extend PFSCHECK to Other Consistency Models. In this paper, we mainly focus on the crash consistency, we would like to extend PFSCHECK to support other crash consistency models enabled in parallel file systems. Accordingly, we will update those algorithms used in our current crash state emulation and storage state verification.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Conclusion</head><p>In this paper, we explored crash consistency issues in parallel file systems. We conducted a characterization study of the crash vulnerabilities in popular parallel file systems. As expected, PFSes and I/O libraries suffer from more crash consistency bugs than regular file systems, due to the scale and complexity of the I/O stack. To this end, we propose to develop a generic testing framework for identifying these crash vulnerabilities. We outlined the design of PFSCHECK for the systematic testing of parallel I/O systems and the proper attribution of issues to different layers of the I/O stack.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: Crash-Vulnerability Examples in BeeGFS.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: The system architecture of PFSCHECK.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="true"><head>Table 1 : Test suites used in our study.</head><label>1</label><figDesc></figDesc><table>Test suite 
+Initializer 
+Workload (s) 
+Checking Items 
+
+ARVR 
+file with old 
+content 
+
+file renamed from a tmp 
+file with new content 
+
+atomicity of 
+replacement 
+
+WAL 
+file with old 
+content 
+
+logging before updating 
+file, then remove log 
+
+update atomicity; 
+otherwise check 
+log content 
+
+HDF5 
+two groups and 
+two datasets 
+
+create; delete; rename; 
+resize dimension; 
+h5part write dataset 
+
+atomicity; readability 
+of existing datasets 
+and groups; 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_1" validated="true"><head>Table 3 : Causes and consequences of crash vulnerabilities in PFSes. We show the vulnerability distribution among dif- ferent type of root causes in the 4-6th column (Left:OrangeFS/Right:BeeGFS), the vulnerability location in 7-8th column (Left:OrangeFS/Right:BeeGFS), and the consequence in 9th column.</head><label>3</label><figDesc></figDesc><table>Workloads 
+# of vulnerabilities 
+Crash State 
+Root Cause 
+Consequences 
+OrangeFS BeeGFS INR CNR 
+AR 
+PFS 
+HDF5 
+ARVR 
+1 
+2 
+-
+1 / 2 
+-
+1 / 2 
+-
+data loss 
+WAL 
+2 
+2 
+1 / 0 1 / 2 
+-
+2 / 2 
+-
+removed or uncreated log 
+H5-create 
+0 
+0 
+-
+-
+-
+-
+-
+n/a 
+H5-delete 
+9 
+2 
+-
+2 / 1 
+7 / 1 
+8 / 0 
+1 / 2 
+OrangeFS unavailable; dataset unreadable 
+H5-resize 
+1 
+2 
+-
+0 / 1 
+1 / 1 
+-
+1 / 2 
+unable to read resized dataset 
+H5-rename 
+6 
+5 
+-
+1 / 1 
+5 / 4 
+1 / 1 
+5 / 4 
+atomicity violation; link info error 
+H5-write 
+-
+2 
+-
+-/ 1 
+-/ 1 
+-/ 2 
+-
+unable to access data group 
+Total 
+19 
+15 
+1 / 0 5 / 8 13 / 7 12 / 7 
+7 / 8 
+
+4 PFSCHECK Design 
+
+In this section, we present PFSCHECK, which aims to effi-
+ciently test PFSes for identifying the crash vulnerabilities in 
+their design and implementation. PFSCHECK will automati-
+cally generate parallel I/O test cases, check crash consistency 
+of storage states after running each test, and pinpoint the root 
+cause in the storage stack. 
+
+crash state 
+
+legal state 
+
+… 
+
+workload 
+checker 
+
+passed 
+
+failed 
+
+crash state 
+
+… … 
+
+crash state 
+
+filesystem 
+&amp; app-level 
+recovery 
+
+client-side 
+traces 
+
+server-side 
+traces 
+
+</table></figure>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgment</head><p>We thank the anonymous reviewers for their helpful comments and feedback. This work was partially supported by NSF grant <ref type="bibr">CCF-1763540, CNS-1850317, and CCF-1919044.</ref> </p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+				<ptr target="http://www.ece.iastate.edu/~mai/docs/failures/2016-hpcc-lustre.pdf" />
+		<title level="m">HPCC power outage event at Texas Tech</title>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Correlated crash vulnerabilities</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aishwarya</forename><surname>Ramnatthan Alagappan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yuvraj</forename><surname>Ganesan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thanumalayan</forename><surname>Patel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Sankaranarayana Pillai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi H Arpaci-Dusseau</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proccedings of the 12th USENIX Symposium on Operating Systems Design and Implementation (OSDI&apos;16)</title>
+		<meeting>cedings of the 12th USENIX Symposium on Operating Systems Design and Implementation (OSDI&apos;16)<address><addrLine>Savannah, GA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title level="m" type="main">Operating systems: Three easy pieces</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Remzi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2017" />
+			<biblScope unit="volume">42</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Specifying and checking file system crash-consistency models</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">James</forename><surname>Bornholt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Antoine</forename><surname>Kaufmann</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jialin</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arvind</forename><surname>Krishnamurthy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Emina</forename><surname>Torlak</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xi</forename><surname>Wang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Twenty-First International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS&apos;16)</title>
+		<meeting>the Twenty-First International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS&apos;16)<address><addrLine>Atlanta, GA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2016-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dhruba</forename><surname>Borthakur</surname></persName>
+		</author>
+		<title level="m">HDFS architecture guide. Hadoop Apache Project</title>
+		<imprint>
+			<date type="published" when="2008" />
+			<biblScope unit="volume">53</biblScope>
+			<biblScope unit="page" from="1" to="13" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Verifying a high-performance crash-safe file system using a tree specification</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Haogang</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tej</forename><surname>Chajed</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alex</forename><surname>Konradi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stephanie</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">˙</forename><surname>Atalay</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adam</forename><surname>Ileri</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">Frans</forename><surname>Chlipala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nickolai</forename><surname>Kaashoek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Zeldovich</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 26th Symposium on Operating Systems Principles (SOSP&apos;17</title>
+		<meeting>the 26th Symposium on Operating Systems Principles (SOSP&apos;17</meeting>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Using crash Hoare logic for certifying the FSCQ file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Haogang</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Daniel</forename><surname>Ziegler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tej</forename><surname>Chajed</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adam</forename><surname>Chlipala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Frans</forename><surname>Kaashoek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nickolai</forename><surname>Zeldovich</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 25th Symposium on Operating Systems Principles (SOSP&apos;15)</title>
+		<meeting>the 25th Symposium on Operating Systems Principles (SOSP&apos;15)<address><addrLine>Monterey, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Overview of the MPI-IO parallel I/O interface</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Peter</forename><surname>Corbett</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dror</forename><surname>Feitelson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sam</forename><surname>Fineberg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yarsun</forename><surname>Hsu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bill</forename><surname>Nitzberg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jean-Pierre</forename><surname>Prost</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Marc</forename><surname>Snir</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bernard</forename><surname>Traversat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Parkson</forename><surname>Wong</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Workshop on Input/Output in Parallel and Distributed Systems (IPPS&apos;95)</title>
+		<meeting>the Workshop on Input/Output in Parallel and Distributed Systems (IPPS&apos;95)</meeting>
+		<imprint>
+			<date type="published" when="1995" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">The Google file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanjay</forename><surname>Ghemawat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Howard</forename><surname>Gobioff</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shun-Tak</forename><surname>Leung</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 19th ACM Symposium on Operating Systems Principles (SOSP&apos;03)</title>
+		<meeting>the 19th ACM Symposium on Operating Systems Principles (SOSP&apos;03)<address><addrLine>Bolton Landing, NY</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2003" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<monogr>
+		<title level="m" type="main">An introduction to BeeGFS</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jan</forename><surname>Heichler</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Finding Semantic Bugs in File Systems with an Extensible Fuzzing Framework</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Seulbae</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Meng</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanidhya</forename><surname>Kashyap</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jungyeon</forename><surname>Yoon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wen</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Taesoo</forename><surname>Kim</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 27th ACM Symposium on Operating Systems Principles (SOSP&apos;19)</title>
+		<meeting>the 27th ACM Symposium on Operating Systems Principles (SOSP&apos;19)<address><addrLine>Ontario, Canada</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2019-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">On distributed file tree walk of parallel file systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jharrod</forename><surname>Lafon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Satyajayant</forename><surname>Misra</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jon</forename><surname>Bringhurst</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the International Conference on High Performance Computing, Networking, Storage and Analysis (SC&apos;12)</title>
+		<meeting>the International Conference on High Performance Computing, Networking, Storage and Analysis (SC&apos;12)</meeting>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Finding crash-consistency bugs with bounded black-box crash testing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jayashree</forename><surname>Mohan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ashlie</forename><surname>Martinez</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Soujanya</forename><surname>Ponnapalli</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pandian</forename><surname>Raju</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vijay</forename><surname>Chidambaram</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 13th USENIX Symposium on Operating Systems Design and Implementation (OSDI&apos;18)</title>
+		<meeting>the 13th USENIX Symposium on Operating Systems Design and Implementation (OSDI&apos;18)</meeting>
+		<imprint>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="33" to="50" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Efficient object storage journaling in a distributed parallel file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sarp</forename><surname>Oral</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Feiyi</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Dillow</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Galen</forename><surname>Shipman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ross</forename><surname>Miller</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Oleg</forename><surname>Drokin</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 8th USENIX Conference on File and Storage Technologies (FAST&apos;10)</title>
+		<meeting>the 8th USENIX Conference on File and Storage Technologies (FAST&apos;10)</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">CRFS: A Lightweight UserLevel Filesystem for Generic Checkpoint/Restart</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Ouyang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Rajachandrasekar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Besseron</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Huang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">K</forename><surname>Panda</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2011 International Conference on Parallel Processing (ICPP&apos;11)</title>
+		<meeting>the 2011 International Conference on Parallel Processing (ICPP&apos;11)<address><addrLine>Taipei, Taiwan</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">All file systems are not created equal: On the complexity of crafting crash-consistent applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vijay</forename><surname>Thanumalayan Sankaranarayana Pillai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ramnatthan</forename><surname>Chidambaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Samer</forename><surname>Alagappan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Al-Kiswany</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi</forename><forename type="middle">H</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arpacidusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 11th USENIX Symposium on Operating Systems Design and Implementation (OSDI&apos;14)</title>
+		<meeting>the 11th USENIX Symposium on Operating Systems Design and Implementation (OSDI&apos;14)<address><addrLine>Broomfield, CO</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">IndexFS: Scaling file system metadata performance with stateless caching and bulk insertion</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kai</forename><surname>Ren</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Qing</forename><surname>Zheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Swapnil</forename><surname>Patil</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Garth</forename><surname>Gibson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the International Conference for High Performance Computing, Networking, Storage and Analysis (SC&apos;14)</title>
+		<meeting>the International Conference for High Performance Computing, Networking, Storage and Analysis (SC&apos;14)</meeting>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">GPFS: A shareddisk file system for large computing clusters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Frank</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Schmuck</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Roger L Haskin</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FAST</title>
+		<imprint>
+			<date type="published" when="2002" />
+			<biblScope unit="volume">2</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Building a file system for 1000-node clusters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Philip</forename><surname>Schwan</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2003 Linux symposium</title>
+		<meeting>the 2003 Linux symposium</meeting>
+		<imprint>
+			<date type="published" when="2003" />
+			<biblScope unit="page" from="380" to="386" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">The Hadoop distributed file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Shvachko</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Kuang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Radia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Chansler</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the IEEE 26th Symposium on Mass Storage Systems and Technologies (MSST&apos;10)</title>
+		<meeting>the IEEE 26th Symposium on Mass Storage Systems and Technologies (MSST&apos;10)</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Push-button verification of file systems via crash refinement</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Helgi</forename><surname>Sigurbjarnarson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">James</forename><surname>Bornholt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Emina</forename><surname>Torlak</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xi</forename><surname>Wang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 12th USENIX Conference on Operating Systems Design and Implementation (OSDI&apos;16)</title>
+		<meeting>the 12th USENIX Conference on Operating Systems Design and Implementation (OSDI&apos;16)</meeting>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">Can highperformance interconnects benefit hadoop distributed file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sayantan</forename><surname>Sur</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hao</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jian</forename><surname>Huang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xiangyong</forename><surname>Ouyang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dhahaleswar</forename><forename type="middle">K</forename><surname>Panda</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Workshop on Micro Architectural Support for Virtualization, Data Center Computing, and Clouds (MASVDC&apos;10)</title>
+		<meeting>the Workshop on Micro Architectural Support for Virtualization, Data Center Computing, and Clouds (MASVDC&apos;10)<address><addrLine>Atlanta, GA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+	<note>23] OrangeFS Team. The OrangeFS project</note>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Recorder 2.0: Efficient parallel I/O tracing and analysis</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chen</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jinghan</forename><surname>Sun</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Marc</forename><surname>Snir</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kathryn</forename><surname>Mohror</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Elsa</forename><surname>Gonsiorowski</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">The IEEE International Workshop on High-Performance Storage</title>
+		<imprint>
+			<date type="published" when="2020" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Fuzzing File Systems via TwoDimensional Input Space Exploration</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wen</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hyungon</forename><surname>Moon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanidhya</forename><surname>Kashyap</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Po-Ning</forename><surname>Tseng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Taesoo</forename><surname>Kim</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 40th IEEE Symposium on Security and Privacy (Oakland&apos;19)</title>
+		<meeting>the 40th IEEE Symposium on Security and Privacy (Oakland&apos;19)<address><addrLine>San Francisco, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2019-05" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">EXPLODE: A lightweight, general system for finding serious storage system errors</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Junfeng</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Can</forename><surname>Sar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dawson</forename><surname>Engler</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 7th USENIX Symposium on Operating Systems Design and Implementation (OSDI&apos;06)</title>
+		<meeting>the 7th USENIX Symposium on Operating Systems Design and Implementation (OSDI&apos;06)</meeting>
+		<imprint>
+			<date type="published" when="2006" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

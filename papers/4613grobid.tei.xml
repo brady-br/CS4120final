@@ -1,0 +1,485 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T04:26+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Looking inside the (Drop) box</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author role="corresp">
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dhiru</forename><surname>Kholia</surname></persName>
+							<email>dhiru@openwall.comprzemysławw˛egrzyncodepainterswegrzyn@codepainters.com</email>
+							<affiliation key="aff0">
+								<orgName type="institution">Openwall / University of British Columbia</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Looking inside the (Drop) box</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Dropbox is a cloud based file storage service used by more than 100 million users. In spite of its widespread popularity, we believe that Dropbox as a platform hasn&apos;t been analyzed extensively enough from a security standpoint. Also, the previous work on the security analysis of Dropbox has been heavily censored. Moreover, the existing Python bytecode reversing techniques are not enough for reversing hardened applications like Dropbox. This paper presents new and generic techniques, to reverse engineer frozen Python applications, which are not limited to just the Dropbox world. We describe a method to bypass Dropbox&apos;s two factor authentication and hijack Dropbox accounts. Additionally, generic techniques to intercept SSL data using code injection techniques and monkey patching are presented. We believe that our biggest contribution is to open up the Dropbox platform to further security analysis and research. Dropbox will / should no longer be a black box. Finally, we describe the design and implementation of an open-source version of Dropbox client (and yes, it runs on ARM too).</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>The Dropbox clients run on around ten platforms and many of these Dropbox clients are written mostly in Python <ref type="bibr" target="#b7">[7]</ref>. The client consists of a modified Python interpreter running obfuscated Python bytecode. However, Dropbox being a proprietary platform, no source code is available for these clients. Moreover, the API being used by the various Dropbox clients is not documented.</p><p>Before trusting our data to Dropbox, it would be wise (in our opinion) to know more about the internals of Dropbox. Questions about the security of the uploading process, two-factor authentication and data encryption are some of the most obvious.</p><p>Our paper attempts to answer these questions and more. In this paper, we show how to unpack, decrypt and decompile Dropbox from scratch and in full detail. This paper presents new and generic techniques to reverse engineer frozen Python applications. Once you have the decompiled source-code, it is possible to study how Dropbox works in detail. This Dropbox source-code reversing step is the foundation of this paper and is described in section 3. Our work uses various code injection techniques and monkey-patching to intercept SSL data in Dropbox client. We have used these techniques successfully to snoop on SSL data in other commercial products as well. These techniques are generic enough and we believe would aid in future software development, testing and security research.</p><p>Our work reveals the internal API used by Dropbox client and makes it straightforward to write a portable open-source Dropbox client, which we present in section 5. Ettercap and Metasploit plug-ins (for observing LAN sync protocol and account hijacking, respectively) are presented which break various security aspects of Dropbox. Additionally, we show how to bypass Dropbox's two factor authentication and gain access to user's data.</p><p>We hope that our work inspires the security community to write an open-source Dropbox client, refine the techniques presented in this paper and conduct research into other cloud based storage systems.  <ref type="bibr" target="#b5">[5]</ref> fails to work since it only can deal with encryption algorithm used in the earlier versions (1.1.x) of Dropbox. Our work bypasses the bytecode decryption step entirely and is more robust against the ever changing encryption methods employed in Dropbox.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Existing Work</head><p>The techniques presented in pyREtic <ref type="bibr" target="#b17">[17]</ref> do not work against Dropbox since co_code (code object attribute which contains bytecode) cannot be accessed any more at the Python layer. Furthermore, the key technique used by pyREtic (replacing original obfuscated .pyc bytecode file with desired .py file) to gain control over execution no longer works. Dropbox patches the standard import functionality which renders pyREtic's key technique useless. We get around this problem by using standard and well-understood code injection techniques like Reflective DLL injection <ref type="bibr" target="#b2">[3]</ref> (on Windows) and LD_PRELOAD <ref type="bibr" target="#b6">[6]</ref> (on Linux). marshal.dumps function which could be potentially used for dumping bytecode is patched too! Also, techniques described in Reverse Engineering Python Applications <ref type="bibr" target="#b11">[11]</ref> do not work against Dropbox for the very same reasons. We work around this problem by dynamically finding the co_code attribute at the C layer. In short, Dropbox is challenging to reverse and existing techniques fail.</p><p>Another interesting attack on the older versions of Dropbox is implemented in the dropship tool <ref type="bibr" target="#b19">[19]</ref>. Essentially dropship allows a user to gain access to files which the user doesn't own provided the user has the correct cryptographic hashes of the desired files. However, Dropbox has patched this attack vector and we have not been able to find similar attacks yet.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Breaking the (Drop)box</head><p>In this section we explain various ways to reverseengineer Dropbox application on Windows and Linux platform. We have analyzed Dropbox versions from 1.1.x to 2.2.8 (latest as of 01-July-2013).</p><p>Dropbox clients for Linux, Windows and Mac OS are written mostly in Python. On Windows, py2exe <ref type="bibr" target="#b12">[12]</ref> is used for packaging the source-code and generating the deliverable application. A heavily fortified version of the Python interpreter can be extracted from the PE resources of Dropbox.exe executable using tools like PE Explorer or Resource Hacker. Dropbox.exe also contains a ZIP of all encrypted .pyc files containing obfuscated bytecode.</p><p>On Linux, Dropbox is packaged (most likely) using the bbfreeze utility <ref type="bibr" target="#b16">[16]</ref>. bbfreeze uses static linking (for Python interpreter and the OpenSSL library) and as such there is no shared library which can be extracted out and analyzed in a debugger or a disassembler.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Unpacking Dropbox</head><p>A generic unpacker for Dropbox.exe executable (dropbox / main on Linux) is trivial to write, import zipfile from zipfile import PyZipFile fileName = "Dropbox.exe" mode = "r" ztype = zipfile.ZIP_DEFLATED f = PyZipFile(fileName, "r", ztype) f.extractall <ref type="bibr">("bytecode_encrypted")</ref> This script will extract the encrypted .pyc files (which contain bytecode) in a folder called bytecode_encrypted. Normally, .pyc files contain a four-byte magic number, a four-byte modification timestamp and a marshalled code object <ref type="bibr" target="#b0">[1]</ref>. In case of Dropbox, the marshalled code object is encrypted. In the next section, we describe various techniques to decrypt these encrypted .pyc files.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Decrypting encrypted Dropbox bytecode</head><p>As briefly mentioned earlier, we extract the customized Python interpreter named Python27.dll from the PE resources of Dropbox.exe executable using PE Explorer. This Python27.dll file from the Windows version of Dropbox was analyzed using IDA Pro and BinDiff to see how it is different from the standard interpreter DLL. We found out that many standard functions like PyRun_File(), marshal.dumps are nop'ed out to make reverse engineering Dropbox harder. A casual inspection of extracted .pyc files reveals no visible strings which is not the case with standard .pyc files. This implies that encryption (or some obfuscation) is being employed by Dropbox to protect bytecode. We found that Python's r_object() (in marshal.c) function was patched to decrypt code objects upon loading. Additionally, Dropbox's .pyc files use a non-standard magic number (4 bytes), this however is trivial to fix. To decrypt the buffer r_object() calls a separate function inside Python27.dll. We figured out a way to call this decryption function from outside the DLL and then consequently dump the decrypted bytecode back to disk. There is no need at all to analyse the encryption algorithm, keys, etc. However we had to rely on calling a hard-coded address and this decryption function has no symbol attached. Additionally, On Linux, everything is statically linked into a single binary and the decryption function is inlined into r_object(). So, we can no longer call this decryption function in a standalone fashion.</p><p>To overcome this problem, we looked around for a more robust approach and hit upon the idea of loading the .pyc files into memory from the disk and then serializing them back. We use LD_PRELOAD (Reflective DLL injection on Windows) to inject our C code into dropbox process, then we override (hijack) a common C function (like strlen) to gain control over the control flow and finally we inject Python code by calling PyRun_SimpleString (official Python C API function which is not patched!). Hence it is possible to execute arbitrary code in Dropbox client context.</p><p>We should mention that running Python code from within the injected code in Dropbox context requires GIL (Global Interpreter Lock) <ref type="bibr" target="#b20">[20]</ref> to be acquired. Now we explain how we get Dropbox to do the decryption work for us and for free. From the injected code we can call PyMarshal_ReadLastObjectFromFile() which loads the code object from encrypted .pyc file. So, in memory we essentially have unencrypted code object available. However, the co_code string (which contains the bytecode instructions) is not exposed at the Python layer (this can be done by modifying code_memberlist array in Objects/codeobject.c file). So after locating this decrypted code object (using a linear memory search) we serialize it back to file. However this again is not straightforward since marshal.dumps method is nop'ed. In other words, object marshalling is stripped out in the custom version of Python used by Dropbox. So, we resort to using PyPy's _marshal.py <ref type="bibr" target="#b13">[13]</ref> which we inject into the running Dropbox process.</p><p>Dropbox keeps changing the bytecode encryption scheme. In Dropbox 1.1.x, TEA cipher, along with an RNG seeded by some values embedded in the code object of each python module, is used to perform bytecode encryption <ref type="bibr" target="#b5">[5]</ref>. In Dropbox 1.1.45 this RNG function was changed and this broke dropboxdec <ref type="bibr" target="#b5">[5]</ref> utility. <ref type="bibr" target="#b15">[15]</ref> runs into similar problems as well. In short, these changing bytecode encryption schemes used by Dropbox are quite effective against older reversing approaches. In contrast, our reversing techniques are not affected by such changes at all.</p><p>In summary, we get decryption for free! Our method is a lot shorter, easier and more reliable than the ones used in <ref type="bibr" target="#b5">[5]</ref> and <ref type="bibr" target="#b15">[15]</ref>. Overall, we have 200 lines of C and 350 lines of Python (including marshal code from PyPy). Our method is robust, as we do not even need to deal with the ever changing decryption algorithms ourselves. Our decryption tool works with all versions of Dropbox that we used for testing. Finally, the techniques described in this section are generic enough and also work for reversing other frozen Python applications (e.g. Druva inSync and Google Drive Insync client).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">Opcode remapping</head><p>The next anti-reversing technique used by Dropbox is Opcode remapping. The decrypted .pyc files have valid strings (which are expected in standard Python bytecode), but these .pyc files still fail to load under standard interpreter due to opcodes being swapped.</p><p>CPython is a simple opcode (1 byte long) interpreter. ceval.c is mostly a big switch statement inside a loop which evaluates these opcodes. In Dropbox, this part is patched to use different opcode values. We were able to recover this mapping manually by comparing disassembled DLL with ceval.c (standard CPython file). However, this process is time consuming and won't really scale if Dropbox decided to use even slightly different opcode mapping in the newer versions.</p><p>A technique to break this protection is described in pyREtic <ref type="bibr" target="#b17">[17]</ref> paper and is partially used in dropboxdec <ref type="bibr" target="#b5">[5]</ref>. In short, Dropbox bytecode is compared against standard Python bytecode for common modules. It does not work (as it is) against Dropbox because co_code (bytecode string) is not available at the Python layer and Python import has been patched in order to not load .py files. However, it is possible to compare decrypted Dropbox bytecode (obtained using our method) with standard bytecode for common Python modules and come up with opcode mapping used by Dropbox.</p><p>However, we did not explore this and other automated opcode deduction techniques because in practice, the opcode mapping employed in Dropbox hasn't changed since version 1.6.0. That being said, we would like to attempt solving this problem in the future. In the next section, we describe how to decompile the recovered .pyc files.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.4">Decompiling decrypted bytecode</head><p>For decompiling decrypted Python bytecode to Python source code we rely on uncompyle2 <ref type="bibr" target="#b22">[22]</ref>, which is a Python 2.7 byte-code decompiler, written in Python 2.7. uncompyle2 is straightforward to use and the decompiled source code works fine. We were able to recover all the Python source code used in Dropbox with uncompyle2.</p><p>In the next section, we analyse how Dropbox authentication works and then present some attacks against it.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Dropbox security and attacks</head><p>Accessing Dropbox's website requires one to have the necessary credentials (email address and password). The same credentials are also required in order to link (register) a device with a Dropbox account. In this registration process, the end-user device is associated with a unique host_id which is used for all future authentication operations. In other words, Dropbox client doesn't store or use user credentials once it has been linked to the user account. host_id is not affected by password changes and it is stored locally on the end-user device.</p><p>In older versions (&lt; 1.2.48) of Dropbox, this host_id was stored locally in clear-text in an SQLite database (named config.db). By simply copying this SQLite database file to another machine, it was possible to gain access to the target user's data. This attack vector is described in detail in the "Dropbox authentication: insecure by design" post <ref type="bibr" target="#b10">[10]</ref>.</p><p>However, from version 1.2.48 onwards, host_id is now stored in an encrypted local SQLite database <ref type="bibr" target="#b18">[18]</ref>. However, host_id can still be extracted from the encrypted SQLite database ($HOME/.dropbox/config.dbx) since the secrets (various inputs) used in deriving the database encryption key are stored on the end-user device (however, local storage of such secrets can't be avoided since Dropbox client depends on them to work). On Windows, DPAPI encryption is used to protect the secrets whereas on Linux a custom obfuscator is used by Dropbox. It is straightforward to discover where the secrets are stored and how the database encryption key is derived. The relevant code for doing so on Linux is in common_util/keystore/keystore_linux.py file. dbx-keygenlinux <ref type="bibr" target="#b14">[14]</ref> (which uses reversed Dropbox sources) is also capable of recovering the database encryption key. It also works for decrypting filecache.dbx encrypted database which contains meta-data and which could be useful for forensic purposes.</p><p>Additionally, another value host_int in now involved in the authentication process. After analyzing Dropbox traffic, we found out that host_int is received from the server at startup and also that it does not change.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">host_id and host_int</head><p>Dropbox client has a handy feature which enables a user to login to Dropbox's website without providing any credentials. This is done by selecting "Launch Dropbox Website" from the Dropbox tray icon. So, how exactly does the Dropbox client accomplish this? Well, two values, host_id and host_int are involved in this process. In fact, knowing host_id and host_int values that are being used by a Dropbox client is enough to access all data from that particular Dropbox account. host_id can be extracted from the encrypted SQLite database or from the target's memory using various code injection techniques.</p><p>host_int can be sniffed from Dropbox LAN sync protocol traffic. While this protocol can be disabled, it is turned on by default. We have written an Ettercap plugin <ref type="bibr" target="#b8">[8]</ref> to sniff the host_int value remotely on a LAN. It is also possible to extract this value from the target machine's memory.</p><p>We found an interesting attack on Dropbox versions (&lt;= 1.6.x) in which it was possible to extract the host_id and host_int values from the logs generated by the Dropbox client. However the Dropbox client generated these logs only when a special environment variable (DB-DEV) was set properly. Dropbox turns on logging only when the MD5 checksum of DBDEV starts with "c3da6009e4". James Hall from the #openwall channel was able to crack this partial MD5 hash and he found out that the string "a2y6shya" generates the required partial MD5 collision. Our Metasploit plug-in <ref type="bibr" target="#b9">[9]</ref> exploits this "property" and is able to remotely hijack Dropbox accounts. This property has been patched after we disclosed it responsibly to Dropbox. However, the next section will describe a new way of hijacking Dropbox accounts which cannot be patched easily.</p><p>We mentioned earlier that the host_int value is received from the server at startup and that it does not change. So, it is obviously possible to ask the Dropbox server itself for this value, just like the Dropbox client does! </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Hijacking Dropbox accounts</head><p>Once, host_int and host_id values for a particular Dropbox client are known, it is possible to gain access to that account using the following code. We call this the tray_login method. Accessing the url output of the above code takes one to the Dropbox account of the target user. We have shown (in the previous section) a method to get the host_int value from the Dropbox server itself. So, in short, we have revived the earlier attack (which was fixed by Dropbox) on Dropbox accounts which required knowing only the host_id value to access the target's Dropbox account.</p><p>While this new technique for hijacking Dropbox accounts works fine currently, we have observed that the latest versions of Dropbox client do not use this tray_login mechanism (in order to allow the user to automatically login to the website). They now rely on heavier obfuscation and random nonces (received from the server) to generate those auto-login URLs. We plan to break this new auto-login mechanism in the near future.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Intercepting SSL data</head><p>In previous code samples, we have used undocumented Dropbox API. In this section we describe how we discovered this internal API. Existing SSL MiTM (man-inthe-middle) tools (e.g. Burp Suite) cannot sniff Dropbox traffic since Dropbox client uses hard coded SSL certificates. Additionally the OpenSSL library is statically linked with Dropbox executable. Binary patching is somewhat hard and time-consuming. We get around this problem by using Reflective DLL injection <ref type="bibr" target="#b2">[3]</ref> (on Windows) and LD_PRELOAD <ref type="bibr" target="#b6">[6]</ref> on Linux) to gain control over execution, followed by monkey patching <ref type="bibr" target="#b21">[21]</ref> of all "interesting" objects.</p><p>Once we are able to execute arbitrary code in Dropbox client context, we patch all SSL objects and are able to snoop on the data before it has been encrypted (on sending side) and after it has been decrypted (on receiving side). This is how we intercept SSL data. We have successfully used the same technique on multiple commercial Python applications (e.g. Druva inSync). The following code shows how we locate and patch interesting Python objects at runtime. This monkey patching technique to break SSL can also be used with other dynamic languages like Ruby, Perl, JavaScript, Perl and Groovy.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1">Bypassing 2FA</head><p>We found that two-factor authentication (as used by Dropbox) only protects against unauthorized access to the Dropbox's website. The Dropbox internal client API does not support or use two-factor authentication! This implies that it is sufficient to have only the host_id value to gain access to the target's data stored in Dropbox. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2">Open-source Dropbox client</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.3">New ways to hijack accounts</head><p>We have briefly mentioned previously that it is possible to extract host_id and host_int from the Dropbox client's memory once control of execution flow has been gained by using Reflective DLL injection or LD_PRELOAD. The following code snippet shows how exactly this can be accomplished. We believe that this technique (snooping on objects) is hard to protect against. Even if Dropbox somehow prevents attackers from gaining control over the execution flow, it is still possible to use smart memory snooping attacks as implemented in passe-partout <ref type="bibr" target="#b1">[2]</ref>. We plan to extend passe-partout to carry out more generic memory snooping attacks in the near future.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Mitigations</head><p>We believe that the arms race between software protection and software reverse engineering would go on. Protecting software against reverse engineering is hard but it is definitely possible to make the process of reverse engineering even harder.</p><p>Dropbox uses various techniques to deter reverse engineering like changing bytecode magic number, bytecode encryption, opcode remapping, disabling functions which could aid reversing, static linking, using hard coded certificates and hiding raw bytecode objects. We think that all these techniques are good enough against a casual attacker. Additionally, Dropbox could use techniques like function name mangling, marshalling format changes to make reverse engineering harder.</p><p>That being said, we wonder what Dropbox aims to gain by employing such anti-reversing measures. Most of the Dropbox's "secret sauce" is on the server side which is already well protected. We do not believe that these anti-RE measures are beneficial for Dropbox users and for Dropbox.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Challenges and future work</head><p>The various things we would like to explore are finding automated techniques for reversing opcode mappings and discovering new attacks on the LAN sync protocol used by Dropbox.</p><p>Activating logging in Dropbox now requires cracking a full SHA-256 hash (e27eae61e774b19f4053361e523c7 71a92e838026da42c60e6b097d9cb2bc825). The plaintext corresponding to this hash needs to be externally supplied to the Dropbox client (in order to activate logging) and this plaintext value is not public.</p><p>Another interesting challenge is to run Dropbox back from its decompiled sources. We have been partially successful (so far) in doing so. We would like to work on making the technique of dumping bytecode from memory (described in the pyREtic <ref type="bibr" target="#b17">[17]</ref> paper) work for Dropbox.</p><p>At some point, Dropbox service will disable the existing "tray_login" method which will make hijacking accounts harder. Therefore, we would like to continue our work on finding new ways to do it.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="8">Acknowledgments</head><p>We would like to thank Nicolas Ruff, Florian Ledoux and wibiti for their work on uncompyle2. We also thank the anonymous reviewers as well as other Openwall folks for their helpful comments and feedback.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>/</head><label></label><figDesc>/ use dlsym(RTLD_DEFAULT...) to find // symbols from within the injected code PyGILState_STATE gstate; gstate = PyGILState_Ensure(); PyRun_SimpleString("print 'w00t!'");</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head></head><label></label><figDesc>% host_id) base_url = 'https://client10.dropbox.com' url = base_url + '/register_host' headers = {'content-type': \ 'application/x-www-form-urlencoded', \ 'User-Agent': "Dropbox ARM" } r = requests.post(url, data=data, headers=headers) data = json.loads(r.text) host_int = data["host_int"]</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head></head><label></label><figDesc>import gc f = open("SSL-data.txt", "w") def ssl_read(*args): data = ssl_read_saved(*args) f.write(str(data)) return data def patch_object(obj): if isinstance(obj, SSLSocket) \ and not hasattr(obj, "marked"): obj.marked = True ssl_read_saved = obj.read obj.read = ssl_read while True: objs = gc.get_objects() for obj in objs: patch_object(obj) time.sleep(1)</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_4"><head></head><label></label><figDesc>Based on the findings of the earlier sections, it is straight- forward to write an open-source Dropbox client. The fol- lowing code snippet shows how to fetch the list of files stored in a Dropbox account. host_id = "?" BASE_URL = 'https://client10.dropbox.com/' register_url = BASE_URL + 'register_host' list_url = BASE_URL + "list" # headers headers = {'content-type': \ 'application/x-www-form-urlencoded', \ 'User-Agent': "Dropbox ARM" } # message data = ("buildno=ARM&amp;tag=&amp;uuid=42&amp;" "server_list=True&amp;host_id=%s" "&amp;hostname=r" % host_id) r = requests.post(register_url, data=data, headers=headers) # extract data data = json.loads(r.text) host_int = data["host_int"] root_ns = data["root_ns"] # fetch data list root_ns = str(root_ns) + "_-1" data = data + ("&amp;ns_map=%s&amp;dict_return=1" "&amp;server_list=True&amp;last_cu_id=-1&amp;" "need_sandboxes=0&amp;xattrs=True" % root_ns) # fetch list of files r = requests.post(list_url, data=data, headers=headers) data = json.loads(r.text) paths = data["list"] # show a list of files and their hashes print paths Similarly, we are able to upload and update files us- ing our open-source Dropbox client. We hope that our work inspires the open-source community to write a full- fledged open-source Dropbox client capable of running even on platforms not supported by Dropbox.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_5"><head># 1 .</head><label>1</label><figDesc>Inject code into Dropbox. # 2. Locate PyRun_SimpleString using dlsym # from within the Dropbox process # 3. Feed the following code to the located # PyRun_SimpleString import gc objs = gc.get_objects() for obj in objs: if hasattr(obj, "host_id"): print obj.host_id if hasattr(obj, "host_int"): print obj.host_int</figDesc></figure>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="9">Availability</head><p>Our and other tools used by us are available on GitHub at https://github.com/kholia. Python decompiler is available at <ref type="bibr" target="#b22">[22]</ref> and the code for Reflective DLL Injection is available at <ref type="bibr" target="#b4">[4]</ref>. We also plan to publish the complete source code of our tools and exploits on GitHub around conference time.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title level="m" type="main">The structure of</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Batchelder</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename></persName>
+		</author>
+		<ptr target="http://nedbatchelder.com/blog/200804/the_structure_of_pyc_files.html" />
+		<imprint>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title level="m" type="main">passe-partout, extract ssl private keys from process memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Collignon</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aviat</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J.-B</forename></persName>
+		</author>
+		<ptr target="https://github.com/kholia/passe-partout" />
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title level="m" type="main">Reflective DLL injection</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fewer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+		<ptr target="www.harmonysecurity.com/files/HS-P005_" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Reflectivedllinjection</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+		<title level="m" type="main">Reflective dll injection code</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fewer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+		<ptr target="https://github.com/stephenfewer/ReflectiveDLLInjection" />
+		<imprint>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title level="m" type="main">Dropbox bytecode decryption tool</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fritsch</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename></persName>
+		</author>
+		<ptr target="https://github.com/rumpeltux/dropboxdec" />
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gnu</forename><surname>Ld_Preload -Dynamic</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Linker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Loader Feature</surname></persName>
+		</author>
+		<ptr target="http://man7.org/linux/man-pages/man8/ld.so.8.html" />
+		<imprint>
+			<date type="published" when="1987" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">How dropbox did it and how python helped</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hunter</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">PyCon</title>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<monogr>
+		<title level="m" type="main">db-lsp-disc dissector to figure out host_int</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kholia</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename></persName>
+		</author>
+		<ptr target="https://github.com/kholia/ettercap/tree/dropbox" />
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<monogr>
+		<title level="m" type="main">Long promised post module for hijacking dropbox accounts</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kholia</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename></persName>
+		</author>
+		<ptr target="https://github.com/rapid7/metasploit-framework/pull/1497" />
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<monogr>
+		<title level="m" type="main">Dropbox authentication: insecure by design</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Newton</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename></persName>
+		</author>
+		<ptr target="http://dereknewton.com/2011/04/dropbox-authentication-static-host-ids/" />
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Reverse engineering python applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Portnoy</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Santiago</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A.-R</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2nd conference on USENIX Workshop on offensive technologies</title>
+		<meeting>the 2nd conference on USENIX Workshop on offensive technologies</meeting>
+		<imprint>
+			<date type="published" when="2008" />
+			<biblScope unit="page">6</biblScope>
+		</imprint>
+	</monogr>
+	<note>USENIX Association</note>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<monogr>
+		<title level="m" type="main">distutils extension to build standalone windows executable programs from python scripts</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Retzlaff</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+		<ptr target="https://pypi.python.org/pypi/bbfreeze/" />
+		<imprint>
+			<date type="published" when="2002" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<monogr>
+		<title level="m" type="main">Pypy, python interpreter and just-in-time compiler</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rigo</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">T</forename><surname>Al</surname></persName>
+		</author>
+		<ptr target="http://pypy.org/" />
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<monogr>
+		<title level="m" type="main">Encryption key extractor for dropbox dbx files</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ruff</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ledoux</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename></persName>
+		</author>
+		<ptr target="https://github.com/newsoft/dbx-keygen-linux.git" />
+		<imprint>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">A critical analysis of dropbox software security</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ruff</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ledoux</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ASFWS 2012, Application Security Forum</title>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Schmitt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Bbfreeze</surname></persName>
+		</author>
+		<ptr target="https://pypi.python.org/pypi/bbfreeze/" />
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Smith</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Pyretic</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+	<note>BlackHat / Defcon 2010 security conferences</note>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<monogr>
+		<title level="m" type="main">The sqlite encryption extension (see)</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sqlite@hwaci</forename><surname>Com</surname></persName>
+		</author>
+		<ptr target="http://www.hwaci.com/sw/sqlite/see.html" />
+		<imprint>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Van Der Laan</surname></persName>
+		</author>
+		<ptr target="https://github.com/driverdan/dropship" />
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Van Rossum</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Global Interpreter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Lock</surname></persName>
+		</author>
+		<ptr target="http://wiki.python.org/moin/GlobalInterpreterLock" />
+		<imprint>
+			<date type="published" when="1991" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<monogr>
+		<title level="m" type="main">Monkey patch, modifying the run-time code of dynamic language</title>
+		<ptr target="http://en.wikipedia.org/wiki/Monkey_patch" />
+		<imprint>
+			<date type="published" when="1972" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wibiti</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eloi</forename><surname>Vanderbeken</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><forename type="middle">L</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">T</forename><surname>Al</surname></persName>
+		</author>
+		<ptr target="https://github.com/wibiti/uncompyle2.git" />
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+	<note>uncompyle2, a python 2.7 byte-code decompiler, written in python 2.7.</note>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

@@ -1,0 +1,962 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:08+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Remote Core Locking: Migrating Critical-Section Execution to Improve the Performance of Multithreaded Applications</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jean-Pierre</forename><surname>Lozi</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">LIP6/INRIA</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Florian</forename><surname>David</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">LIP6/INRIA</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gaël</forename><surname>Thomas</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">LIP6/INRIA</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Julia</forename><surname>Lawall</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">LIP6/INRIA</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gilles</forename><surname>Muller</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">LIP6/INRIA</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Remote Core Locking: Migrating Critical-Section Execution to Improve the Performance of Multithreaded Applications</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>The scalability of multithreaded applications on current multicore systems is hampered by the performance of lock algorithms, due to the costs of access contention and cache misses. In this paper, we propose a new lock algorithm , Remote Core Locking (RCL), that aims to improve the performance of critical sections in legacy applications on multicore architectures. The idea of RCL is to replace lock acquisitions by optimized remote procedure calls to a dedicated server core. RCL limits the performance collapse observed with other lock algorithms when many threads try to acquire a lock concurrently and removes the need to transfer lock-protected shared data to the core acquiring the lock because such data can typically remain in the server core&apos;s cache. We have developed a profiler that identifies the locks that are the bottlenecks in multithreaded applications and that can thus benefit from RCL, and a reengineering tool that transforms POSIX locks into RCL locks. We have evaluated our approach on 18 applications: Memcached, Berkeley DB, the 9 applications of the SPLASH-2 benchmark suite and the 7 applications of the Phoenix2 benchmark suite. 10 of these applications, including Mem-cached and Berkeley DB, are unable to scale because of locks, and benefit from RCL. Using RCL locks, we get performance improvements of up to 2.6 times with respect to POSIX locks on Memcached, and up to 14 times with respect to Berkeley DB.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Over the last twenty years, a number of studies <ref type="bibr" target="#b1">[2,</ref><ref type="bibr" target="#b2">3,</ref><ref type="bibr" target="#b4">5,</ref><ref type="bibr" target="#b11">12,</ref><ref type="bibr" target="#b12">13,</ref><ref type="bibr" target="#b14">15,</ref><ref type="bibr" target="#b16">17,</ref><ref type="bibr" target="#b23">24,</ref><ref type="bibr" target="#b25">26,</ref><ref type="bibr" target="#b26">27]</ref> have attempted to optimize the execution of critical sections on multicore architectures, either by reducing access contention or by improving cache locality. Access contention occurs when many threads simultaneously try to enter critical sections that are protected by the same lock, causing the cache line containing the lock to bounce between cores. Cache locality becomes a problem when a critical section accesses shared data that has recently been accessed on another core, resulting in cache misses, which greatly increase the critical section's execution time. Addressing access contention and cache locality together remains a challenge. These issues imply that some applications that work well on a small number of cores do not scale to the number of cores found in today's multicore architectures.</p><p>Recently, several approaches have been proposed to execute a succession of critical sections on a single server core to improve cache locality <ref type="bibr" target="#b12">[13,</ref><ref type="bibr" target="#b26">27]</ref>. Such approaches also incorporate a fast transfer of control from other client cores to the server, to reduce access contention. Suleman et al. <ref type="bibr" target="#b26">[27]</ref> propose a hardware-based solution, evaluated in simulation, that introduces new instructions to perform the transfer of control, and uses a special fast core to execute critical sections. <ref type="bibr">Hendler et al. [13]</ref> propose a software-only solution, Flat Combining, in which the server is an ordinary client thread, and the role of server is handed off between clients periodically. This approach, however, slows down the thread playing the role of server, incurs an overhead for the management of the server role, and drastically degrades performance at low contention. Furthermore, neither Suleman et al.'s algorithm nor Hender et al.'s algorithm can accommodate threads that block within a critical section, which makes them unable to support widely used applications such as Memcached.</p><p>In this paper, we propose a new locking technique, Remote Core Locking (RCL), that aims to improve the performance of legacy multithreaded applications on multicore hardware by executing remotely, on one or several dedicated servers, critical sections that access highly contended locks. Our approach is entirely implemented in software and targets commodity x86 multicore architectures. At the basis of our approach is the observation that most applications do not scale to the number of cores found in modern multicore architectures, and thus it is possible to dedicate the cores that do not contribute to improving the performance of the application to serving critical sections. Thus, it is not necessary to burden the application threads with the role of server, as done in Flat Combining. RCL also accommodates blocking within critical sections as well as nested critical sections. The design of RCL addresses both access contention and locality. Contention is solved by a fast transfer of control to a server, using a dedicated cache line for each client to achieve busy-wait synchronization with the server core. Locality is improved because shared data is likely to remain in the server core's cache, allowing the server to access such data without incurring cache misses. In this, RCL is similar to Flat Combining, but has a much lower overall overhead.</p><p>We propose a methodology along with a set of tools to facilitate the use of RCL in a legacy application. Because RCL serializes critical sections associated with locks managed by the same core, transforming all locks into RCLs on a smaller number of servers could induce false serialization. Therefore, the programmer must first decide which locks should be transformed into RCLs and on which core(s) to run the server(s). For this, we have designed a profiler to identify which locks are frequently used by the application and how much time is spent on locking. Based on this information, we propose a set of simple heuristics to help the programmer decide which locks must be transformed into RCLs. We also have designed an automatic reengineering tool for C programs to transform the code of critical sections so that it can be executed as a remote procedure call on the server core: the code within the critical sections must be extracted as functions and variables referenced or updated by the critical section that are declared by the function containing the critical section code must be sent as arguments, amounting to a context, to the server core. Finally, we have developed a runtime for Linux that is compatible with POSIX threads, and that supports a mixture of RCL and POSIX locks in a single application.</p><p>RCL is well-suited to improve the performance of a legacy application in which contended locks are an obstacle to performance, since using RCL enables improving locality and resistance to contention without requiring a deep understanding of the source code. On the other hand, modifying locking schemes to use fine-grained locking or lock-free data structures is complex, requires an overhaul of the source code, and does not improve locality.</p><p>We have evaluated the performance of RCL as compared to other locks on a custom latency microbenchmark measuring the execution time of critical sections that access a varying number of shared memory locations. Furthermore, based on the results of our profiler, we have identified Memcached, Berkeley DB with two types of TPC-C transactions, two benchmarks in the SPLASH-2 suite, and three benchmarks in the Phoenix2 suite as applications that could benefit from RCL. In each of these experiments, we compare RCL against the standard POSIX locks and the most efficient approaches for implementing locks of which we are aware: CAS spinlocks, MCS <ref type="bibr" target="#b16">[17]</ref> and Flat Combining <ref type="bibr" target="#b12">[13]</ref>. Comparisons are made for a same number of cores, which means that there are fewer application threads in the RCL case, since one or more cores are dedicated to RCL servers.</p><p>On an Opteron 6172 48-core machine running a 3.0.0 Linux kernel with glibc 2.13, our main results are:</p><p>• On our latency microbenchmark, under high contention, RCL is faster than all the other tested approaches, over 3 times faster than the second best approach, Flat Combining, and 4.4 faster than POSIX.</p><p>• On our benchmarks, we found that contexts are small, and thus the need to pass a context to the server has only a marginal performance impact.</p><p>• On most of our benchmarks, only one lock is frequently used and therefore only one RCL server is needed. The only exception is Berkeley DB which requires two RCL servers to prevent false serialisation.</p><p>• On Memcached, for Set requests, RCL provides a speedup of up to 2.6 times over POSIX locks, 2.0 times over MCS and 1.9 times over spinlocks.</p><p>• For TPC-C Stock Level transactions, RCL provides a speedup of up to 14 times over the original Berkeley DB locks for 40 simultaneous clients and outperforms all other locks for more than 10 clients. Overall, RCL resists better when the number of simultaneous clients increases.</p><p>The rest of the paper is structured as follows. Sec. 2 presents RCL and the use of profiling to automate the reengineering of a legacy application for use with RCL. Sec. 3 describes the RCL runtime. Sec. 4 presents the results of our evaluation. Sec. 5 presents other work that targets improving locking on multicore architectures. Finally, Sec. 6 concludes.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">RCL Overview</head><p>The key idea of RCL is to transfer the execution of a critical section to a server core that is dedicated to one or more locks <ref type="figure" target="#fig_0">(Fig. 1)</ref>. To use this approach, it is necessary to choose the locks for which RCL is expected to be beneficial and to reengineer the critical sections associated with these locks as remote procedure calls. In this section, we first describe the core RCL algorithm, then present a profiling tool to help the developer choose which locks to implement using RCL and a reengineering tool that rewrites the associated critical sections.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">Core algorithm</head><p>Using RCL, a critical section is replaced by a remote procedure call to a procedure that executes the code of the critical section. To implement the remote procedure call, the clients and the server communicate through an array of request structures, specific to each server core <ref type="figure" target="#fig_4">(Fig. 2)</ref>. This array has size C · L bytes, where C is a constant representing the maximum number of allowed clients (a large number, typically much higher than the number of cores), and L is the size of the hardware cache line. Each request structure req i is L bytes and allows communication between a specific client i and the server. The array is aligned so that each structure req i is mapped to a single cache line.</p><p>The first three machine words of each request req i contain respectively: (i) the address of the lock associated with the critical section, (ii) the address of a structure encapsulating the context, i.e., the variables referenced or updated by the critical section that are declared by the function containing the critical section code, and (iii) the address of a function that encapsulates the critical section for which the client c i has requested the execution, or NULL if no critical section is requested.</p><p>Client side To execute a critical section, a client c i first writes the address of the lock into the first word of the structure req i , then writes the address of the context structure into the second word, and finally writes the address of the function that encapsulates the code of the critical section into the third word. The client then actively waits for the third word of req i to be reset to NULL, indicating that the server has executed the critical section. In order to improve energy efficiency, if there are less clients than the number of cores available, the SSE3 monitor/mwait instructions can be used to avoid spinning: the client will sleep and be woken up automatically when the server writes into the third word of req i .</p><p>Server side A servicing thread iterates over the requests, waiting for one of the requests to contain a non-NULL value in its third word. When such a value is found, the servicing thread checks if the requested lock is free and, if so, acquires the lock and executes the critical section using the function pointer and the context. When the servicing thread is done executing the critical section, it resets the third word to NULL, and resumes the iteration.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">Profiling</head><p>To help the user decide which locks to transform into RCLs, we have designed a profiler that is implemented as a dynamically loaded library and intercepts calls involving POSIX locks, condition variables, and threads. The profiler returns information about the overall percentage of time spent in critical sections, as well as about the percentage of time spent in critical sections for each lock. We define the time spent in a critical section as the total time to acquire the lock (blocking time included), execute the critical section itself, and release the lock. It is measured by reading the cycle counter before and after each critical section, and by comparing the total measured time in critical sections with the total execution time, for each thread. The overall percentage of time spent in critical sections can help identify applications for which using RCL may be beneficial, and the percentage of time spent in critical sections for each lock helps guide the choice of which locks to transform into RCLs. For each lock, the profiler also produces information about the number of cache misses in its critical sections, as these may be reduced by the improved locality of RCL. <ref type="figure" target="#fig_3">Fig. 3</ref> shows the profiling results for 18 applications, including Memcached v1.4.6 (an in-memory cache server), Berkeley DB v5.2.28 (a general-purpose database), the 9 applications of the SPLASH-2 benchmark suite (parallel scientific applications), and the 7 applications of the Phoenix v2.0.0 benchmark suite (MapReduce-based applications) with the "medium" dataset. <ref type="bibr" target="#b0">1</ref> Raytrace and Memcached are each tested with two different standard working sets, and Berkeley DB is tested with the 5 standard transaction types from TPC-C. A gray box indicates that the application has not been run for the number of cores because even at 48 cores, locking is not a problem.</p><p>Ten of the tests spend more than 20% of their time in critical sections and thus are candidates for RCL. Indeed, for these tests, the percentage of time spent in critical sections directly depends on the number of cores, indicating that the POSIX locks are one of the main bottlenecks of these applications. We see in Sec. 4.1 that if the percentage of time executing critical sections for a given lock is over 20%, then an RCL will perform better than a POSIX lock, and if it is over 70%, then an RCL will perform better than all other known lock algorithms. We also observe that the critical sections of Memcached/Set incur many cache misses. Finally, Berkeley DB uses hybrid Test-And-Set/POSIX locks, which causes the profiler to underestimate the time spent in critical sections.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.3">Reengineering legacy applications</head><p>If the results of the profiling show that some locks used by the application can benefit from RCL, the developer must reengineer all critical sections that may be protected by the selected locks as a separate function that can be passed to the lock server. This reengineering amounts to an "Extract Method" refactoring <ref type="bibr" target="#b9">[10]</ref>. We have implemented this reengineering using the program transformation tool Coccinelle <ref type="bibr" target="#b20">[21]</ref>, in 2115 lines of code. It has a negligible impact on performance.</p><p>The main problem in extracting a critical section into a separate function is to bind the variables needed by the critical section code. The extracted function must receive the values of variables that are initialized prior to the critical section and read within the critical section, and return the values of variables that are updated in the critical section and read afterwards. Only variables local to the function are concerned; alias analysis is not required because aliases involve addresses that can be referenced from the server. The values are passed to and from the server in an auxiliary structure, or directly in the client's cache line in the request array ( <ref type="figure" target="#fig_4">Fig. 2)</ref> if only one value is required. The reengineering also addresses a common case of fine-grained locking, illustrated in lines 5-9 of <ref type="figure">Fig. 4</ref>, where a conditional in the critical section releases the lock and returns from the function. In this case, the code is transformed such that the critical section returns a flag value indicating which unlock ends the critical section, and then the code following the remote procedure call executes the code following the unlock that is indicated by the flag value.   should be implemented as an RCL. Finally, the reengineering tool also generates a header file, incorporating the profiling information, that the developer can edit to indicate which lock initializations should create POSIX locks and which ones should use RCLs.</p><formula xml:id="formula_0">1 union instance { 2 struct input { INT pid; } input; 3 struct output { WPJOB *wpentry; } output; 4 }; 5 6 void function(void *ctx) { 7 struct output *outcontext = &amp;(((union instance *)ctx)−&gt;output); 8 struct input *incontext = &amp;(((union instance *)ctx)−&gt;input);</formula></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Implementation of the RCL Runtime</head><p>Legacy applications may use ad-hoc synchronization mechanisms and rely on libraries that themselves may block or spin. The core algorithm, of Sec. 2.1, only refers to a single servicing thread, and thus requires that this thread is never blocked at the OS level and never spins in an active waitloop. In this section, we describe how the RCL runtime ensures liveness and responsiveness in these cases, and present implementation details.  </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Ensuring liveness and responsiveness</head><p>Three sorts of situations may induce liveness or responsiveness problems. First, the servicing thread could be blocked at the OS level, e.g., because a critical section tries to acquire a POSIX lock that is already held, performs an I/O, or waits on a condition variable. Indeed, we have found that roughly half of the multithreaded applications that use POSIX locks in Debian 6.0.3 (October 2011) also use condition variables. Second, the servicing thread could spin if the critical section tries to acquire a spinlock or a nested RCL, or implements some form of ad hoc synchronization <ref type="bibr" target="#b28">[29]</ref>. Finally, a thread could be preempted at the OS level when its timeslice expires <ref type="bibr" target="#b19">[20]</ref>, or because of a page fault. Blocking and waiting within a critical section risk deadlock, because the server is unable to execute critical sections associated with other locks, even when doing so may be necessary to allow the blocked critical section to unblock. Additionally, blocking, of any form, including waiting and preemption, degrades the responsiveness of the server because a blocked thread is unable to serve other locks managed by the same server.</p><p>Ensuring liveness To ensure liveness, the RCL runtime manages a pool of threads on each server such that when a servicing thread blocks or waits there is always at least one other free servicing thread that is not currently executing a critical section and this servicing thread will eventually be elected. To ensure the existence of a free servicing thread, the RCL runtime provides a management thread, which is activated regularly at each expiration of a timeout (we use the Linux time-slice value) and runs at highest priority. When activated, the management thread checks that at least one of the servicing threads has made progress since its last activation, using a server-global flag is_alive that is set by the servicing threads. If it finds that this flag is still cleared when it wakes up, it assumes that all servicing threads are either blocked or waiting and adds a free thread to the pool of servicing threads.</p><p>Ensuring responsiveness The RCL runtime implements a number of strategies to improve responsiveness. First, it avoids thread preemption from the OS scheduler by using the POSIX FIFO scheduling policy, which allows a thread to execute until it blocks or yields the processor. Second, it tries to reduce the delay before an unblocked servicing thread is rescheduled by minimizing the number of servicing threads, thus minimizing the length of the FIFO queue. Accordingly, a servicing thread suspends when it observes that there is at least one other free servicing thread, i.e., one other thread able to handle requests. Third, to address the case where all servicing threads are blocked in the OS, the RCL runtime uses a backup thread, which has lower priority than all servicing threads, that simply clears the is_alive flag and wakes up the management thread. Finally, when a critical section needs to execute a nested RCL managed by the same core and the lock is already owned by another servicing thread, the servicing thread immediately yields, to allow the owner of the lock to release it. The use of the FIFO policy raises two further liveness issues. First, FIFO scheduling may induce a priority inversion between the backup thread and the servicing threads or between the servicing threads and the management thread. To avoid this problem, the RCL runtime uses only lock-free algorithms and threads never wait on a resource. Second, if a servicing thread is in an active wait loop, it will not be preempted, and a free thread will not be elected. When the management thread detects no progress, i.e., is_alive is false, it thus also acts as a scheduler, electing a servicing thread by first decrementing and then incrementing the priorities of all the servicing threads, effectively moving them to the end of the FIFO queue. This is expensive, but is only needed when a thread spins for a long time, which is a sign of poor programming, and is not triggered in our benchmarks.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Algorithm details</head><p>We now describe in detail some issues of the algorithm.</p><p>Serving RCLs Alg. 1 shows the code executed by a servicing thread. The fast path (lines 6-16) is the only code that is executed when there is only one servicing thread in the pool. A slow path (lines 17-24), is additionally executed when there are multiple servicing threads.</p><p>Lines 9-15 of the fast path implement the RCL server loop as described in Sec. 2.1 and indicates that the servicing thread is not free by decrementing (line 8) and incrementing (line 16) number_of_free_threads. Because the thread may be preempted due to a page fault, all operations on variables shared between the threads, including number_of_free_threads, must be atomic. <ref type="bibr" target="#b1">2</ref> To avoid the need to reallocate the request array when new client threads are created, the size of the request array is fixed and chosen to be very large (256K), and the client identifier allocator implements an adaptive long-lived renaming algorithm <ref type="bibr" target="#b5">[6]</ref> that keeps track of the highest client identifier and tries to reallocate smaller ones.</p><p>The slow path is executed if the active servicing thread detects that other servicing threads exist (line 17). If the other servicing threads are all executing critical sections (line 18), the servicing thread simply yields the processor (line 19). Otherwise, it goes to sleep (lines 21-24).</p><p>Executing a critical section A client that tries to acquire an RCL or a servicing thread that tries to acquire an RCL managed by another core submits a request and waits for the function pointer to be cleared (Alg. 2, lines 6-9). If the RCL is managed by the same core, the servicing thread must actively wait until the lock is free. During this time it repetitively yields, to give the CPU to the thread that owns the lock (lines 11-12).</p><p>Management and backup threads If, on wake up, the management thread observes, based on the value of <ref type="bibr" target="#b1">2</ref> Since a server's atomic operations are core-local, we have implemented optimized atomic CAS and increment operations without using the costly x86 instruction prefix lock that cleans up the write buffers. is_alive, that none of the servicing threads has progressed since the previous timeout, then it ensures that at least one free thread exists (Alg. 3, lines 8-19) and forces the election (lines 20-27) of a thread that has not been recently elected. The backup thread (lines 31-34) simply sets is_alive to false and wakes up the management thread.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Evaluation</head><p>We first present a microbenchmark that identifies when critical sections execute faster with RCL than with the other lock algorithms. We then correlate this information with the results of the profiler, so that a developer can use the profiler to identify which locks to transform into RCLs. Finally, we analyze the performance of the applications identified by the profiler for all lock algorithms. Our evaluations are performed on a 48-core machine having four 12-core Opteron 6172 processors, running Ubuntu 11.10 (Linux 3.0.0), with gcc 4.6.1 and glibc 2.13. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">Comparison with other locks</head><p>We have developed a custom microbenchmark to measure the performance of RCL relative to four other lock algorithms: CAS Spinlock, POSIX, MCS <ref type="bibr" target="#b17">[18]</ref> and Flat Combining <ref type="bibr" target="#b12">[13]</ref>. These algorithms are briefly presented in <ref type="figure" target="#fig_5">Fig. 6</ref>. To our knowledge, MCS and Flat Combining are currently the most efficient.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Spinlock</head><p>CAS loop on a shared cache line. POSIX CAS, then sleep.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>MCS</head><p>CAS to insert the pending CS at the end of a shared queue. Busy wait for completion of the previous CS on the queue.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Flat Combining</head><p>Periodic CAS to elect a client that acts as a server, periodic collection of unused requests. Provides a generic interface, but not combining, as appropriate to support legacy applications: server only iterates over the list of pending requests. Our microbenchmark executes critical sections repeatedly on all cores, except one that manages the lifecycle of the threads. For RCL, this core also executes the RCL server. We vary the degree of contention on the lock by varying the delay between the execution of the critical sections: the shorter the delay, the higher the contention. We also vary the locality of the critical sections by varying the number of shared cache lines each one accesses (references and updates). To ensure that cache line accesses are not pipelined, we construct the address of the next memory access from the previously read value <ref type="bibr" target="#b29">[30]</ref>. <ref type="figure" target="#fig_7">Fig. 7(a)</ref> presents the average number of L2 cache misses (top) and the average execution time of a critical section (bottom) over 5000 iterations when critical sections access one shared cache line. This experiment measures the effect of lock access contention. <ref type="figure" target="#fig_7">Fig. 7(b)</ref> then presents the increase in execution time incurred when each critical section instead accesses 5 cache lines. This wakeup the management thread; 34 experiment measures the effect of data locality of shared cache lines. Highlights are summarized in <ref type="figure" target="#fig_7">Fig.7(c)</ref>.</p><p>With one shared cache line, at high contention, RCL has a better execution time than all other lock algorithms, with an improvement of at least 3 times. <ref type="bibr" target="#b2">3</ref> This improvement is mainly due to the absence of CAS in the lock implementation. Flat Combining is second best, but RCL performs better because Flat Combining has to periodically elect a new combiner. At low contention, RCL is slower than Spinlock by only 209 cycles. This is negligible since the lock is seldom used. In this case, Flat Combining is not efficient because after executing its critical section, the combiner must iterate over the list of requests before resuming its own work.</p><p>RCL incurs the same number of cache misses when each critical section accesses 5 cache lines as it does for  To estimate which locks should be transformed into RCLs, we correlate the percentage of time spent in critical sections observed using the profiler with the critical section execution times observed using the microbenchmark. <ref type="figure">Fig. 8</ref> shows the result of applying the profiler to the microbenchmark in the one cache line case with POSIX locks. <ref type="bibr" target="#b3">4</ref> To know when RCL becomes better than all other locks, we focus on POSIX and MCS: Flat Combining is always less efficient than RCL and Spinlock is <ref type="bibr" target="#b3">4</ref> Our analysis assumes that the targeted applications use POSIX locks, but a similar analysis could be made for any type of lock. only efficient at very low contention. We have marked the delays at which, as shown in <ref type="figure" target="#fig_7">Fig. 7(a)</ref>, the critical section execution time begins to be significantly higher when using POSIX and MCS than when using RCL. RCL becomes more efficient than POSIX when 20% of the application time is devoted to critical sections, and it becomes more efficient than MCS when this ratio is 70%. These results are preserved, or improved, as the number of accessed cache lines increases, because the execution time increases more for the other algorithms than for RCL. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Application performance</head><p>The two metrics offered by the profiler, i.e. the time spent in critical sections and the number of cache misses, do not, of course, completely determine whether an application will benefit from RCL. Many other factors (critical section length, interactions between locks, etc.) affect critical section execution. We find, however, that using the time spent in critical sections as our main metric and the number of cache misses in critical sections as a secondary metric works well; the former is a good indicator  (b) Berkeley DB <ref type="figure">Fig. 9</ref>: Best performance for each type of lock relative to the best performance for POSIX locks.</p><p>of contention, and the latter of data locality.</p><p>To evaluate the performance of RCL, we have measured the performance of applications listed in <ref type="figure" target="#fig_3">Fig. 3</ref> with the lock algorithms listed in <ref type="figure" target="#fig_7">Fig. 7</ref>. Memcached with Flat Combining is omitted, because it periodically blocks on condition variables, which Flat Combining does not support. We present only the results for the applications (and locks) that the profiler indicates as potentially interesting. Replacing the other locks has no performance impact. <ref type="figure">Fig. 9</ref>(a) presents the results for all of the applications for which the profiler identified a single lock as the bottleneck. For RCL, each of these applications uses only one server core. Thus, for RCL, we consider that we use N cores if we have N − 1 threads and 1 server, while we consider that we use N cores if we have N threads for the other lock algorithms. The top of the figure (xα : n/m) reports the improvement α over the execution time of the original application on one core, the number n of cores that gives the shortest execution time (i.e., the scalability peak), and the minimal number m of cores for which RCL is faster than all other locks. The histograms show the ratio of the shortest execution time for each application using POSIX locks to the shortest execution time with each of the other lock algorithms. 5 <ref type="figure">Fig. 9(b)</ref> presents the results for Berkeley DB with 100 clients (and hence 100 threads) running TPC-C's Order Status and Stock Level transactions. Since MCS cannot handle more than 48 threads, due to the convoy effect, we have also implemented MCS-TP <ref type="bibr" target="#b11">[12]</ref>, a variation of MCS with a spinning timeout to resist convoys. In the case of RCL, the two most used locks have been placed on two different RCL servers, leaving 46 cores for the clients. Additionally, we study the impact of the number of simultaneous clients on the number of transactions treated per second for Stock Level transactions (see <ref type="figure" target="#fig_0">Fig. 11</ref>).</p><p>Performance analysis For the applications that spend 20-70% of their time in critical sections when using <ref type="bibr" target="#b4">5</ref> For Memcached, the execution time is the time for processing 10,000 requests. POSIX locks (Raytrace/Balls4, String Match, and Memcached/Set), RCL gives significantly better performance than POSIX locks, but in most cases it gives about the same performance as MCS and Flat Combining, as predicted by our microbenchmark. For Memcached/Set, however, which spends only 54% of the time in critical sections when using POSIX locks, RCL gives a large improvement over all other approaches, because it significantly improves cache locality. When using POSIX locks, Memcached/Set critical sections have on average 32.7 cache misses, which roughly correspond to accesses to 30 shared cache lines, plus the cache misses incurred for the management of POSIX locks. Using RCL, the 30 shared cache lines remain in the server cache. <ref type="figure" target="#fig_0">Fig. 10</ref> shows that for Memcached/Set, RCL performs worse than other locks when fewer than four cores are used due to the fact that one core is lost for the server, but from 5 cores onwards, this effect is compensated by the performance improvement offered by RCL. For most of the applications that spend more than 70% of their time in critical sections when using POSIX locks (Radiosity, Raytrace/Car, and Linear Regression), RCL gives a significant improvement over all the other lock algorithms, again as predicted by our microbenchmark. Matrix Multiply, however, spends over 90% of its time in critical sections when using POSIX locks, but shows only a slight performance improvement. This application is intrinsically unable to scale for the considered data set; even though the use of RCL reduces the amount of time spent in critical sections to 1% <ref type="figure" target="#fig_0">(Fig. 12)</ref>, the best resulting speedup is only 5.8 times for 20 cores. Memcached/Get spends more than 80% of its time in critical sections, but is only slightly improved by RCL as compared to MCS. Its critical sections are long and thus acquiring and releasing locks is less of a bottleneck than with other applications.</p><p>In the case of Berkeley DB, RCL achieves a speedup of 4.3 for Order Status transactions and 7.7 for Stock Level transactions with respect to the original Berkeley DB implementation for 100 clients. This is better than expected, since, according to our profiler, the percentage of time spent in critical sections is respectively only 53% and 55%, i.e. less than the 70% threshold. This is due to the fact that Berkeley DB uses hybrid Test-And-Set/POSIX locks, and our profiler was designed for POSIX locks: the time spent in the Test-And-Set loop is not included in the "time in critical sections" metric.</p><p>When the number of clients increases, the throughput of all implementations degrades. Still, RCL performs better than the other lock algorithms, even though two cores are reserved for the RCL servers and thus do not directly handle requests. In fact, the cost of the two server cores is amortized from 5 clients onwards. The best RCL speedup over the original implementation is for 40 clients with a ratio of 14 times. POSIX is robust for a large number of threads and comes second after RCL. MCS-TP <ref type="bibr" target="#b11">[12]</ref> resists convoys but with some overhead. MCS-TP and Flat Combining have comparable performance. Locality analysis <ref type="figure" target="#fig_0">Figure 12</ref> presents the number of L2 cache misses per critical section observed on the RCL server for the evaluated applications. Critical sections trigger on average fewer than 4 cache misses, of which the communication between the client and the server itself costs one cache miss. Thus, on average, at most 3 cache lines of context information are accessed per critical section. This shows that passing variables to and from the server does not hurt performance in the evaluated applications.  False Serialization A difficulty in transforming Berkeley DB for use with RCL is that the call in the source code that allocates the two most used locks also allocates nine other less used locks. The RCL runtime requires that for a given lock allocation site, all allocated locks are implemented in the same way, and thus all 11 locks must be implemented as RCLs. If all 11 locks are on the same server, their critical sections are artificially serialized. To prevent this, the RCL runtime makes it possible to choose the server core where each lock will be dispatched.</p><p>To study the impact of this false serialization, we consider two metrics: false serialization rate and use rate. The false serialization rate is the ratio of the number of iterations over the request array where the server finds critical sections associated with at least two different locks to the number of iterations where at least one critical section is executed. <ref type="bibr" target="#b5">6</ref> The use rate measures the server workload. It is computed as the total number of executed critical sections divided by the number of iterations where at least one critical section is executed, giving the average number of clients waiting for a critical section on each iteration, which is then divided by the number of cores. Therefore, a use rate of 1.0 means that all elements of the array contain pending critical section requests, whereas a low use rate means that the server mostly spins on the request array, waiting for critical sections to execute. <ref type="figure" target="#fig_0">Fig. 13</ref> shows the false serialization rate and the use rate for Berkeley DB (100 clients, Stock Level): (i) with one server for all locks, and (ii) with two different servers for the two most used locks as previously described. Using one server, the false serialization rate is high and has a significant impact because the use rate is also high. When using two servers, the use rate of the two servers goes down to 5% which means that they are no longer saturated and that false serialization is eliminated. This allows us to improve the throughput by 50%. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Related Work</head><p>Many approaches have been proposed to improve locking <ref type="bibr" target="#b0">[1,</ref><ref type="bibr" target="#b7">8,</ref><ref type="bibr" target="#b12">13,</ref><ref type="bibr" target="#b14">15,</ref><ref type="bibr" target="#b23">24,</ref><ref type="bibr" target="#b25">26,</ref><ref type="bibr" target="#b26">27]</ref>. Some improve the fairness of lock algorithms or reduce the data bus load <ref type="bibr" target="#b7">[8,</ref><ref type="bibr" target="#b23">24]</ref>. Others switch automatically between blocking locks and spinlocks depending on the contention rate <ref type="bibr" target="#b14">[15]</ref>. Others, like RCL, address data locality <ref type="bibr" target="#b12">[13,</ref><ref type="bibr" target="#b26">27]</ref>. GLocks <ref type="bibr" target="#b0">[1]</ref> addresses at the hardware level the problem of latency due to cache misses of highly-contended locks by using a token-ring between cores. When a core receives the token, it serves a pending critical section, if it has one, and then forwards the token. However, only one token is used, so only one lock can be implemented. Suleman et al. <ref type="bibr" target="#b26">[27]</ref> transform critical sections into remote procedure calls to a powerful server core on an asymmetric multicore. Their communication protocol is also implemented in hardware and requires a modified processor. They do not address blocking within critical sections, which can be a problem with legacy library code. RCL works on legacy hardware and allows blocking.</p><p>Flat Combining <ref type="bibr" target="#b12">[13]</ref>, temporarily transforms the owner of a lock into a server for other critical sections. Flat Combining is unable to handle blocking in a critical section, because there is only one combiner. At low contention, Flat Combining is not efficient because the combiner has to check whether pending requests exist, in addition to executing its own code. In RCL, the server may also uselessly scan the array of pending requests, but as the server has no other code to execute, it does not incur any overall delay. <ref type="bibr">Sridharan et al. [26]</ref> increase data locality by associating an affinity between a core and a lock. The affinity is determined by intercepting Futex <ref type="bibr" target="#b8">[9]</ref> operations and the Linux scheduler is modified so as to schedule the lock requester to the preferred core of the lock. This technique does not address the access contention that occurs when several cores try to enter their critical sections.</p><p>Roy et al. <ref type="bibr" target="#b22">[23]</ref> have proposed a profiling tool to identify critical sections that work on disjoint data sets, in order to optimize them by increasing parallelism. This approach is complementary to ours. Lock-free structures have been proposed in order to avoid using locks for traditional data structures such as counters, linked lists, stacks, or hashtables <ref type="bibr" target="#b13">[14,</ref><ref type="bibr" target="#b15">16,</ref><ref type="bibr" target="#b24">25]</ref>. These approaches never block threads. However, such techniques are only applicable to the specific types of data structures considered. For this reason, locks are still commonly used on multicore architectures. Finally, experimental operating systems and databases designed with manycore architectures in mind use data replication to improve locality <ref type="bibr" target="#b27">[28]</ref> and even RPC-like mechanisms to access shared data from remote cores <ref type="bibr" target="#b3">[4,</ref><ref type="bibr" target="#b6">7,</ref><ref type="bibr" target="#b10">11,</ref><ref type="bibr" target="#b18">19,</ref><ref type="bibr" target="#b21">22]</ref>. These solutions, however, require a complete overhaul of the operating system or database design. RCL, on the other hand, can be used with current systems and applications with few modifications.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Conclusion</head><p>RCL is a novel locking technique that focuses on both reducing lock acquisition time and improving the execution speed of critical sections through increased data locality.</p><p>The key idea is to migrate critical-section execution to a server core. We have implemented an RCL runtime for Linux that supports a mixture of RCL and POSIX locks in a single application. To ease the reengineering of legacy applications, we have designed a profiling-based methodology for detecting highly contended locks and implemented a tool that transforms critical sections into remote procedure calls. Our performance evaluations on legacy benchmarks and widely used legacy applications show that RCL improves performance when an application relies on highly contended locks.</p><p>In future work, we will consider the design and implementation of an adaptive RCL runtime. Our first goal will be to be able to dynamically switch between locking strategies, so as to dedicate a server core only when a lock is contented. Second, we want to be able to migrate locks between multiple servers, to dynamically balance the load and avoid false serialization. One of the challenges will be to implement low-overhead run-time profiling and migration strategies. Finally, we will explore the possibilities of RCL for designing new applications.</p><p>Availability The implementation of RCL as well as our test scripts and results are available at http:// rclrepository.gforge.inria.fr.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Fig. 1 :</head><label>1</label><figDesc>Fig. 1: Critical sections with POSIX locks vs. RCL.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Fig. 5 Fig. 4 :</head><label>54</label><figDesc>Fig. 4: Critical section from raytrace/workpool.c.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Fig. 5 :</head><label>5</label><figDesc>Fig. 5: Transformed critical section.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Fig. 3 :</head><label>3</label><figDesc>Fig. 3: Profiling results for the evaluated applications.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_4"><head>Algorithm 2 :</head><label>2</label><figDesc>Executing a critical section thread local variables: 1 int th_client_index; bool is_server_thread; server_t* my_server; 2 function execute_cs(lock_t* lock, function_t* code, void* context) 3 var request_t * r := &amp;lock-&gt;server-&gt;requests[th_client_index]; 4 if ¬is_server_thread or my_server = lock-&gt;server then 5 // RCL to a remote core r-&gt;lock := lock; r-&gt;context := context; r-&gt;code := code; 6 while r-&gt;code = null do 7 ; 8 return; 9 else 10 // Local nested lock, wait until the lock is free while local_CAS(&amp;lock-&gt;is_locked, false, true) = true do 11 // Another thread on the server owns the lock yield(); 12 // Execute the critical section code(context); 13 lock-&gt;is_locked := false; 14 return; 15</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_5"><head>Fig. 6 :</head><label>6</label><figDesc>Fig. 6: The evaluated lock algorithms.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_7"><head>Fig. 7 :</head><label>7</label><figDesc>Fig. 7: Microbenchmark results. Each data point is the average of 30 runs.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_8"><head></head><label></label><figDesc>Fig. 8: CS time in the microbenchmark with POSIX locks.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_10"><head>Fig. 10 :</head><label>10</label><figDesc>Fig. 10: Memcached/Set speedup.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_11"><head>Fig. 11 :</head><label>11</label><figDesc>Fig. 11: Berkeley DB/Stock Level throughput.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_12"><head>Fig. 12 :</head><label>12</label><figDesc>Fig. 12: Number of L2 cache misses per CS.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_3" validated="false"><head>1 10 100 # L2 Cache Misses</head><label></label><figDesc></figDesc><table>RCL 
+MCS 
+SL 
+FC 
+POSIX 
+
+100 
+
+1000 
+
+10000 
+
+100000 
+
+100 
+1000 
+10000 
+100000 
+1e+06 
+Execution time (cycles) 
+
+Delay (cycles) 
+
+(a) Execution with one shared cache line per CS 
+
+10 
+
+20 
+
+50 
+
+RCL 
+MCS 
+SL 
+FC 
+POSIX 
+
+-2 
+
+0 
+
+2 
+
+4 
+
+Diff # L2 Cache Misses 
+
+100 
+
+1000 
+
+10000 
+
+100000 
+
+100 
+1000 
+10000 
+100000 
+1e+06 
+Diff time (cycles) 
+
+Delay (cycles) 
+
+(b) Difference between one and five cache lines per CS 
+
+High contention (10 2 cycles) 
+Low contention (2.10 6 cycles) 
+CAS/CS 
+Execution time (cycles) 
+Locality (misses) 
+CAS/CS 
+Execution time (cycles) 
+Locality (misses) 
+Spinlock 
+N 
+Bad 
+(672889) 
+Very Bad 
+(+53.0 misses) 
+N 
+Good 
+(1288) 
+Bad 
+(+5.2) 
+POSIX 
+1 
+Medium 
+(73024) 
+Bad 
+(+3.8 misses) 
+1 
+Medium 
+(1826) 
+Bad 
+(+4.0) 
+MCS 
+1 
+Medium 
+(63553) 
+Bad 
+(+4.0 misses) 
+1 
+Good 
+(1457) 
+Bad 
+(+4.8) 
+Flat Combining 
+ε 
+Medium 
+(50447) 
+Good 
+(+0.3 misses) 
+1 
+Bad 
+(15060) 
+Medium 
+(+2.4) 
+RCL 
+0 
+Good 
+(16682) 
+Good 
+(+0.0 misses) 
+0 
+Good 
+(1494) 
+Good 
+(+0.0) 
+
+(c) Comparison of the lock algorithms 
+
+</table></figure>
+
+			<note place="foot" n="1"> More information about these applications can be found at the following URLs: http://memcached.org (Memcached), http://www.oracle.com/technetwork/database/berkeleydb (Berkeley DB), http://www.capsl.udel.edu/splash (SPLASH-2) and http://mapreduce.stanford.edu (Phoenix2).</note>
+
+			<note place="foot" n="3"> Using the SSE3 monitor/mwait instructions on the client side when waiting for a reply from the server, as described in Sec. 2.1, induces a latency overhead of less than than 30% at both high and low contention. This makes the energy-efficient version of RCL quantitatively similar to the original RCL implementation presented here.</note>
+
+			<note place="foot" n="6"> We do not divide by the total number of iterations, because there are many iterations in application startup and shutdown that execute no critical sections and have no impact on the overall performance.</note>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">GLocks: Efficient support for highly-contended locks in many-core CMPs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">L</forename><surname>Abellán</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Fernández</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">E</forename><surname>Acacio</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">25th IPDPS</title>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Adaptive backoff synchronization techniques</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Agarwal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Cherian</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ISCA&apos;89</title>
+		<imprint>
+			<date type="published" when="1989" />
+			<biblScope unit="page" from="396" to="406" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">Thin locks: featherweight synchronization for Java</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">F</forename><surname>Bacon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Konuru</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Murthy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Serrano</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">PLDI&apos;98</title>
+		<imprint>
+			<date type="published" when="1998" />
+			<biblScope unit="page" from="258" to="268" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">The multikernel: a new OS architecture for scalable multicore systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Baumann</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Barham</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P.-E</forename><surname>Dagand</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Harris</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Isaacs</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Peter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Roscoe</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Schuepbach</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Singhania</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP&apos;09</title>
+		<imprint>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="29" to="44" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Optimal strategies for spinning and blocking</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Boguslavsky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Harzallah</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Kreinen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Sevcik</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Vainshtein</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Journal of Parallel and Distributed Computing</title>
+		<imprint>
+			<date type="published" when="1993" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Fully-adaptive algorithms for long-lived renaming</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Brodsky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Ellen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Woelfel</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">DISC &apos;06</title>
+		<imprint>
+			<date type="published" when="2006" />
+			<biblScope unit="page" from="413" to="427" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Kernel-kernel communication in a shared-memory multiprocessor</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">M</forename><surname>Chaves</surname><genName>Jr</genName></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Das</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">J</forename><surname>Leblanc</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">D</forename><surname>Marsh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">L</forename><surname>Scott</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ConcurrencyPractice and Experience</title>
+		<imprint>
+			<biblScope unit="volume">5</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<biblScope unit="page" from="171" to="191" />
+			<date type="published" when="1993" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<monogr>
+		<title level="m" type="main">Building FIFO and priority-queueing spin locks from atomic swap</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">S</forename><surname>Craig</surname></persName>
+		</author>
+		<idno>TR 93-02-02</idno>
+		<imprint>
+			<date type="published" when="2003-02" />
+		</imprint>
+		<respStmt>
+			<orgName>Department of Computer Science, University of Washington</orgName>
+		</respStmt>
+	</monogr>
+<note type="report_type">Technical Report</note>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<monogr>
+		<title level="m" type="main">Native POSIX thread library for Linux</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">U</forename><surname>Drepper</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Molnar</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2003" />
+			<pubPlace>RedHat</pubPlace>
+		</imprint>
+	</monogr>
+<note type="report_type">Technical report</note>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<monogr>
+		<title level="m" type="main">Refactoring: Improving the Design of Existing Code</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Fowler</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1999" />
+			<publisher>Addison Wesley</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Tornado: Maximizing locality and concurrency in a shared memory multiprocessor operating system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Gamsa</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O</forename><surname>Krieger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Appavoo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Stumm</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI&apos;99</title>
+		<imprint>
+			<biblScope unit="page" from="87" to="100" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Preemption adaptivity in time-published queue-based spin locks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>He</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">N</forename><surname>Scherer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Iii</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">L</forename><surname>Scott</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">11th International Conference on High Performance Computing</title>
+		<imprint>
+			<date type="published" when="2005" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Flat combining and the synchronization-parallelism tradeoff</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Hendler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Incze</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Shavit</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Tzafrir</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SPAA&apos;10</title>
+		<imprint>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="355" to="364" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<monogr>
+		<title level="m" type="main">The Art of Multiprocessor Programming</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Herlihy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Shavit</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2008" />
+			<publisher>Elsevier</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Decoupling contention management from scheduling</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><forename type="middle">R</forename><surname>Johnson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Stoica</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Ailamaki</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">C</forename><surname>Mowry</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ASPLOS&apos;10</title>
+		<imprint>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="117" to="128" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">An optimistic approach to lock-free FIFO queues</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Ladan-Mozes</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Shavit</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Distributed Computing</title>
+		<imprint>
+			<biblScope unit="volume">20</biblScope>
+			<biblScope unit="issue">5</biblScope>
+			<biblScope unit="page" from="323" to="341" />
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<monogr>
+		<title level="m" type="main">Algorithms for scalable synchronization on shared-memory multiprocessors</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">M</forename><surname>Mellor-Crummey</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">L</forename><surname>Scott</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1991" />
+			<publisher>ACM TOCS</publisher>
+			<biblScope unit="volume">9</biblScope>
+			<biblScope unit="page" from="21" to="65" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Synchronization without contention</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">M</forename><surname>Mellor-Crummey</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">L</forename><surname>Scott</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ASPLOS</title>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="1991" />
+			<biblScope unit="page" from="269" to="278" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Helios: heterogeneous multiprocessing with satellite kernels</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">B</forename><surname>Nightingale</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O</forename><surname>Hodson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Mcilroy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Hawblitzel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Hunt</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP&apos;09</title>
+		<imprint>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="221" to="234" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Scheduling techniques for concurrent systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">K</forename><surname>Ousterhout</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ICDCS &apos;82</title>
+		<imprint>
+			<date type="published" when="1982" />
+			<biblScope unit="page" from="22" to="30" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Documenting and automating collateral evolutions in Linux device drivers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Padioleau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Lawall</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">R</forename><surname>Hansen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Muller</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">EuroSys</title>
+		<imprint>
+			<date type="published" when="2008" />
+			<biblScope unit="page" from="247" to="260" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">Data-oriented transaction execution</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Pandis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Johnson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Hardavellas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Ailamaki</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the VLDB Endowment (PVLDB)</title>
+		<meeting>the VLDB Endowment (PVLDB)</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+			<biblScope unit="volume">3</biblScope>
+			<biblScope unit="page" from="928" to="939" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Exploring the limits of disjoint access parallelism</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Roy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Hand</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Harris</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">HotPar&apos;09</title>
+		<imprint>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="8" to="8" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Scalable queuebased spin locks with timeout</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">L</forename><surname>Scott</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">N</forename><surname>Scherer</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">PPoPP&apos;01</title>
+		<imprint>
+			<date type="published" when="2001" />
+			<biblScope unit="page" from="44" to="52" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">Split-ordered lists: Lockfree extensible hash tables</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O</forename><surname>Shalev</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Shavit</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">JACM</title>
+		<imprint>
+			<biblScope unit="volume">53</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<biblScope unit="page" from="379" to="405" />
+			<date type="published" when="2006-05" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">Thread migration to improve synchronization performance</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Sridharan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Keck</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Murphy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Chandra</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Kogge</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Workshop on Operating System Interference in High Performance Applications</title>
+		<imprint>
+			<date type="published" when="2006" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">Accelerating critical section execution with asymmetric multi-core architectures</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">A</forename><surname>Suleman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O</forename><surname>Mutlu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">K</forename><surname>Qureshi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><forename type="middle">N</forename><surname>Patt</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ASPLOS</title>
+		<imprint>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="253" to="264" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<analytic>
+		<title level="a" type="main">Corey: an operating system for many cores</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">B</forename><surname>Wickizer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Mao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Kaashoek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Morris</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Pesterev</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Stein</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Wu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Dai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Zhang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI&apos;08</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Ad hoc synchronization considered harmful</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Xiong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Park</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Ma</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI&apos;10</title>
+		<imprint>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="1" to="8" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<analytic>
+		<title level="a" type="main">Automatic measurement of memory hierarchy parameters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Yotov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Pingali</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Stodghill</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGMETRICS &apos;05</title>
+		<imprint>
+			<date type="published" when="2005" />
+			<biblScope unit="page" from="181" to="192" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

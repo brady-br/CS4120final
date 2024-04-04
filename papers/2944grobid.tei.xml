@@ -1,0 +1,503 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:55+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Quartet: Harmonizing task scheduling and caching for cluster computing</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Francis</forename><surname>Deslauriers</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Toronto</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Peter</forename><surname>Mccormick</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Toronto</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">George</forename><surname>Amvrosiadis</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Toronto</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ashvin</forename><surname>Goel</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Toronto</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Angela</forename><surname>Demke Brown</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Toronto</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Quartet: Harmonizing task scheduling and caching for cluster computing</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Cluster computing frameworks such as Apache Hadoop and Apache Spark are commonly used to analyze large data sets. The analysis often involves running multiple, similar queries on the same data sets. This data reuse should improve query performance, but we find that these frameworks schedule query tasks independently of each other and are thus unable to exploit the data sharing across these tasks. We present Quartet, a system that leverages information on cached data to schedule together tasks that share data. Our preliminary results are promising, showing that Quartet can increase the cache hit rate of Hadoop and Spark jobs by up to 54%. Our results suggest a shift in the way we think about job and task scheduling today, as Quartet is expected to perform better as more jobs are dispatched on the same data.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Cluster computing frameworks such as Apache Hadoop <ref type="bibr" target="#b3">[4]</ref> and Apache Spark <ref type="bibr" target="#b4">[5]</ref> are commonly used to run a variety of data analytics applications, helping uncover correlations and trends in large data sets. These frameworks allow users to focus on their particular data analysis problem, while handling the complexities of distribution, including data placement and replication, computation placement, fault tolerance, and resource negotiation in a shared cluster.</p><p>Unfortunately, the exponential growth in the volume of data collected and used for analysis <ref type="bibr" target="#b12">[13]</ref> has not been matched by corresponding increases in hard disk performance, where this data is primarily stored <ref type="bibr" target="#b6">[7]</ref>. As a result, performing analysis on even the most recent part of a dataset may be limited by disk access speeds. Furthermore, a common analysis pattern involves running multiple, similar queries over the same data. For example, during typical exploratory analysis of a dataset, a data scientist may dispatch multiple queries that differ marginally from each other. Evidence of this work pattern is seen in a recent study of three academic Hadoop clusters by Ren et al., which found that less than 10% of input files are responsible for more than 80% of all accesses, and that only 1% of datasets are shared across users <ref type="bibr" target="#b11">[12]</ref>. They further found that 90% of data re-accesses happen within 1 hour, and that 35-60% of job pipelines 1 are submitted within 10 seconds after an earlier pipeline from the same user finishes executing. Similar results are reported by Chen et al. <ref type="bibr" target="#b7">[8]</ref> for production workloads of Cloudera customers and Facebook. In other words, users commonly submit a series of jobs that access the same input datasets in a relatively short period of time. Similarly, in production settings, multiple data scientists may run independent analyses that access a large portion of a common dataset concurrently.</p><p>Users of cluster computing frameworks enjoy limited benefit from this data sharing today. MapReduce, for example, only considers disk and rack locality when making task placement decisions. It does not take memory locality into account, possibly because it assumes that massive data sets will be displaced from memory before they can be reused. The more recent caching support added to the Hadoop Distributed File System (HDFS) requires users to explicitly identify files that should be pinned in memory; these pinned files are then also considered during task placement. This explicit cache management, however, both increases the burden on users and is ineffective when the reuse occurs across multiple jobs operating on datasets that are larger than available memory. Users similarly expect caching to matter little and tend to run jobs serially even when they are not dependent on the results of the previous jobs <ref type="bibr" target="#b11">[12]</ref>.</p><p>Another challenge for exploiting data reuse in current frameworks is that the order in which jobs process data is agnostic to the data availability in the cache, which can lead to unnecessary cache evictions and disk accesses. As a result, even when the inputs of two jobs overlap completely, if they are scheduled even slightly apart in time they can miss opportunities for sharing data accesses. In our cluster, scheduling two identical Spark jobs 4 minutes apart increases their runtime by 145% compared to starting them together.</p><p>We argue that jobs on frameworks such as Hadoop and Spark should be able to benefit from data reuse when jobs share any portion of their input. We leverage the fact that tasks within a job are independent of each other, which is a core requirement in these frameworks for scalability and for task re-execution to mask failures and stragglers.</p><p>Our insight is that we can reorder tasks within a job to prioritize the processing of data brought into memory by other jobs, without affecting correctness. To inform tasks of data available in memory we use Duet, an in-kernel framework that exposes page cache information to applications by notifying them about changes in the page cache state, such as a page being added to, or removed from, the cache <ref type="bibr" target="#b0">[1]</ref>. As a result, we can harmonize task scheduling with caching in these frameworks.</p><p>This paper makes the following contributions. First, we propose changes to existing cluster computing frameworks so that users can benefit from inter-job data sharing. We describe the design of our system, Quartet, and apply it to both Hadoop MapReduce and Spark. Second, we present promising preliminary results that show Quartet can effectively exploit data reuse with low overheads, reducing job runtimes and disk contention.</p><p>In the next section, we provide necessary background on the architecture of cluster computing frameworks and Duet. Section 3 reviews related work. We describe the design of Quartet in Section 4, and evaluate its performance in Section 5. Finally, we conclude in Section 6.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Background</head><p>This section provides background on Hadoop and Spark, as well as an introduction to the Duet framework.</p><p>Hadoop. Hadoop is a distributed processing system that aims to take advantage of the computing resources of a cluster while being easy to understand and use <ref type="bibr" target="#b3">[4]</ref>. Its main components include: (i) the Hadoop Distributed File System (HDFS), (ii) the YARN resource management platform, and (iii) the MapReduce application.</p><p>HDFS is a distributed file system where each file is split into blocks, typically 128 or 256 MB in size, with each block replicated to at least 3 different nodes in the cluster to ensure availability in case of node failure or network partitions. An HDFS installation consists of at least one centralized Name Node service that manages all file metadata and block location information, while each storage node runs a Data Node service to manage the blocks stored in the local file system.</p><p>The YARN resource management platform dictates how resources are allocated and shared across user jobs. At the core of YARN lies the Resource Manager, which keeps track of all currently running applications and ensures that each receives their fair share of the cluster. Each worker node runs a Node Manager, which is responsible for managing local computation slots, called Containers, and for reporting usage statistics to the Resource Manager. Applications on YARN are run by submitting a request to the Resource Manager to allocate a container in order to launch a designated Application Master, which can in turn request additional containers and resources on behalf of a job. Typically a worker node will take on both the HDFS Data Node and YARN Node Manager roles, enabling computations to be performed on the same physical machine as the input data.</p><p>Hadoop MapReduce is an implementation of MapReduce, a popular model of distributed computation <ref type="bibr" target="#b8">[9]</ref>, as a YARN application. A MapReduce job consists of many smaller tasks that are either mappers or reducers. Mappers read their input data from storage (typically limited to one HDFS block) and run the first stage of the computation, while reducers take the output from multiple mappers to create the final result. The MapReduce Application Master requests many containers from the Resource Manager, and attempts to schedule each mapper task to a node that is nearest to the input data. Ideally, the selected node will be one of the 3 replicas that contains that block on its local disk.</p><p>Spark. Apache Spark is another popular framework for distributed data processing, designed to support applications with cyclic data flow and in-memory computing, in addition to on-disk computing. A Spark application can be run as a YARN Application Master, on top of Mesos <ref type="bibr" target="#b9">[10]</ref>, or in standalone mode, which is a simplified cluster management system designed specifically to run Spark jobs. This mode is widely used, especially when provisioning Spark-only clusters on cloud computing platforms. We adopt this version for our work.</p><p>While similar in operation to YARN, the standalone mode uses different terminology. Roughly speaking, the Master corresponds to the Resource Manager, the Worker corresponds to the Node Manager, the Driver corresponds to the Application Master, and an Executor corresponds to a YARN container.</p><p>In Spark, the application flow is as follows. A Driver connects to a Spark Master, receives Executor allocations on Worker nodes, and schedules tasks to those Executors over the duration of an application. The Driver is responsible for all of the task scheduling and placement logic. One distinguishing feature of Spark is that an Executor runs many tasks for a given Driver within one long-lived JVM process, which greatly reduces the overhead of starting up a new container for each task.</p><p>Duet. To enable a given framework to schedule tasks on the basis of cached data, we need to expose cache information to the framework's scheduler. To do so, we exploit Duet, a framework that provides notifications to applications about events such as a page being added to, modified in, or evicted from, a node's memory <ref type="bibr" target="#b0">[1]</ref>. Duet is implemented as a Linux kernel module, with hooks in the operating system's page cache. Applications register with Duet to receive notifications on events of interest. We build upon Duet to provide aggregated information about HDFS blocks resident in memory across the cluster, which the Application Master (or Driver) scheduler can use to opportunistically select tasks with cached data for a particular Container (or Executor), allowing them to incur less I/O and complete faster.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Related Work</head><p>A significant amount of work has focused on improving memory locality in cluster computing frameworks. We restrict our discussion to work most relevant to Quartet.</p><p>Ananthanarayanan et al. <ref type="bibr" target="#b1">[2]</ref> argue that in modern clusters, accessing data from a remote node incurs marginal overhead compared to accessing it directly on the node storing the data. They predict that scheduling tasks for disk locality will become less important, with focus being shifted to memory locality oriented scheduling.</p><p>PACMan <ref type="bibr" target="#b2">[3]</ref> is a cache management system for cluster environments, which aims to improve job completion. To achieve this goal, PACMan introduces two cache replacement policies that aim to reduce the impact of stragglers, by scheduling together tasks of a given job that are expected to exhibit high memory locality. Quartet's architecture is inspired from PACMan, but our work focuses on jobs who's input data does not fit in the aggregated memory of the cluster. We aim to take advantage of cached data to reduce disk reads as well reducing pressure on the OS page cache.</p><p>The Alluxio project <ref type="bibr" target="#b10">[11]</ref> aims to reduce the disk write latency caused by the replication scheme used for fault tolerance in large scale storage systems. The authors argue that replication limits job throughput. Instead, they provide fault tolerance by lazily checkpointing output files to stable storage, keeping track of input and computation information needed to recreate each file if it is lost. Our approach focuses on changing the order in which jobs process their inputs to take advantage of memory contents and reduce read latency.</p><p>The HDFS Cache Manager <ref type="bibr" target="#b5">[6]</ref> was added so that users can provision a specific amount of the cluster's memory to a cache pool that can serve popular files directly from memory. HDFS ensures that those blocks are resident in memory on a specified portion of the hosts at any time. Our technique does not require the user to specifically provision memory for caching, or to know what files are being shared by a large number of jobs. Quartet opportunistically takes advantage of synergistic workloads without any interactions with the users.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Design and Implementation</head><p>This section describes the Quartet system architecture, and our modifications to the Hadoop and Spark scheduling components to take advantage of memory locality.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">Architecture</head><p>Quartet consists of four components: (i) the Duet kernel module, (ii) the per-node Quartet Watcher service, (iii) the centralized Quartet Manager, and (iv) changes to the task schedulers in Hadoop MapReduce and Spark.</p><p>Quartet Watcher and Duet. The Watcher service runs on each worker node in the cluster. Using the Duet API, it tracks all kernel page cache changes related to HDFS blocks. These observations are aggregated and periodically reported to the Quartet Manager as a list of tuples of the form (hdfsBlockId, totalCachedPages, deltaSinceLastReport).</p><p>Quartet Manager. The Manager receives periodic reports from the Watchers, and maintains a centralized view of the location and number of memory-resident pages of all cached HDFS blocks across the cluster. Applications register blocks of interest with the Manager that correspond to the input files that they will access. Using the centralized view, the Manager periodically notifies applications about whether the relevant blocks are currently cached on a given node. As applications make progress, they unregister interest in completed blocks, minimizing the size of these updates.</p><p>Application Master / Driver. We modified the Hadoop MapReduce Application Master and Spark Driver to take advantage of the memory locality information offered by the Quartet Manager. These systems currently schedule tasks such that the input blocks are processed from the start of the file. We changed them so that at job submission time, the HDFS blocks that will be read by the tasks of a job are registered with the Quartet Manager. We then use updates from the Manager to reorder the scheduling of these tasks so that tasks with inmemory blocks are executed before tasks whose blocks are not cached currently (see Section 4.2). The information from the Manager is periodically refreshed so that jobs can have an up-to-date view of the cluster. While Hadoop and Spark are different projects, written in different languages, their internal structures were similar enough to allow these changes to be implemented in less than 500 lines of code for each. We believe that applying the idea of Quartet task reordering to other systems should require similar effort.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Task Scheduling</head><p>MapReduce and Spark refer to a task as being node-local if it can read its input block from a local disk of the worker node on which it is run. We refer to a task as memory-local if it is both node-local and its input block is memory-resident on that same node. The goal of Quartet is to exploit all opportunities to run memory-local tasks. It does this by preferring to schedule memorylocal tasks ahead of merely node-local ones whenever possible.</p><p>In both Hadoop and Spark, once their task schedulers have been granted an allocation to launch a task on a node N, they search for a suitable candidate to launch. Under Quartet, task T will be scheduled to N if 1) T is memory-local to N, or 2) T is node-local to N but not currently memory-local to any other node in the cluster. The memory-local status of all candidate tasks will be checked in Step 1 before proceeding to Step 2. Finally, if neither of these conditions are met for all T , we fall back to the default delay scheduling policy <ref type="bibr" target="#b13">[14]</ref>.</p><p>Step 1 ensures that the application will take any memory-local opportunities available to it, thus avoiding unnecessary reads, disk contention and page cache evictions.</p><p>Step 2 helps to ensure that redundant disk reads are avoided, but that forward progress is still made if a task is currently not memory-local anywhere.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Evaluation</head><p>This section evaluates the benefits of Quartet by measuring the improvement in the cache hit rate and runtime of jobs that are scheduled after jobs working on the same dataset. We pick this scenario as representative of realworld workloads reported in the literature <ref type="bibr" target="#b11">[12]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1">Setup</head><p>Our cluster consists of 24 worker nodes, each configured with an 8-core Intel Xeon L5420 CPU, 16 GB RAM and a 1 TB 7200 RPM hard drive. In order to use Duet, these nodes ran a modified Linux 3.13.6 kernel. A separate, identical node was dedicated to running the HDFS Name Node and Quartet Manager services, in addition to the YARN Resource Manager for Hadoop (resp. the Spark Master for Spark). We configured HDFS with three replicas and 128 MB blocks. Each worker node was allocated 8 concurrent YARN containers (resp. Spark Executors).</p><p>The vanilla Hadoop version was 2.7.1, and vanilla Spark was 1.6.0. The Quartet modifications were made to each of these versions.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2">Experiments</head><p>We measure the effectiveness of Quartet through an experiment based on a real-world workload. Ren et al. report that 90% of data re-accesses occur within one hour of the last access on two different Hadoop clusters <ref type="bibr" target="#b11">[12]</ref>. To approximate this scenario, we run two jobs that access   the same dataset sequentially. We repeated our experiment using three files of different sizes: 256 GB, 512 GB, and 1 TB. The first of these fits completely within the physical memory of the cluster (384 GB) while the latter two exceed it. For our experiments, we used a custom line counting application for both Spark and Hadoop, to simulate an I/O-bound workload. Disk accesses. <ref type="figure" target="#fig_0">Figure 1</ref> shows the percentage of data accesses that were satisfied from the cache, for the second of two identical jobs. We show results for both Hadoop and Spark, with and without Quartet. As expected, for 256 GB jobs most of the blocks are still in the page cache when the first job finishes. Quartet can take advantage of that fully, demonstrating cache hit rates of 92-98%. In the case of vanilla Hadoop and Spark, however, cache hit rates are as low as 42-44%, because task scheduling is influenced by the timing of resource availability reports from the worker nodes. For job inputs larger than the cluster memory, such as 512 GB and 1 TB, part of the input data was already evicted from the cache by the end of the first job. This, coupled with replica selection in HDFS results in less than 4% cache hit rates. When Quartet is enabled, however, resident blocks are prioritized, and cache hits rates of 25-56% are possible.</p><p>Runtime. Reducing the amount of I/O for I/O-bound jobs is also expected to reduce their runtime. <ref type="figure" target="#fig_1">Figure 2</ref> shows the runtime achieved by a job, once an identical job has finished running. Overall, we find that Quartet improves most on Spark job runtimes, because it reuses Executors, while Hadoop launches new JVM containers for each task. The cost of container setup and teardown is significant (2-6 seconds), dwarfing the runtime improvements made by Quartet and putting more pressure on the page cache. More specifically, when job data fits entirely in memory the runtime of the second job can be reduced by an additional 45% for Spark and 2.7% for Hadoop using Quartet, compared to the vanilla versions of both frameworks. When the job data exceed our memory capacity, Quartet on Spark improves on job runtime by an additional 21-43%, while Quartet on Hadoop improves runtimes by 6-13%.</p><p>Overhead. On each of the worker nodes, our prototype Watcher implementation adds less than 20% CPU overhead on a single core, while the Manager itself consumed less than 5% CPU usage on a single core. The network traffic between the watcher, the manager, and the applications is proportional to the number of HDFS blocks with page cache updates, and the update rate requested by the application. In our experiments updates are requested once per second, and this traffic is in the order of 10-100 KB/s per application.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Conclusion</head><p>We presented Quartet, a system based on enhancements applicable across cluster computing frameworks. Quartet leverages information on cached data to schedule together tasks that operate on the same data. We have implemented Quartet on both Hadoop and Spark, and our preliminary results show that when jobs overlap, Quartet can almost eliminate I/O of subsequent jobs depending on memory capacity. We believe that our results suggest a shift in the way we think about job and task scheduling today, as Quartet performs better with more jobs being dispatched on the same data concurrently. We are also investigating scenarios where Quartet is used on different frameworks accessing the same data concurrently.</p><p>The performance improvement achieved by using Quartet depends on the amount of data reuse, and the timing of re-accesses in a given workload. Analyses of production workloads have shown that re-accesses tend to occur close in time, so we are optimistic that our design will be applicable in those cases. On that end, we are currently evaluating Quartet for more complex workloads, building on earlier work on workload characterization for cluster computing frameworks. So far, however, we have met a shortage of real-world traces that can be used to evaluate our prototype. Due to the nature of our approach, we require an understanding of the data sharing that occurs across jobs in the field. To achieve this, we need to characterize the timing and amount of the sharing of data across jobs. Workloads and traces that are currently available publicly either only capture the start time of jobs without a description of the input data, or contain HDFS events without information that would allow us to link them to job scheduling. We hope that this work encourages a discussion on workload tracing for cluster computing frameworks.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: Percentage of HDFS blocks read from cache (hit rate) for the second of two identical jobs.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: Runtime of the second job, normalized by the runtime of the first, identical job.</figDesc></figure>
+
+			<note place="foot" n="1"> A pipeline is defined as a sequence of jobs where the output of one job forms the input of the next job in the pipeline.</note>
+		</body>
+		<back>
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">Opportunistic storage maintenance</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amvrosiadis</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Brown</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Goel</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 25th Symposium on Operating Systems Principles</title>
+		<meeting>the 25th Symposium on Operating Systems Principles</meeting>
+		<imprint>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="457" to="473" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Disk-locality in datacenter computing considered irrelevant</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ananthanarayanan</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Ghodsi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Shenker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stoica</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 13th USENIX Conference on Hot Topics in Operating Systems</title>
+		<meeting>the 13th USENIX Conference on Hot Topics in Operating Systems</meeting>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+	<note>HotOS&apos;13</note>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">Coordinated Memory Caching for Parallel Jobs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ananthanarayanan</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Ghodsi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Borthakur</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Kandula</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Shenker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stoica</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Pacman</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 9th USENIX Conference on Networked Systems Design and Implementation</title>
+		<meeting>the 9th USENIX Conference on Networked Systems Design and Implementation</meeting>
+		<imprint>
+			<date type="published" when="2012" />
+			<biblScope unit="page">12</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Apache</forename><surname>Software Foundation. Apache</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Hadoop</surname></persName>
+		</author>
+		<ptr target="https://hadoop.apache.org" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Apache</forename><surname>Software Foundation. Apache</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Spark</surname></persName>
+		</author>
+		<ptr target="http://spark.apache.org" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Apache</forename><surname>Software Foundation</surname></persName>
+		</author>
+		<ptr target="http://hadoop.apache.org/docs/current/hadoop-project-dist/hadoop-hdfs/CentralizedCacheManagement.html" />
+	</analytic>
+	<monogr>
+		<title level="j">HDFS Centralized Cache Management</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<monogr>
+		<title level="m" type="main">Disks for data centers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Brewer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ying</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Greenfield</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Cypher</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>And T&amp;apos;so</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2016" />
+			<pubPlace>Google</pubPlace>
+		</imprint>
+	</monogr>
+<note type="report_type">Tech. rep</note>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Interactive analytical processing in big data systems: A cross-industry study of mapreduce workloads</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chen</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Alspaugh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Katz</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Proceedings of the VLDB Endowment</title>
+		<imprint>
+			<biblScope unit="volume">5</biblScope>
+			<biblScope unit="page" from="1802" to="1813" />
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Simplified data processing on large clusters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dean</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ghemawat</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Mapreduce</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 6th Conference on Symposium on Opearting Systems Design &amp; ImplementationVolume</title>
+		<meeting>the 6th Conference on Symposium on Opearting Systems Design &amp; ImplementationVolume<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2004" />
+			<biblScope unit="volume">6</biblScope>
+			<biblScope unit="page" from="10" to="10" />
+		</imprint>
+	</monogr>
+	<note>OSDI&apos;04</note>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Mesos: A platform for fine-grained resource sharing in the data center</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hindman</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Konwinski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Zaharia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Ghodsi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joseph</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">D</forename><surname>Katz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">H</forename><surname>Shenker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stoica</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 8th NSDI</title>
+		<meeting>the 8th NSDI</meeting>
+		<imprint>
+			<date type="published" when="2011" />
+			<biblScope unit="page" from="295" to="308" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Tachyon: Reliable, memory speed storage for cluster computing frameworks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">I</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Ghodsi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Zaharia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Shenker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sto-Ica</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM Symposium on Cloud Computing</title>
+		<meeting>the ACM Symposium on Cloud Computing</meeting>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="volume">6</biblScope>
+			<biblScope unit="page">15</biblScope>
+		</imprint>
+	</monogr>
+	<note>SOCC &apos;14</note>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Hadoop&apos;s adolescence: An analysis of hadoop usage in scientific workloads</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ren</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Kwon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Balazinska</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Howe</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. VLDB Endow</title>
+		<meeting>VLDB Endow</meeting>
+		<imprint>
+			<date type="published" when="2013-08" />
+			<biblScope unit="volume">6</biblScope>
+			<biblScope unit="page" from="853" to="864" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Why big data is a big deal</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shaw</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Harvard Magazine</title>
+		<imprint>
+			<biblScope unit="volume">116</biblScope>
+			<biblScope unit="page" from="30" to="35" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Delay scheduling: A simple technique for achieving locality and fairness in cluster scheduling</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zaharia</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Borthakur</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Sen Sarma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Elmele-Egy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Shenker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stoica</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 5th European Conference on Computer Systems</title>
+		<meeting>the 5th European Conference on Computer Systems</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="265" to="278" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

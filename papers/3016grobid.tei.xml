@@ -1,0 +1,1375 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:57+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">File Systems as Processes</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jing</forename><surname>Liu</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">University of Wisconsin-Madison</orgName>
+								<orgName type="institution" key="instit2">Rutgers University</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">University of Wisconsin-Madison</orgName>
+								<orgName type="institution" key="instit2">Rutgers University</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi</forename><forename type="middle">H</forename><surname>Arpaci-Dusseau</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">University of Wisconsin-Madison</orgName>
+								<orgName type="institution" key="instit2">Rutgers University</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sudarsun</forename><surname>Kannan</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">University of Wisconsin-Madison</orgName>
+								<orgName type="institution" key="instit2">Rutgers University</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">File Systems as Processes</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>We introduce file systems as processes (FSP), a storage architecture designed for modern ultra-fast storage devices. By building a direct-access file system as a standalone user-level process, FSP accelerates file system development velocity without compromising essential file system properties. FSP promises to deliver raw device-level performance via highly tuned inter-process communication mechanisms; FSP also ensures protection and metadata integrity by design. To study the potential advantages and disadvantages of the FSP approach, we develop DashFS, a prototype user-level file system. We discuss its architecture and show preliminary performance benefits.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>The evolution of storage devices continues apace. For example, the access latency of a 4KB block on NVM storage devices like Optane SSD now takes less than 10 microseconds <ref type="bibr" target="#b9">[9,</ref><ref type="bibr" target="#b11">11,</ref><ref type="bibr" target="#b14">14]</ref>, whereas in the last generation, the same operation costs roughly 100 microseconds on flash-based SSDs <ref type="bibr" target="#b22">[22]</ref>. Because storage devices are now realizing the promise of the "microsecond era" <ref type="bibr" target="#b1">[2]</ref>, the need to exploit their performance potential is growing.</p><p>These dramatic changes place great strain on existing operating system architecture. Due to legacy design decisions, based primarily on the presence of ultra-slow devices (i.e., hard drives), the traditional operating system storage stack hinders an application's ability to realize potential performance gains. For example, the switch into the kernel via system call incurs microseconds <ref type="bibr" target="#b33">[33]</ref>; while this overhead was tolerable in the era of hard drives, it is now a dominant cost <ref type="bibr" target="#b7">[7]</ref>. With fast devices arriving, kernel involvement is considered harmful and operating system designers can no longer ignore this overhead <ref type="bibr" target="#b1">[2]</ref>.</p><p>Researchers have recognized the problem that software is becoming bottleneck and several prior works attempt to overcome this problem, including systems such as Moneta <ref type="bibr" target="#b7">[7]</ref>, Arrakis <ref type="bibr" target="#b29">[29]</ref>, Aerie <ref type="bibr" target="#b38">[38]</ref>, Strata <ref type="bibr" target="#b24">[24]</ref>, and DevFS <ref type="bibr" target="#b19">[19]</ref>. However, most of those systems <ref type="bibr" target="#b7">[7,</ref><ref type="bibr" target="#b24">24,</ref><ref type="bibr" target="#b29">29,</ref><ref type="bibr" target="#b38">38]</ref> do not completely eliminate kernel overhead, instead trapping into the kernel for control plane operations. One reason for retaining kernel mediation in the control plane is that device interaction traditionally relies on kernel drivers (like in Aerie). Furthermore, ensuring storage system metadata integrity and handling data sharing are fundamentally difficult without a centralized management component <ref type="bibr" target="#b19">[19]</ref>. As such, library based operating system architectures cannot fully remove kernel intervention. One alternative is found in DevFS <ref type="bibr" target="#b19">[19]</ref>, a direct-access file system built into the device, but it is inherently limited by hardware constraints.</p><p>In this paper, we introduce a new storage architecture, file systems as processes (FSP), which builds a true directaccess file system as a user-level process. A file system process directly manages the device, enforces permissions, and ensures metadata integrity, with nearly zero kernel involvement. This architecture is enabled by the availability of user-level NVMe device drivers <ref type="bibr" target="#b20">[20,</ref><ref type="bibr" target="#b46">45]</ref>; it is now feasible to operate fast storage hardware entirely in user space, instead of relying on software virtualization <ref type="bibr" target="#b23">[23,</ref><ref type="bibr" target="#b29">29]</ref>.</p><p>FSP is a reinvention of microkernel architectures <ref type="bibr" target="#b13">[13,</ref><ref type="bibr" target="#b15">15,</ref><ref type="bibr" target="#b25">25]</ref>, with a new purpose in mind: highperformance storage I/O. We believe this renaissance is attractive for the following reasons.</p><p>The first reason is developer velocity; developing user-level code is easier than kernel hacking, allowing developers to innovate rapidly. User-level system building allows developers to bring a full range of development tools to bear during system construction, and it is no surprise that most of the systems built at large-scale companies such as Google are realized at user-level <ref type="bibr" target="#b4">[5,</ref><ref type="bibr" target="#b8">8,</ref><ref type="bibr" target="#b12">12]</ref>.</p><p>Second, a standalone process can ensure metadata integrity, coordinate data sharing, and guarantee crash consistency, because the process serves as part of the trusted computing base. Library-based approaches, in contrast, cannot realize these important properties, because the library is part of the application and thus cannot be trusted directly.</p><p>Third, FSP eases cluster management <ref type="bibr" target="#b6">[6]</ref>. With care in its design, a file system process could be readily upgraded without terminating user applications.</p><p>Finally, and critically, FSP can deliver high performance. Our user-level inter-process communication (IPC) mechanism is efficient, because it is designed to avoid costly kernel crossings and leverage fast inter-core IPC. As cache-to-cache transfers cost only tens of cycles on modern multi-core processors <ref type="bibr" target="#b33">[33]</ref>, inter-core IPC incurs minimal overhead, thus avoiding same-core context switches between applications and file system processes. Consequently, the renaissance of file systems as processes could possibly bridge the performance gap between the "free kernel trapping" age and the ultra-fast storage device era.</p><p>The rest of this paper is structured as follows. We first discuss background and related work ( §2), and then describe the FSP storage architecture and its challenges ( §3). Next, we discuss the implementation of our DashFS prototype, and show a preliminary evaluation ( §4). Finally, we conclude ( §5).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Background and Related Work</head><p>To enable direct storage access for user-level applications, several file systems or I/O frameworks have been proposed. Moneta-D <ref type="bibr" target="#b7">[7]</ref>, which customizes SSDs to enable direct data access, pushes permissions checking into device registers while maintaining metadata management inside the kernel. Aerie <ref type="bibr" target="#b38">[38]</ref> is a trusted user-level file server process. However, as Aerie primarily targets storage-class memory and the kernel is in charge of storage access, trapping overhead is not completely removed from I/O path.</p><p>Arrakis <ref type="bibr" target="#b29">[29]</ref> relies on hardware virtualization techniques to manages data plane operations in user space, while the OS is required for handling control plane operations. As a result, all file system metadata operations (e.g., increasing the inode size) must trap into the kernel. Strata <ref type="bibr" target="#b24">[24]</ref> aims to unify storage devices of different speeds and its foreground threads directly access the NVM device from user-level. However, Strata must trap into the kernel when files are shared, and concurrent access is managed at the OS-level with a complicated lease mechanism. Reflex <ref type="bibr" target="#b21">[21]</ref> uses a user-level NVMe driver to provide comparable performance for remote flash, but does not provide a file abstraction and mostly works for a single application.</p><p>DevFS <ref type="bibr" target="#b19">[19]</ref> and Willow <ref type="bibr" target="#b32">[32]</ref> address this direct access problems at the device level. However, both of them suffer from the memory capacity and CPU constraints inside the device. Device memory is limited, making it hard for those hardware-oriented file systems to use sophisticated data structures to optimize performance.</p><p>FUSE <ref type="bibr" target="#b36">[36]</ref> (Filesystem in Userspace) is a widely used user-space file system framework. It is significantly different from our approach because it relies upon a kernel module which leads to poor performance <ref type="bibr" target="#b31">[31,</ref><ref type="bibr" target="#b37">37]</ref>. ZUFS <ref type="bibr" target="#b16">[16]</ref> aims to be a replacement of FUSE by leveraging "zerocopy" in I/O path for low latency, but it suffers from a similar performance penalty as FUSE due to its costly in-kernel control plane.</p><p>Our architecture is derived from classic microkernels <ref type="bibr" target="#b15">[15]</ref>. However, microkernels have generally traded performance primarily for increased security and modularity. While researchers have reduced performance overheads <ref type="bibr" target="#b25">[25]</ref>, they were not focused upon high-performance I/O, which is a fundamental difference in our work.</p><p>Microkernel overhead mainly stems from kernel involvement in IPC <ref type="bibr" target="#b26">[26]</ref>, which includes the direct cost of kernel crossing and indirect pollution of processor structures (i.e., caches). Our approach, instead, requires</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>App Process</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>FS Lib</head><p>App Process minimal kernel interaction for IPC between application and file system processes, and leverages modern multicore systems for cache efficiency. In addition, the file system process leverages the kernel's general OS functionality, such as memory management and CPU scheduling, thus directly benefiting from years of kernel innovation.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Direct-Access File Systems Processes</head><p>In this section, we first present the general architecture of a user-level file system process and then discuss the challenges of realizing this new storage architecture.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Architecture</head><p>As shown in <ref type="figure" target="#fig_0">Figure 1</ref>, our file system process is a standalone user-level process, which directly operates storage devices and communicates with user applications.</p><p>Each application has a private communication channel with the file system process; the channel is logically separated into a control plane and data plane. During the processing of file I/O requests, the kernel is not involved. The file system process is responsible for run-time file management, metadata integrity, concurrent file access support, data persistence, crash consistency, and all other features commonly found within file systems.</p><p>Because the application and file system are in different address spaces, the operating system is only involved at initialization of file-system access for a given client process. During initialization, the kernel provides a trusted mechanism for the file system process to recognize the application, as well as obtain and record the user's credential information. The file system process then sets up a secure and high-performance channel to the client process which is used in all subsequent communication.</p><p>User applications access the file system via a library which we calls FS Lib. FS Lib is in charge of providing a POSIX-like API, translating the API invocation into a request submission via the dedicated communication channel, and subsequently unpacking and returning a response to the calling application.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Challenges</head><p>We now discuss challenges in realizing a file system as a user-level process. The traditional storage stack has been developed for decades, and many ideas can be incorporated from previous systems <ref type="bibr" target="#b17">[17,</ref><ref type="bibr" target="#b30">30,</ref><ref type="bibr" target="#b35">35,</ref><ref type="bibr" target="#b42">41]</ref>. Our focus is upon the new challenges that our approach creates. Figure 2 (a) shows the traditional kernel storage stack and (b) shows our approach. The traditional approach places the entire file system within the kernel, including critical security components involved with permissions checking, and essential integrity maintenance aspects such as crash consistency <ref type="bibr" target="#b0">[1]</ref>. In our approach, all such functionality is migrated into the file system process, which directly manages the underlying high-speed device.</p><p>Among all the challenges for building a highperformance file system as a process, we discuss five major concerns: efficient communication, concurrency, security, interrupt handling, and hardware integration.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2.1">Efficient Communication Channel</head><p>Our motivation of moving the storage stack into userspace is to avoid high kernel-trapping overheads. High performance inter-process communication (IPC), situated between the file system process and all application processes, serves as the foundation of this argument. Conceptually, IPC overhead must be lower than traditional storage costs, which includes trap handling, kernel crossing, and data movement across kernel and user-space.</p><p>One potential avenue of exploration is to utilize the multi-core nature of modern hardware. For example, cache-to-cache communication may only cost tens of cycles on modern multicore processors <ref type="bibr" target="#b33">[33]</ref>. By locating a file system process on one core and a client process on another, we can avoid an expensive same-core context switch during communication, instead relying on fast cache-to-cache transfers and improving application cache locality while reducing latency. Furthermore, by utilizing shared memory segments between clients and the file system process, data movement can be highly efficient, in some cases even avoiding a copy <ref type="bibr" target="#b28">[28,</ref><ref type="bibr" target="#b40">39]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2.2">Frontend Threading Model</head><p>One of the major difference between the kernel storage stack and our FSP approach is that the user-created thread is no longer the vessel which performs file system operations; instead, the file system process creates threads which do work on behalf of client processes. In the diagram, this server concurrency is managed by the Frontend component, which is responsible for creating threads to service requests, and then managing said concurrency efficiently.</p><p>The complexity of threading in a file system process is similar to that of building server-based applications <ref type="bibr" target="#b34">[34,</ref><ref type="bibr" target="#b43">42]</ref>. However, we believe the problem is not well-examined in this storage-oriented domain, and thus the following challenges arise.</p><p>First, in contrast to the in-kernel model, the file system process must create and manage a number of extra threads, which may consequently increase scheduling contention and incur a performance penalty. Thus, great care must be given to the design of the concurrency architecture.</p><p>Second, although the device interface is asynchronous, the threads executing file system functions can become blocked due to other reasons such as locks. Thus, careful structuring of threads and the way in which they handle blocking is warranted.</p><p>Third, the way in which the file system process obtains requests from client processes is important to consider. Simple polling-based approaches could be fast but may waste cycles and consume energy; slower interrupt-driven techniques have the opposite concerns. Trade-offs based on two-phased techniques may be most promising <ref type="bibr" target="#b2">[3]</ref>; we discuss this topic further below, as an analogous issue exists when interacting with the device itself.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2.3">Connecting Processes to I/O Operations</head><p>Moving down in the storage stack, the VFS layer mainly handles the runtime states and dynamic behavior of the storage stack, such as permission checking, file sharing coordination, and buffer management. However, I/O-related information is maintained as part of the process's OS state, and thus readily available to in-kernel software; in contrast, such state is hidden from a file system process. If a process's I/O state changes in a way that is meaningful to the file system process, the process must be informed by the OS in a robust manner.</p><p>Permission checking is a run-time behavior which compares the user process's credentials with permission information stored by the file system. In the process-based approach, our assumption is that the file system process is trusted as part of Trusted Computing Base (TCB) <ref type="bibr" target="#b41">[40]</ref>. In this case, we implicitly trust the code of the file system process; thus, the major difficulty is the information gap of obtaining the proper process credentials.</p><p>To address this problem, we believe the following actions must be taken. First, the file system process needs the kernel to help establish a secure communication channel. As such, the kernel needs to have mechanisms for detecting and denying an initialization request from unqualified processes and for passing valid process credentials to file system process securely. Second, when a process exits, the kernel is required to trigger the file system process's cleanup procedure (e.g., by releasing file handles and tearing down communication channels). Third, there are corner cases that are related to access capabilities, such as when fork() is called. Specifically, for a new process created by fork(), the kernel needs to prevent the child from accessing its parent's connection to the file system process; if the child wishes to access the file system process, it will have to establish a new connection.</p><p>Support for memory-mapped files typically requires integration with kernel page-fault handling. However, this approach is problematic for a file system process because it may not be aware of page faults that occur. One way to support user-level mmap() could be to implement a dedicated kernel module for the file system process that handles page faults by allocating pages and adding them to the page table, thus ensuring the same level of performance as kernel-level file systems.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2.4">Handling of Interrupt-free I/O Requests</head><p>The block layer, located beneath the file system in the traditional storage stack, is another layer that will differ greatly with the process-based approach. Making use of user-level storage device drivers means removing kernel's interrupt handling mechanism entirely. As a result, the file system process must poll for the completion of the I/O request instead of relying on the OS to invoke the interrupt handler upon request completion. Although polling can improve performance <ref type="bibr" target="#b20">[20,</ref><ref type="bibr" target="#b44">43]</ref>, exactly when and where to poll for completion is an open question, because there is a trade-off between CPU utilization and I/O latency with respect to different workloads <ref type="bibr" target="#b27">[27]</ref>.</p><p>The problem becomes more interesting when we consider the threading model of both device polling and the Frontend together. The file system process can have dedicated threads for polling, which makes the management of polling simple. Alternatively, the file system process can integrate the I/O completion event into an event-driven framework in Frontend. The former choice, despite its simplicity, may result in performance losses in terms of latency, a phenomenon observed in mTCP <ref type="bibr" target="#b18">[18]</ref>.</p><p>The interrupt-free I/O mechanism also introduces a new challenge to buffer management in the block layer. After allocating buffers and before issuing a device I/O request, we must pin the target buffer, which is not straightforward in user-space. As for block I/O scheduling, accomplishing the same scheduling effect requires not only that we re-implement a block I/O request scheduler, but that we also re-design the scheduler to handle both issuing and polling phases of every single request.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2.5">Indirections Designed for Direct Access</head><p>Although the kernel storage stack is a robust and solid starting point, implementing an identical stack within the file system process is not our ultimate goal. Instead, we foresee changes to these layers and components inside each layer for several reasons.</p><p>First, modern storage devices provide new advanced features which could make certain aspects of the file system process much simpler. For example, the powerloss protection capacitors inside flash devices provide new opportunities for crash consistency <ref type="bibr" target="#b19">[19]</ref>. Second, this multi-layer software architecture can be harmful to performance, due to the excessive costs of modularity. For example, a recent study <ref type="bibr" target="#b47">[46]</ref> has found that linux multiqueue <ref type="bibr" target="#b3">[4]</ref> (inside the BIO layer), developed to improve flash performance, fails to exploit device performance and incurs long latencies. Third, researchers have pointed out the defects of current storage layers. For example, the block-I/O scheduler cannot reorder I/O requests due to consistency semantics <ref type="bibr" target="#b45">[44]</ref>, thus limiting performance.</p><p>Given that the file system process must be created from scratch, perhaps there exists a new opportunity to reconsider file system architecture. By considering these concerns from the start, it is possible that a new, more efficient, and coherent whole can be realized.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">DashFS Prototype</head><p>We implement a prototype of file system process, DashFS, to further examine the issues in realizing the FSP approach. We first describe its design principles, then briefly sketch its implementation, and finally show results from an early evaluation.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">DashFS Design Principles</head><p>From the challenges listed in the last section, we have derived the following design principles: Trust boundary: DashFS is regarded as a trusted extension of the kernel. User applications are not trusted and must be isolated from other users and the DashFS address space. Minimal kernel interaction: Kernel involvement is heavyweight and should be avoided. The number of traps into the kernel should not scale with I/O requests. Concurrency awareness: To provide a fully functional file system, DashFS should be designed with sharing in mind and scale gracefully under load.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Implementation</head><p>We implement DashFS by extending the user-level NVMe driver provided by SPDK <ref type="bibr" target="#b46">[45]</ref>. Our current DashFS prototype supports regular file system operations without considering crash consistency and uses simple data structures.</p><p>The FS Lib library implements an interface that is similar to POSIX, including open(), read(), write(), stat() and close(). The FS Lib also offers init() for a user application to begin file system usage, which creates a private communication channel for each user application. The communication channel is based upon shared memory, organized as several request buffers, data buffers, and a lockless request queue.</p><p>In the current DashFS implementation of Frontend, we maintain a thread pool with a configurable number of threads. Each thread handles the whole lifetime of a request. We also proactively pull requests from the request ring to avoid kernel trapping.</p><p>During initialization (init()), an application sends a message via UNIX domain socket to DashFS. The kernel (while processing the socket) copies the application's credential information to the DashFS address space from an in-kernel process structure, allocates a shared memory segment for the private communication channel, and returns a key for the channel to the user application. In the block I/O layer (BIO) of our prototype, each thread in Frontend synchronously polls for completion of a request.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.3">Preliminary Evaluation</head><p>Considering our preference for simplicity in DashFS, we do not yet expect DashFS to outperform state-of-the-art file systems. However, we believe it is valuable to understand the basic performance implications of DashFS and start examining the challenges. In this section, we first present results of simple micro-benchmarks; we then demonstrate the effectiveness of our communication channel, which can serve as a solid basis for future development of DashFS.</p><p>All experiments are conducted on a system with Intel(R) Core(TM) i7-8700K CPU, 32G RAM and Intel Optane SSD 905P (960GB). The maximal throughput of the device is reported as 575K IOPS <ref type="bibr" target="#b10">[10]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.3.1">Micro-benchmark</head><p>We use a single-thread micro-benchmark to measure the basic latency of file system operations. The benchmark creates 1,000 files, writes a 4KB block to each file followed by issuing a fsync, and then closes the file. The page cache is cleared for each iteration. When using ext4, the application must trap into the OS at least four times for each file; hence average latency is 74.5us for each operation, With DashFS, the average latency decreases to 41.7us.</p><p>For deeper insight on the overheads of ext4's kernel software stack, we measure the latency for single 4KB write requests with O DIRECT enabled for a pre-allocated file and observe the average latency as 11.52us. In contrast, using the direct-access NVMe driver reduces access latency to just 6.68us, a 43% reduction. While it is too early to claim that DashFS outperforms kernel-level file systems, the results show the potential gains with direct-access that one could achieve after further improvements.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.3.2">Evaluation of Communication Channel</head><p>We now investigate the raw costs of IPC. Our experiments show that sub-microsecond latency is achievable on modern hardware. Our communication channel between DashFS and each user application uses a shared lockless ring buffer. In our experiment <ref type="figure" target="#fig_2">(Figure 3)</ref>, we configure the ring buffer to 64 entries and let user processes issue 4KB sequential file system write requests. We use memory as DashFS's backend to isolate the overhead of this communication channel. Each user thread continuously appends to different files with DashFS having two serving threads. The overall latency of each request includes adding the request to the request ring, dequeuing the request from the ring, copying the data from the corresponding data buffer region associated with the operation, and finally the user application checking the return value of the I/O request. This experiment demonstrates that with an increasing number of user threads, the communication channel scales well in terms of both latency and throughput.</p><p>Based on our preliminary results, the communication channel between the file system process and application threads can be regarded as efficient enough to support the performance goals of our file system process. First, for a reasonable level of user concurrency, our communication channel is able to achieve sub-microsecond latency. Second, as modern NVMe devices currently can deliver roughly one million IOPS, the communication channel is unlikely to be a throughput bottleneck <ref type="bibr" target="#b10">[10]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Conclusion</head><p>Accessing fast storage without kernel involvement has been a central concern for many years. In this paper, we have argued that file systems as processes may be one avenue for progress in this important direction. Our study on the challenges of realizing such a file system reveals some promise, but many future hurdles must be overcome to fully reap the benefits that this new (and yet, old) idea promises.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: File Systems as Processes Architecture</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: Anatomy of the Storage Stack</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: Performance of Communication Channel</figDesc></figure>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgements</head><p>We thank Bill Bolosky (our shepherd), the anonymous reviewers and the members of ADSL for their valuable input. This material was supported by funding from NSF grants CNS-1421033, CNS-1763810 and CNS-1838733, and DOE grant DE-SC0014935. Any opinions, findings, and conclusions or recommendations expressed in this material are those of the authors and may not reflect the views of NSF, DOE, or any other institutions.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title level="m" type="main">Operating Systems: Three Easy Pieces</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Remzi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2018-08" />
+		</imprint>
+	</monogr>
+	<note>Arpaci-Dusseau Books, 1.00 edition</note>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Attack of the Killer Microseconds</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Luiz</forename><surname>Barroso</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mike</forename><surname>Marty</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Patterson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Parthasarathy</forename><surname>Ranganathan</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Communications of the ACM</title>
+		<imprint>
+			<biblScope unit="volume">60</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="48" to="54" />
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">IX: A Protected Dataplane Operating System for High Throughput and Low Latency</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adam</forename><surname>Belay</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">George</forename><surname>Prekas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ana</forename><surname>Klimovic</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Samuel</forename><surname>Grossman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Christos</forename><surname>Kozyrakis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Edouard</forename><surname>Bugnion</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 11th Symposium on Operating Systems Design and Implementation (OSDI &apos;14)</title>
+		<meeting>the 11th Symposium on Operating Systems Design and Implementation (OSDI &apos;14)<address><addrLine>Broomfield, CO</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2014-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Linux Block IO: Introducing Multi-queue SSD Access on Multi-core Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matias</forename><surname>Bjørling</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jens</forename><surname>Axboe</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Nellans</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Philippe</forename><surname>Bonnet</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 6th ACM International on Systems and Storage Conference (SYSTOR &apos;13)</title>
+		<meeting>the 6th ACM International on Systems and Storage Conference (SYSTOR &apos;13)<address><addrLine>Haifa, Israel</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2013-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nathan</forename><surname>Bronson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zach</forename><surname>Amsden</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">George</forename><surname>Cabrera</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Prasad</forename><surname>Chakka</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Peter</forename><surname>Dimov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hui</forename><surname>Ding</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jack</forename><surname>Ferris</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Anthony</forename><surname>Giardullo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sachin</forename><surname>Kulkarni</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Harry</forename><surname>Li</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Facebook&apos;s Distributed Data Store for the Social Graph</title>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Annual Technical Conference (USENIX &apos;13)</title>
+		<meeting>the USENIX Annual Technical Conference (USENIX &apos;13)<address><addrLine>San Jose, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2013-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Brendan</forename><surname>Burns</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Brian</forename><surname>Grant</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Oppenheimer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eric</forename><surname>Brewer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><surname>Wilkes</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Omega</forename><surname>Borg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kubernetes</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Queue</title>
+		<imprint>
+			<biblScope unit="volume">14</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page">10</biblScope>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Providing Safe, User Space Access to Fast, Solid State Disks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adrian</forename><forename type="middle">M</forename><surname>Caulfield</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Todor</forename><forename type="middle">I</forename><surname>Mollov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Louis</forename><forename type="middle">Alex</forename><surname>Eisner</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arup</forename><surname>De</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joel</forename><surname>Coburn</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steven</forename><surname>Swanson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 17th International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS XVII)</title>
+		<meeting>the 17th International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS XVII)<address><addrLine>London, England, UK</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2012-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Bigtable: A Distributed Storage System for Structured Data</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fay</forename><surname>Chang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeffrey</forename><surname>Dean</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanjay</forename><surname>Ghemawat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wilson</forename><forename type="middle">C</forename><surname>Hsieh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Deborah</forename><forename type="middle">A</forename><surname>Wallach</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mike</forename><surname>Burrows</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tushar</forename><surname>Chandra</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrew</forename><surname>Fikes</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><forename type="middle">E</forename><surname>Gruber</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Computer Systems</title>
+		<imprint>
+			<biblScope unit="volume">26</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page">4</biblScope>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">A Flash Memory Controller for 15µs Ultra-Low-Latency SSD Using High-Speed 3D NAND Flash with 3µs Read Time</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wooseong</forename><surname>Cheong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chanho</forename><surname>Yoon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Seonghoon</forename><surname>Woo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kyuwook</forename><surname>Han</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Daehyun</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chulseung</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Youra</forename><surname>Choi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shine</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dongku</forename><surname>Kang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Geunyeong</forename><surname>Yu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE International Solid-State Circuits Conference</title>
+		<imprint>
+			<date type="published" when="2018" />
+			<publisher>IEEE</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<monogr>
+				<ptr target="https://ark.intel.com/content/www/us/en/ark/products/series/129835/intel-optane-ssd-905p-series.html" />
+		<title level="m">Intel Cooperation. Intel Optane SSD 905P Series Specification</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Storage As Fast As Rest of the System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Annie</forename><surname>Foong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Frank</forename><surname>Hady</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2016 IEEE 8th International Memory Workshop (IMW)</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="1" to="4" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">The Google File System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanjay</forename><surname>Ghemawat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Howard</forename><surname>Gobioff</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shun-Tak</forename><surname>Leung</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 19th ACM Symposium on Operating Systems Principles (SOSP &apos;03)</title>
+		<meeting>the 19th ACM Symposium on Operating Systems Principles (SOSP &apos;03)<address><addrLine>Bolton Landing, New York</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2003-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Microkernel Operating System Architecture and Mach</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><forename type="middle">B</forename><surname>Golub</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Daniel</forename><forename type="middle">P</forename><surname>Julin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Richard</forename><forename type="middle">F</forename><surname>Rashid</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Richard</forename><forename type="middle">P</forename><surname>Draves</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Randall</forename><forename type="middle">W</forename><surname>Dean</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alessandro</forename><surname>Forin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joseph</forename><surname>Barrera</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hideyuki</forename><surname>Tokuda</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gerald</forename><surname>Malan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Bohman</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Workshop on Micro-Kernels and Other Kernel Architectures</title>
+		<meeting>the USENIX Workshop on Micro-Kernels and Other Kernel Architectures</meeting>
+		<imprint>
+			<date type="published" when="1992" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Platform Storage Performance With 3D XPoint Technology</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Frank</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Annie</forename><surname>Hady</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bryan</forename><surname>Foong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dan</forename><surname>Veal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Williams</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Proceedings of the IEEE</title>
+		<imprint>
+			<biblScope unit="volume">105</biblScope>
+			<biblScope unit="issue">9</biblScope>
+			<biblScope unit="page" from="1822" to="1833" />
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">The Nucleus of a Multiprogramming System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Per Brinch Hansen</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Communications of the ACM</title>
+		<imprint>
+			<biblScope unit="volume">13</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="238" to="241" />
+			<date type="published" when="1970" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<monogr>
+		<title level="m" type="main">Zero Copy User-Mode FileSystem</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Boaz</forename><surname>Harrosh</surname></persName>
+		</author>
+		<ptr target="https://lwn.net/Articles/756625/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">BetrFS: A RightOptimized Write-Optimized File System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">William</forename><surname>Jannen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jun</forename><surname>Yuan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yang</forename><surname>Zhan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amogh</forename><surname>Akshintala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><surname>Esmet</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yizheng</forename><surname>Jiao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ankur</forename><surname>Mittal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Prashant</forename><surname>Pandey</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Phaneendra</forename><surname>Reddy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Leif</forename><surname>Walsh</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 13th USENIX Symposium on File and Storage Technologies (FAST &apos;15)</title>
+		<meeting>the 13th USENIX Symposium on File and Storage Technologies (FAST &apos;15)<address><addrLine>Santa Clara, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2015-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">mTCP: a Highly Scalable User-level TCP Stack for Multicore Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eunyoung</forename><surname>Jeong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shinae</forename><surname>Wood</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Muhammad</forename><surname>Jamshed</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Haewon</forename><surname>Jeong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sunghwan</forename><surname>Ihm</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dongsu</forename><surname>Han</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kyoungsoo</forename><surname>Park</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 10th Symposium on Networked Systems Design and Implementation (NSDI &apos;14)</title>
+		<meeting>the 10th Symposium on Networked Systems Design and Implementation (NSDI &apos;14)<address><addrLine>Seattle, WA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2014-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Designing a True Direct-Access File System with DevFS</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Sudarsun Kannan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Remzi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yuangang</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jun</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gopinath</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Palani</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 16th USENIX Conference on File and Storage Technologies (FAST &apos;18)</title>
+		<meeting>the 16th USENIX Conference on File and Storage Technologies (FAST &apos;18)<address><addrLine>Oakland, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2018-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">NVMeDirect: A User-space I/O Framework for Application-specific Optimization on NVMe SSDs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hyeong-Jun</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Young-Sik</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jin-Soo</forename><surname>Kim</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">8th USENIX Workshop on Hot Topics in Storage and File Systems (HotStorage &apos;16)</title>
+		<meeting><address><addrLine>Denver, CO</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2016-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">ReFlex: Remote Flash ⇡ Local Flash</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ana</forename><surname>Klimovic</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Heiner</forename><surname>Litz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Christos</forename><surname>Kozyrakis</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 22nd International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS &apos;17)</title>
+		<meeting>the 22nd International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS &apos;17)<address><addrLine>Xi&apos;an, China</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2017-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Exploring System Challenges of Ultra-Low Latency Solid State Drives</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sungjoon</forename><surname>Koh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Changrim</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Miryeong</forename><surname>Kwon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Myoungsoo</forename><surname>Jung</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">10th USENIX Workshop on Hot Topics in Storage and File Systems (HotStorage &apos;18)</title>
+		<meeting><address><addrLine>Boston, MA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2013-07" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Patrick</forename><surname>Kutch</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">. Pci-Sig Sr-Iov</forename><surname>Primer</surname></persName>
+		</author>
+		<title level="m">An introduction to SR-IOV technology. Intel application note</title>
+		<imprint>
+			<date type="published" when="2011" />
+			<biblScope unit="page" from="321211" to="321213" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">Strata: A Cross Media File System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Youngjin</forename><surname>Kwon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Henrique</forename><surname>Fingler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tyler</forename><surname>Hunt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Simon</forename><surname>Peter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Emmett</forename><surname>Witchel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thomas</forename><surname>Anderson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 26th ACM Symposium on Operating Systems Principles (SOSP &apos;17)</title>
+		<meeting>the 26th ACM Symposium on Operating Systems Principles (SOSP &apos;17)<address><addrLine>Shanghai, China</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2017-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">On-µkernel Construction</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jochen</forename><surname>Liedtke</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 15th ACM Symposium on Operating Systems Principles (SOSP &apos;95)</title>
+		<meeting>the 15th ACM Symposium on Operating Systems Principles (SOSP &apos;95)<address><addrLine>Copper Mountain Resort, CO</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="1995-12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">SkyBridge: Fast and Secure Inter-Process Communication for Microkernels</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zeyu</forename><surname>Mi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dingji</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zihan</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xinran</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Haibo</forename><surname>Chen</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the EuroSys Conference (EuroSys &apos;19)</title>
+		<meeting>the EuroSys Conference (EuroSys &apos;19)<address><addrLine>Dresden, Germany</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2019-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<analytic>
+		<title level="a" type="main">Shenango: Achieving High CPU Efficiency for Latency-sensitive Datacenter Workloads</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amy</forename><surname>Ousterhout</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joshua</forename><surname>Fried</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jonathan</forename><surname>Behrens</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adam</forename><surname>Belay</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hari</forename><surname>Balakrishnan</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 16th Symposium on Networked Systems Design and Implementation (NSDI &apos;15)</title>
+		<meeting>the 16th Symposium on Networked Systems Design and Implementation (NSDI &apos;15)<address><addrLine>Boston, MA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2019-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">IOLite: A Unified I/O Buffering and Caching System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Vivek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Peter</forename><surname>Pai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Willy</forename><surname>Druschel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Zwaenepoel</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Computer Systems</title>
+		<imprint>
+			<biblScope unit="volume">18</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="37" to="66" />
+			<date type="published" when="2000" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<analytic>
+		<title level="a" type="main">Arrakis: The Operating System Is the Control Plane</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Simon</forename><surname>Peter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jialin</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Irene</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dan</forename><forename type="middle">R K</forename><surname>Ports</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Doug</forename><surname>Woos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arvind</forename><surname>Krishnamurthy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thomas</forename><surname>Anderson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Timothy</forename><surname>Roscoe</surname></persName>
+		</author>
+		<idno>11:1-11:30</idno>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Computer Systems</title>
+		<imprint>
+			<biblScope unit="volume">33</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">Application Crash Consistency and Performance with CCFS</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ramnatthan</forename><surname>Thanumalayan Sankaranarayana Pillai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lanyue</forename><surname>Alagappan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vijay</forename><surname>Lu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Chidambaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi</forename><forename type="middle">H</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<idno>19:1-19:29</idno>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Storage</title>
+		<imprint>
+			<biblScope unit="volume">13</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<analytic>
+		<title level="a" type="main">Performance and Extension of User Space File Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aditya</forename><surname>Rajgarhia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ashish</forename><surname>Gehani</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2010 ACM Symposium on Applied Computing (SAC &apos;10)</title>
+		<meeting>the 2010 ACM Symposium on Applied Computing (SAC &apos;10)</meeting>
+		<imprint>
+			<date type="published" when="2010-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">Willow: A User-Programmable SSD</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sudharsan</forename><surname>Seshadri</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mark</forename><surname>Gahagan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sundaram</forename><surname>Bhaskaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Trevor</forename><surname>Bunker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arup</forename><surname>De</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yanqin</forename><surname>Jin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yang</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steven</forename><surname>Swanson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 11th Symposium on Operating Systems Design and Implementation (OSDI &apos;14)</title>
+		<meeting>the 11th Symposium on Operating Systems Design and Implementation (OSDI &apos;14)<address><addrLine>Broomfield, CO</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2014-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<analytic>
+		<title level="a" type="main">FlexSC: Flexible System Call Scheduling with Exception-Less System Calls</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Livio</forename><surname>Soares</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Stumm</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 9th Symposium on Operating Systems Design and Implementation (OSDI &apos;10)</title>
+		<meeting>the 9th Symposium on Operating Systems Design and Implementation (OSDI &apos;10)<address><addrLine>Vancouver, Canada</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2010-12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<analytic>
+		<title level="a" type="main">µTune: Auto-Tuned Threading for OLDI Microservices</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Akshitha</forename><surname>Sriraman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thomas</forename><forename type="middle">F</forename><surname>Wenisch</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 13th USENIX Conference on Operating Systems Design and Implementation (OSDI &apos;18)</title>
+		<meeting>the 13th USENIX Conference on Operating Systems Design and Implementation (OSDI &apos;18)<address><addrLine>Carlsbad, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2018-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<analytic>
+		<title level="a" type="main">Unifying File System Protection</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Christopher</forename><forename type="middle">A</forename><surname>Stein</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><forename type="middle">H</forename><surname>Howard</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Margo</forename><forename type="middle">I</forename><surname>Seltzer</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Annual Technical Conference (USENIX &apos;01)</title>
+		<meeting>the USENIX Annual Technical Conference (USENIX &apos;01)<address><addrLine>Boston, MA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2001-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b36">
+	<monogr>
+		<title level="m" type="main">Filesystem in Userspace</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Miklos</forename><surname>Szeredi</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b37">
+	<analytic>
+		<title level="a" type="main">To FUSE or Not to FUSE: Performance of User-Space File Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Bharath Kumar Reddy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vasily</forename><surname>Vangoor</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Erez</forename><surname>Tarasov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Zadok</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 15th USENIX Conference on File and Storage Technologies (FAST &apos;17)</title>
+		<meeting>the 15th USENIX Conference on File and Storage Technologies (FAST &apos;17)<address><addrLine>Santa Clara, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2017-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b38">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Haris</forename><surname>Volos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanketh</forename><surname>Nalli</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sankarlingam</forename><surname>Panneerselvam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Venkatanathan</forename><surname>Varadarajan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Prashant</forename><surname>Saxena</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b39">
+	<analytic>
+		<title level="a" type="main">Aerie: Flexible File-system Interfaces to Storage-class Memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><forename type="middle">M</forename><surname>Swift</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the EuroSys Conference (EuroSys &apos;14)</title>
+		<meeting>the EuroSys Conference (EuroSys &apos;14)<address><addrLine>Amsterdam, The Netherlands</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2014-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b40">
+	<analytic>
+		<title level="a" type="main">U-Net: A User-level Network Interface for Parallel and Distributed Computing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thorsten</forename><surname>Von Eicken</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Anindya</forename><surname>Basu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vineet</forename><surname>Buch</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Werner</forename><surname>Vogels</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 15th ACM Symposium on Operating Systems Principles (SOSP &apos;95)</title>
+		<meeting>the 15th ACM Symposium on Operating Systems Principles (SOSP &apos;95)<address><addrLine>Copper Mountain Resort, CO</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="1995-12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b41">
+	<analytic>
+		<title level="a" type="main">VPFS: Building a Virtual Private File System with a Small Trusted Computing Base</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Carsten</forename><surname>Weinhold</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hermann</forename><surname>Härtig</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the EuroSys Conference (EuroSys &apos;08)</title>
+		<meeting>the EuroSys Conference (EuroSys &apos;08)<address><addrLine>Glasgow, Scotland UK</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2008-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b42">
+	<analytic>
+		<title level="a" type="main">DenseFS: a Cache-Compact Filesystem</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zev</forename><surname>Weiss</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi</forename><forename type="middle">H</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">10th USENIX Workshop on Hot Topics in Storage and File Systems (HotStorage &apos;18)</title>
+		<meeting><address><addrLine>Boston, MA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2013-07" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b43">
+	<analytic>
+		<title level="a" type="main">SEDA: An Architecture for Well-conditioned, Scalable Internet Services</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matt</forename><surname>Welsh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Culler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eric</forename><surname>Brewer</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 18th ACM Symposium on Operating Systems Principles (SOSP &apos;01)</title>
+		<meeting>the 18th ACM Symposium on Operating Systems Principles (SOSP &apos;01)<address><addrLine>Banff, Canada</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2001-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b44">
+	<analytic>
+		<title level="a" type="main">When Poll Is Better than Interrupt</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jisoo</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dave</forename><forename type="middle">B</forename><surname>Minturn</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Frank</forename><surname>Hady</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 10th USENIX Symposium on File and Storage Technologies (FAST &apos;12)</title>
+		<meeting>the 10th USENIX Symposium on File and Storage Technologies (FAST &apos;12)<address><addrLine>San Jose, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2012-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b45">
+	<analytic>
+		<title level="a" type="main">Split-level I/O Scheduling</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Suli</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tyler</forename><surname>Harter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nishant</forename><surname>Agrawal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Salini</forename><surname>Selvaraj Kowsalya</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Anand</forename><surname>Krishnamurthy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Samer</forename><surname>Al-Kiswany</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rini</forename><forename type="middle">T</forename><surname>Kaushik</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi</forename><forename type="middle">H</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 25th ACM Symposium on Operating Systems Principles (SOSP &apos;15)</title>
+		<meeting>the 25th ACM Symposium on Operating Systems Principles (SOSP &apos;15)<address><addrLine>Monterey, California</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2015-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b46">
+	<analytic>
+		<title level="a" type="main">SPDK: A Development Kit to Build High Performance Storage Applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ziye</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">James</forename><forename type="middle">R</forename><surname>Harris</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Benjamin</forename><surname>Walker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Daniel</forename><surname>Verkamp</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Changpeng</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cunyin</forename><surname>Chang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gang</forename><surname>Cao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jonathan</forename><surname>Stern</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vishal</forename><surname>Verma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Luse</forename><forename type="middle">E</forename><surname>Paul</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2017 IEEE International Conference on Cloud Computing Technology and Science (CloudCom)</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="154" to="161" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b47">
+	<analytic>
+		<title level="a" type="main">Punching Through Server Storage Stack from Kernel to Firmware for Ultra-Low Latency SSDs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jie</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Miryeong</forename><surname>Kwon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Donghyun</forename><surname>Gouk</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sungjoon</forename><surname>Koh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Changlim</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mohammad</forename><surname>Alian</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 13th USENIX Conference on Operating Systems Design and Implementation (OSDI &apos;18)</title>
+		<meeting>the 13th USENIX Conference on Operating Systems Design and Implementation (OSDI &apos;18)<address><addrLine>Carlsbad, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2018-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

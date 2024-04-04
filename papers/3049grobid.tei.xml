@@ -1,0 +1,1357 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:58+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">A file system for safely interacting with untrusted USB flash drives</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ke</forename><surname>Zhong</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Pennsylvania ⋆ Shanghai Jiao Tong University</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhihao</forename><surname>Jiang</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Pennsylvania ⋆ Shanghai Jiao Tong University</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">⋆</forename><surname>Ke</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Pennsylvania ⋆ Shanghai Jiao Tong University</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ma</forename><forename type="middle">⋆</forename></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Pennsylvania ⋆ Shanghai Jiao Tong University</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sebastian</forename><surname>Angel</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Pennsylvania ⋆ Shanghai Jiao Tong University</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">A file system for safely interacting with untrusted USB flash drives</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>This paper introduces RBFuse, a system for interacting with USB flash drives safely in commodity OSes while bypassing the complex and bug-prone USB stack on the host. RBFuse prevents attacks in which malicious USB flash drives exploit low-level USB driver vulnerabilities to compromise the host machine. The simple idea behind RBFuse is to remap the USB stack to a virtual machine and export the flash drive&apos;s file system as a mountable virtual file system. The result of this decomposition is that the host can access all the files in the flash drive without speaking USB. This is beneficial from a security standpoint, since the VFS interface is small, has well-defined semantics, and can be formally verified. RBFuse requires no hardware modifications and introduces low overhead.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>When users connect their peripheral devices (keyboards, flash drives, chargers) into their machine, they expect them to work right away. This convenience is built deep into the fabric of the Universal Serial Bus (USB), which is the de facto protocol (and nowadays also connector type) for peripheral devices. USB has for decades assumed, even if tacitly, that any device physically attached to a user's machine has been vetted by the user and is therefore trustworthy. Consequently, USB stacks in existing OSes lack authentication mechanisms, blindly trust device payloads, and grant devices direct memory access (DMA). Such state of affairs has led to a myriad of attacks in which maliciously crafted devices abuse this trust to compromise low-level drivers <ref type="bibr" target="#b55">[62]</ref>, masquerade as other devices <ref type="bibr" target="#b14">[21]</ref><ref type="bibr" target="#b15">[22]</ref><ref type="bibr" target="#b16">[23]</ref>, and manipulate kernel memory via DMA <ref type="bibr">[8,</ref><ref type="bibr" target="#b48">55,</ref><ref type="bibr" target="#b56">63,</ref><ref type="bibr" target="#b58">65</ref>]; the academic community has followed with proposals to address many of these shortcomings <ref type="bibr" target="#b21">[28,</ref><ref type="bibr" target="#b24">31,</ref><ref type="bibr" target="#b40">47,</ref><ref type="bibr" target="#b42">49,</ref><ref type="bibr" target="#b47">54,</ref><ref type="bibr" target="#b59">66,</ref><ref type="bibr" target="#b61">[68]</ref><ref type="bibr" target="#b62">[69]</ref><ref type="bibr" target="#b63">[70]</ref>.</p><p>While there is reason to be optimistic that newer versions of USB (connectors and protocol) will take security more seriously <ref type="bibr" target="#b17">[24]</ref>, safely interacting with the existing tens of billions of devices that lack the proposed capabilities remains challenging. A particular concern are flash drives, which, even in today's well-connected and cloud-powered world, remain widely popular for storing and sharing data (e.g., bitcoin keys, medical records, old photos, music). To support safe interactions with untrusted flash drives that may conduct the aforementioned attacks, we propose a lasting remedy: instead of searching for (and patching) vulnerabilities across the complex USB stack, we arrange for the host to speak to the flash drive exclusively over a virtual file system (VFS) interface, avoiding the host's USB stack in its entirety. This approach has the benefit that VFS designs have simple and narrow interfaces, can be tested using ideas borrowed from existing fuzzing <ref type="bibr" target="#b41">[48,</ref><ref type="bibr" target="#b64">71]</ref> and crash frameworks <ref type="bibr" target="#b50">[57]</ref>, and actually stand a chance of being formally verified to ensure the absence of memory errors and the presence of crash consistency <ref type="bibr" target="#b26">[33,</ref><ref type="bibr" target="#b27">34]</ref>. The key challenge is achieving the proposed architecture without hardware changes and with low overhead.</p><p>To tackle the above challenge we introduce RBFuse, which is the first system that efficiently allows interactions between the host and USB flash drives through a VFS interface, bypassing the USB stack on the host machine without the need for new hardware. To do so, RBFuse adapts and specializes the architecture proposed in Cinch <ref type="bibr" target="#b24">[31]</ref> and Qubes OS <ref type="bibr" target="#b13">[19]</ref>. Specifically, RBFuse sets up a virtual machine (VM), remaps the USB host controller to the VM's address space, mounts the flash drive, and mediates access to it via a VFS interface. A Fuse-based file system at the host proxies all operations to the VFS via RPCs. From the perspective of the host, when a flash drive is attached to the machine it appears as a new directory in the VFS that can be accessed by the kernel and all applications. From the perspective of the device, it talks USB to the VM; attacks are contained within the VM and only propagate to the kernel via the (hardened) VFS interface.</p><p>As one may expect, a straightforward implementation of RBFuse's architecture leads to unreasonably low performance (up to 310× higher completion time compared to the baseline of directly connecting the flash drive via the host's USB stack). To reduce costs, we adapt optimizations that have been proposed for networked file systems to aggressively cache metadata, batch operations, and prefetch files. The resulting implementation achieves comparable performance to the baseline on workloads that operate on a large single file, and less than 4× higher completion time on workloads that operate on thousands of small files. Additionally, we use formally verified serializers and parsers <ref type="bibr" target="#b51">[58]</ref> to reduce the attack surface of the RPC layer used by the VFS and the proxy. Finally, inspired by Cinch <ref type="bibr" target="#b24">[31]</ref> and SandUSB <ref type="bibr" target="#b47">[54]</ref>, RBFuse can leverage an optional hardware adapter that encrypts files and metadata between the flash drive and the Fuse-based proxy (kernel) with low overhead, which prevents malicious USB hubs or promiscuous devices from inspecting the content of files transferred.</p><p>While RBFuse is presently tailored to flash drives, we intend to accommodate other file-based devices such as USB SD card readers and USB SSDs; this last one is particularly challenging due to high USB 3 speeds. In the near future, we plan to borrow ideas from formally verified file systems <ref type="bibr" target="#b26">[33,</ref><ref type="bibr" target="#b27">34]</ref> to prove the correctness of our optimizations (particularly with respect to crash consistency) and to further reduce the attack surface. A major limitation of RBFuse is supporting multiple USB devices: all devices attached to the same host controller are remapped to the same VM, so a compromised VM can harm other devices or take over for them. While desktops and newer laptops have multiple host controllers that could allow users to separate devices into untrusted (e.g., newly found flash drive) and trusted (e.g., keyboard owned for years) groups, this remains a major pain point.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Background and related work</head><p>The Universal Serial Bus (USB) is the de facto stack for interacting with peripheral devices such as flash drives. On the hardware side, it consists of the devices themselves, hubs like monitors and adapters (e.g., Apple "dongles"), and the host controller, which sits on the motherboard and is typically connected via PCIe. On the software side, USB consists of the host controller interface (HCI), which manages the host controller; USB core drivers that handle device enumeration and power management; and USB class drivers that manage devices (e.g., mass storage drivers manage flash drives).</p><p>While threats such as USB devices carrying malware have been around for decades (e.g., Stuxnet <ref type="bibr" target="#b35">[42]</ref>), recent years have seen an influx of devices that are themselves malicious <ref type="bibr">[3- 5, 7, 13, 17, 18, 43, 56]</ref>. The difference between these two threat models is that in the former (malware) the device itself is entirely benign and follows the prescribed protocol. In the latter, the device itself exploits the USB protocol. For example, a flash drive could lie during the device enumeration process, pretend to be a keyboard, and issue arbitrary key presses <ref type="bibr" target="#b12">[18]</ref>. As another example, the USB device could issue malformed packets to exploit vulnerabilities in USB's core or class drivers (which run inside the kernel), thereby gaining control over the machine with root privileges <ref type="bibr">[2, 9-12, 15, 32, 38, 39, 41, 62]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">Existing efforts</head><p>To prevent the above attacks, existing efforts for commodity OSes fall into three categories: (1) filtering USB packets; (2) adding authentication to the USB protocol; (3) sandboxing the device and monitoring its behavior. We discuss each of these.</p><p>Packet filtering. USBFilter <ref type="bibr" target="#b63">[70]</ref> and Cinch <ref type="bibr" target="#b24">[31]</ref> work by intercepting USB packets and allowing the user to specify rules to block devices or payloads (similar to specifying rules for a network firewall). USBFilter operates within the kernel similar to iptables. Cinch forces the USB device to connect to a VM, converts the USB packets into IP packets, uses existing network middleboxes to process the IP packets, and re-injects the "cleaned" USB packets into the host's USB subsystem.</p><p>A limitation of filtering is that devices with polymorphic attacks (i.e., attacks that change payloads) are hard to prevent with rules, so malicious devices could still exploit driver vulnerabilities. This is a key difference between RBFuse and these efforts: while Cinch goes from USB to IP, and then back to USB (which means that the host still has a full USB stack that can be exploited by polymorphic attacks), RBFuse goes from USB directly to VFS RPCs.</p><p>Device authentication. Several efforts <ref type="bibr" target="#b21">[28,</ref><ref type="bibr" target="#b42">49,</ref><ref type="bibr" target="#b59">66,</ref><ref type="bibr" target="#b62">69]</ref> extend USB devices and drivers to allow the device to cryptographically authenticate to the host (or vice versa). This allows the devices of trusted manufacturers to continue to operate, while preventing risky devices from being used. Similar efforts are being discussed for devices that use the USB-C connector <ref type="bibr" target="#b17">[24]</ref>. A downside of this approach is that it prevents third-party manufacturers and custom hardware, and raises concerns that a small set of companies can dictate what devices people can use. These works differ from RBFuse in that they require new devices and protocols, whereas RBFuse's objective is to support existing devices-albeit only flash drives. In this light, RBFuse is complementary: should the above approaches be widely deployed, RBFuse can allow users to plug in old USB flash drives that lack the necessary extensions.</p><p>Sandbox the device. Some works <ref type="bibr" target="#b40">[47,</ref><ref type="bibr" target="#b47">54,</ref><ref type="bibr" target="#b61">68]</ref> redirect devices to a sandbox rather than connecting them directly to the host. The sandbox can be a separate device or a virtual machine; while in the sandbox, the user (or an anomaly detection algorithm) can monitor the behavior of the device. If the device is deemed safe, it is then connected to the host machine. A challenge with these works is that it is hard for users to determine whether a device is "safe"; further, malicious devices could detect that they are running in a sandbox and change their behavior accordingly (VW has taught us a lesson here <ref type="bibr">[1]</ref>). Unlike RBFuse, these works reconnect the device into the USB subsystem.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Design</head><p>We approach the problem of safely supporting flash drives from a pragmatic perspective: since fixing all bugs in the USB stack is difficult and formal verification requires a clear and narrow interface with easy to specify semantics (which is not the case in USB since its specification contains a lot of ambiguity <ref type="bibr" target="#b24">[31]</ref>), we focus on avoiding USB at the host altogether. In the following sections, we describe (1) our high level architecture; (2) our concrete threat model; (3) how to remap the USB's host controller away from the kernel and onto a VM; (4) how to export flash drives from this VM to the host via a mountable virtual file system (VFS); (5) how to notify the host that a new flash drive has been plugged in; (6) an optional hardware adapter that encrypts file contents and metadata; and (7) how to make this architecture efficient.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">RBFuse's architecture</head><p>RBFuse's architecture, depicted in <ref type="figure" target="#fig_0">Figure 1</ref>, is inspired by Rushby's separation kernels <ref type="bibr" target="#b52">[59,</ref><ref type="bibr" target="#b53">60]</ref>, Lampson's idea of freedom and accountability (Red/Green) <ref type="bibr" target="#b45">[52]</ref>, and the recent instantiation of these notions in Cinch's Red and Blue machines <ref type="bibr" target="#b24">[31]</ref>. At a high level, the system is divided into two components: a "Red" machine that is untrusted (free to do what it wants), and a "Blue" machine that constitutes the trusted computing base (accountable). In RBFuse, the Red machine is a VM that runs one or more VFS servers and a RBFuse remaps the host controller to a deprivileged process, which exports the device to the host via a networked file system. This interface is the only communication between the device and the host. An optional adapter can be added to further provide authentication and file-level encryption.</p><p>USB stack (HCI, USB core, and mass storage drivers); the Blue machine consists of the host's kernel, other processes, and one or more VFS client instances. Following Rushby's methodology, the interactions between these two machines should be done through a narrow and simple interface that, in an ideal world, stands a chance of being formally specified.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Threat model</head><p>RBFuse's goal is to prevent the following types of attacks.</p><p>Attack on the host's USB stack. RBFuse should eliminate attacks on the host's USB stack and prevent DMA attacks on the host. Note that RBFuse does not prevent a malicious USB device from attacking the VM's USB stack. As a result, we assume that the attacker can corrupt the VM at any point, and can use it to issue malformed requests to the host via any available communication channels. We assume that virtualization software is not vulnerable to VM escapes <ref type="bibr" target="#b43">[50]</ref>, and that the machine's IOMMU prevents unauthorized memory accesses.</p><p>Attack on the VFS client. RBFuse should prevent attacks on the VFS client stack that runs inside the host's kernel. Since the VFS server runs on the untrusted VM, the adversary is free to issue malformed responses to exploit vulnerabilities (e.g., buffer and integer overflows) in the VFS client implementation. Note that attacks caused by the content of an otherwise correctly behaving flash drive (e.g., malware) are out of scope.</p><p>Limitations. RBFuse cannot prevent a malicious USB device from harming other USB devices connected to the same host controller. For example, a malicious USB can compromise the VM and then use it to misconfigure, snoop on, or impersonate other connected USB devices (our adapter in Section 3.6 prevents snooping and spoofing). This limitation is shared by other systems with similar architectures <ref type="bibr" target="#b11">[16,</ref><ref type="bibr" target="#b24">31]</ref>. However, most desktops and newer laptops include multiple USB host controllers. It is therefore possible to plug "trusted" USB devices to one host controller, and dedicate another to RBFuse. Note that RBFuse (and the VM) need only be active when the user wishes to plug in an untrusted USB flash drive.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">Remapping USB devices</head><p>RBFuse leverages the machine's IOMMU (e.g., Intel VT-d) to remap the host controller to the address space of the Red machine (Step ➀ in <ref type="figure" target="#fig_0">Figure 1</ref>). This operation prevents the host controller (which has DMA capabilities) from writing anywhere else in memory. It also binds the host controller to the HCI driver running on the Red machine; this machine is now in charge of managing the host controller and any connected device. In our implementation we use a VM running Linux as the Red machine since it already has the necessary USB stack and can run our VFS servers.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.4">Interactions between VFS server and client</head><p>In RBFuse, all file system operations such like open, read, write on the USB directory are captured by the running VFS client (step ➁ in <ref type="figure" target="#fig_0">Figure 1</ref>). The VFS client converts these operations into RPCs to the VFS server and supplies the required parameters (step ➂). The VFS server parses the request and executes it on the USB device (step ➃). After the execution, the VFS server sends back the response to the VFS client, specifying whether the operation succeeded, any error number, and other messages like attributes (for getattr requests) and file contents (for reads). RBFuse also has an optional step ➄ in which an adapter ( §3.6) provides encryption and authentication capabilities.</p><p>Since the entire USB stack is isolated in the Red machine, the only communication between the host and the USB device is via RPCs. However, if this RPC interface is not designed carefully, a compromised Red machine could exploit memory vulnerabilities on the VFS client implementation. To ensure that the RPC layer is free of memory bugs, we leverage a recent framework <ref type="bibr" target="#b51">[58]</ref> to automatically generate formally verified code for serializing and parsing all VFS RPCs. While this is a far cry from formally verifying all of RBFuse (as we explain in Section 6), it is a promising start.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.5">Bootstrapping device connections</head><p>A key aspect of our design is figuring out when to spawn VFS clients and servers. One possibility is to spawn as many clientserver pairs as there are USB ports in the machine. However, USB hubs can dynamically change the port count. To address this, we rely on a monitoring program (in addition to VFS) that runs on both the Red and Blue machines. On the Red machine, the monitoring program detects connect/disconnect events and responds as follows: on a connect event, it spawns a VFS server on an unused port, and sends the port number to the Blue machine (it shuts down the server on a disconnect event). On the Blue machine, the monitoring program receives a port number, spawns a VFS client that connects to it.</p><p>We note that if the Red machine is compromised, this additional channel allows an attacker to spawn an indefinite number of VFS clients at the Blue machine. We prevent this with a limit on the number of allowed concurrent flash drives.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.6">Data encryption</head><p>An optional adapter can be used for data encryption and authentication, thereby preventing a compromised Red machine (or a malicious USB hub) from stealing or modifying file content or metadata. When using the adapter, instead of running the VFS server on the Red machine, we run it on the adapter itself; the Red machine merely forwards requests back and forth. This is possible because, as demonstrated by Cinch <ref type="bibr" target="#b24">[31]</ref>, the adapter can pretend to be a USB network card to the Red machine and can send Ethernet frames directly.</p><p>The adapter performs the following operations: (1) it encrypts file content and metadata with an authenticated encryption scheme to ensure confidentiality and integrity; and (2) it changes the key every time the device is plugged in to ensure forward secrecy (i.e., if a key is compromised it cannot be used to recover the content of data exchanged prior to the compromise). For this to work, we assume that the adapter knows the host's public verification key and the host knows the adapter's (there are many ways to accomplish this, including using QR codes). This assumption is crucial, as otherwise a compromised Red machine can act as a man-in-the-middle.</p><p>Our protocol is based on mutual authentication TLS (mTLS); in standard TLS, the application (e.g., the browser) authenticates the Web server, but not the other way around since the Web server does not care who is connecting to it. Mutual authentication prevents a compromised Red machine from pretending to be the flash drive to the host, or pretending to be the host to the adapter.</p><p>Protocol. When a flash drive is plugged in and the monitor spawns a new VFS client ( §3.5), the VFS client sends a new Diffie-Hellman <ref type="bibr" target="#b33">[40]</ref> key share and a random string, both signed with the host's private signing key, to the VFS server (running in the adapter). The adapter verifies the signature using the host's public verification key and responds with its own key share and random string, signed with the adapter's private signing key. Finally, the host verifies the adapter's message. Both the host and the adapter can derive a shared symmetric key by first deriving a shared secret from their key shares (standard Diffie-Hellman), and then deriving the symmetric secret key using a standard key derivation function <ref type="bibr" target="#b44">[51]</ref> with the shared secret and both of the random strings. This essentially mirrors the TLS 1.3 handshake <ref type="bibr" target="#b19">[26]</ref>.</p><p>Once the adapter and the host agree on the same symmetric key sk, they can encrypt all operations with an authenticated encryption scheme, ensuring that the Red machine learns only traffic patterns (file sizes, access frequency, etc.). While this leakage could be prevented by adapting existing techniques <ref type="bibr" target="#b23">[30,</ref><ref type="bibr" target="#b29">36]</ref>, it is likely not warranted in this case.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Reducing costs</head><p>As one would expect, a straightforward implementation of a VFS that proxies all operations through the Red machine on their way to the flash drive brings high overheads. This is specially concerning since every file system operation, including traditionally light-weight ones such as mknod and close, now take a long time to be processed. Even worse, when we build the VFS client on top of Fuse (as opposed to running it as a native kernel module), we encounter a few implementation issues. First, Fuse makes an excessive number of calls to functions like getattr to read file and directory metadata. As an example, when reading 1,000 different files from a USB flash drive, Fuse issues roughly 3,000 getattr calls. Second, the maximum size of read and write payloads in Fuse is 128 KB, causing operations with data larger than 128 KB to be split into multiple read/write RPCs in our VFS. This introduces significant latency, since RPCs are synchronous.</p><p>The above suggests that making RBFuse practical requires drastically reducing the number of unnecessary RPCs. A similar observation has guided decades of optimization in networked file systems (NFS), though our setting is different and allows certain actions that would not be appropriate in traditional NFS deployments. We nevertheless adapt many of these techniques, including caching metadata <ref type="bibr">[20,</ref><ref type="bibr" target="#b30">37,</ref><ref type="bibr" target="#b38">45,</ref><ref type="bibr" target="#b46">53,</ref><ref type="bibr" target="#b65">72,</ref><ref type="bibr" target="#b66">73]</ref>, batching operations <ref type="bibr" target="#b28">[35,</ref><ref type="bibr" target="#b57">64]</ref>, and prefetching files <ref type="bibr" target="#b37">[44,</ref><ref type="bibr" target="#b67">74]</ref>.</p><p>We note that we can address the data size issue in Fuse by recompiling the Fuse kernel module with a higher FUSE_MAX_-PAGES_PER_REQ value, but this is not ideal for several reasons. First, requiring users to recompile Fuse, which often comes statically linked with their OS, is burdensome. Second, other applications or components in the system may be using Fuse, and changing this value could have unintended consequences. Last, our optimizations provide benefits beyond increasing this global value and do not require recompilation.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">Caching metadata</head><p>In our setting, while many applications can concurrently access the USB's file system via RBFuse, there is only one VFS client per VFS server. This is a key difference from NFS deployments that must support multiple clients. This gives rise to a simple proposition: file and directory metadata will not change once read, unless the VFS client itself performs an operation that changes this metadata. Consequently, RBFuse's VFS client caches metadata when files are first opened, and keeps this cache up to date (i.e., RBFuse treats this as a writetrough cache). This significantly cuts down on the number of RPCs that need to be issued by RBFuse's VFS client.</p><p>Additionally, since the number of RPCs (and their synchronous nature) is the key contributor to latency overhead in our system, RBFuse goes one step further: during initialization (when the device is first plugged in), RBFuse fetches the metadata of all files and directories, and caches this information (we set a timeout to account for cases where the user plugs a device with millions of files). This yields significant speedups in the common case. For example, if an application asks for a non-existent file, RBFuse can consult its local cache and respond to the getattr request without issuing any RPCs.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Prefetching</head><p>RBFuse also exploits the spatial locality of files, taking into account that a common workload in flash drives is to copy an entire directory to or from the drive, or to copy one big file. When an application reads a file, RBFuse reads other small files in the same directory (up to a configurable total size limit), and sends them back to the VFS client to be cached locally. When the application reads a large file, since Fuse issues requests at the granularity of 128 KB chunks, RBFuse's VFS client prefetches subsequent chunks. In this way, if the application requests the next chunk, the VFS client can immediately respond from its local cache, avoiding RPCs.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.3">Batching operations</head><p>In our initial implementation, each file system operation was translated to an RPC. To reduce the number of RPCs, RBFuse batches many operations together. For mknod, open, write, and close operations, RBFuse does not immediately issue the corresponding RPCs to the VFS server. Instead, RBFuse stores these operations for each file in a pending request queue (writes get their own pending request queue). When a pending queue exceeds a threshold, the VFS client tags the corresponding requests as a compound request and issues them to the VFS server in a single RPC.</p><p>Batching operations has significant benefits when copying files from the host to the device. For large files, batching operations allows RBFuse to combine many writes together to mask the limit imposed by Fuse. For small files, the improvements are even more significant. Typically, writing a small file requires only one write request if the content is smaller than 128 KB. However, Fuse first calls getattr (to see if the file exists), mknod, getattr again (to see if the file was created), open, write, and close sequentially. Due to our caching optimization ( §4.1), getattr is done locally. And with batching, the other four operations are combined into one.</p><p>In order to support batching, RBFuse must speculatively respond to Fuse with the outcome of an operation so that Fuse may issue the next operation. For write and mknod, RBFuse keeps track of the space remaining in the flash drive; if there is enough space to perform the operation, RBFuse optimistically returns "success" or the number of bytes written. When fsync and umount are issued, RBFuse flushes all requests from its pending queues. This kind of lightweight speculation is similar in flavor to the I/O buffering and disk write caching mechanisms that OSes often do. An obvious drawback is that if the drive is unplugged before fsync and umount are called, or the queues reach the threshold, data may be lost.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Preliminary evaluation</head><p>We now discuss preliminary results of evaluating the following prototype implementation.</p><p>Implementation. We build RBFuse's VFS client using Fuse 2.9.4 <ref type="bibr" target="#b22">[29]</ref>. Fuse mounts the USB directory on the host, and all file system operations on the USB directory are forwarded to the VFS server via RPCs. To instantiate the Red machine we run Ubuntu 16.04 (Linux 4.15.0-45) on QEMU, and the Blue machine is also Ubuntu 16.04 with KVM. The adapter for authentication and data encryption is built on a BeagleBone Black <ref type="bibr" target="#b4">[6]</ref>, which is 32-bit single-board computer with 1 GHz ARM Cortex-A8 processor and 512 MB RAM. It runs Debian 9.1 (Linux 4.4.88-ti-r125) and performs all cryptographic operations using the OpenSSL library <ref type="bibr" target="#b9">[14]</ref>. We evaluate RBFuse using a Kingston Digital DataTraveler SE9 Flash Drive with the FAT32 file system.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1">Experiments and results</head><p>In this evaluation, we are interested in answering one simple question: what is the overhead introduced by RBFuse for common operations such as reading or writing a file to the USB flash drive over a baseline that connects the flash drive directly to the machine without our framework. To put the performance results in context, we note that a straightforward implementation of RBFuse without any optimizations resulted in up to 310× higher response time for reading or writing a large number (1,000) of small files.</p><p>We explore two common use cases: reading or writing a single large file, and copying many small files (from device to host or vice versa). Considering that in RBFuse flash drives are (optionally) attached to our adapter ( §3.6), we run all tests on the host alone (this is the baseline), the adapter alone (since it runs Debian, it can be thought of as another machine), RBFuse without the adapter, and RBFuse with the adapter. We use filebench <ref type="bibr" target="#b20">[27,</ref><ref type="bibr" target="#b60">67]</ref> for all of our experiments to drive the copying of files back and forth, and measure the mean read/write completion time over 10 runs. The only caveat is that filebench does not work on the adapter (when tested in a standalone way) when the file is large due to limited memory. In this case, we run cp and measure its completion time.</p><p>One large file. We depict the results of reading and writing a single large file (500 MB) in <ref type="figure" target="#fig_1">Figure 2</ref>. The key take away is that with our optimizations, writing a file under RBFuse takes 2% longer than the baseline without the adapter. With the adapter, RBFuse takes 3× longer to complete the same task. The majority of the overhead stems from the double copying of data (from device to adapter and from adapter to host). The results for reading a large file are much worse: RBFuse incurs a 70% increase in completion time without the adapter, and 10× with the adapter. While these results are slightly discouraging, we discuss several potential enhancements in Section 6.</p><p>Many small files. We perform a similar experiment, but this time target the copying of 1,000 small files (16 KB each).  The results are given in <ref type="figure" target="#fig_2">Figure 3</ref>. Unlike the previous experiment where the results were consistent with our expectations, this experiment yields some unusual results. We find that RBFuse with the adapter actually outperforms the baseline when copying files from the host to the device ("Writes") by 35%. Note that this is not the result of caching or prefetching, since caching metadata plays a small role here, and prefetching helps reads but not writes. Furthermore, batching does not fully explain this difference since we would otherwise had seen similar improvement when copying large files (previous experiment). Most importantly, RBFuse with the adapter also outperforms RBFuse without the adapter! Instead, we find that this performance difference is due to the OS on which the VFS server runs. When RBFuse uses the adapter, the VFS server runs on the adapter instead of on the Red machine (the Red machine simply acts as a network proxy). Prior discussions <ref type="bibr" target="#b18">[25]</ref> have noted that Ubuntu has high overhead when copying files to flash drives compared to Windows; we are somewhat surprised to see such a big difference between different Linux kernel versions. In our case, the adapter runs 32-bit Linux 4.4.88; on its own, it can copy 1,000 files in 2.73 seconds (6× faster than the 64-bit Linux 4.15.0-45 running on the Red machine). We have also reproduced this result with RBFuse without the adapter by running different 64-bit Linux kernel versions on the Red machine; performance varies substantially between versions.</p><p>The results for reading many small files are less interesting and mirror those of the large file experiment: RBFuse without the adapter has 4× higher request completion time than the baseline; with the adapter the difference is 8.8×.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Discussion</head><p>This paper introduces RBFuse a framework for interacting with USB flash drives while bypassing the USB stack. The driving philosophy of this work is that getting the virtual file system interface "right" is much easier than getting the USB stack right. We think this view is justified since there are numerous frameworks for fuzzing different aspects of file systems <ref type="bibr" target="#b41">[48,</ref><ref type="bibr" target="#b50">57,</ref><ref type="bibr" target="#b64">71]</ref> and for reasoning formally about their operations <ref type="bibr" target="#b26">[33,</ref><ref type="bibr" target="#b27">34,</ref><ref type="bibr" target="#b39">46]</ref>. Indeed, we take a tiny step in the latter direction by using formally verified serializers and parsers for our RPC layer ( §3.4). Meanwhile, we are not aware of any efforts of equivalent scope in the context of the USB stack (although driver synthesis <ref type="bibr" target="#b54">[61]</ref> is a promising direction).</p><p>Crash consistency. USB flash drives are notorious for being unplugged at arbitrary times. It is therefore important that RBFuse achieves crash consistency. We have adapted CrashMonkey <ref type="bibr" target="#b50">[57]</ref> to support the vfat file system and used it to fuzz RBFuse and our flash drives. A preliminary finding is that the flash drive's vfat file system loses empty files after a crash; we have found no issues with RBFuse or its optimizations.</p><p>Possible extensions. In this work we have focused exclusively on USB flash drives. However, other storage devices such as USB SD cards and SSDs could likely be supported by this same architecture. One challenge with SuperSpeed USB SSDs is that they achieve order-of-magnitude higher throughput than traditional USB 2.0 flash drives by leveraging the host controller's ability to perform DMA. However, RBFuse limits the host controller to writing only in the Red machine's address space, and forces all data between the host and the Red machine to be exchanged via message passing. It is unclear how to retain the isolation benefits of our approach while leveraging the performance benefits of DMA-especially when the DMA device could be malicious.</p><p>A more immediate question is whether we can reduce the number of memory copies. We posit that since everything is running on the same machine (ignoring the adapter for a moment), it might be possible to maintain the isolation provided by NFS, but with zero-copy data movement between the VFS server and client.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>FIGURE 1 -</head><label>1</label><figDesc>FIGURE 1-RBFuse's high-level architecture. RBFuse remaps the host controller to a deprivileged process, which exports the device to the host via a networked file system. This interface is the only communication between the device and the host. An optional adapter can be added to further provide authentication and file-level encryption.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>FIGURE 2 -</head><label>2</label><figDesc>FIGURE 2-Mean response time for writing/reading one large file (500MB) to/from a USB flash drive with different mechanisms. Error bars depict one standard deviation.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>FIGURE 3 -</head><label>3</label><figDesc>FIGURE 3-Mean response time for writing/reading 1,000 small files (16KB) to/from a USB flash drive with different mechanisms. Error bars depict one standard deviation.</figDesc></figure>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgments</head><p>We thank Riad Wahby and Michael Walfish for discussions that inspired this work. We also thank the anonymous HotStorage reviewers, and in particular our shepherd Malte Schwarzkopf, for their thorough comments and helpful advice that significantly improved our content and presentation.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Anywhereusb</surname></persName>
+		</author>
+		<ptr target="http://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2006-4459" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+				<ptr target="https://nakedsecurity.sophos.com/2014/10/06/badusb-now-with-do-it-yourself-instructions/" />
+		<title level="m">BadUSB-now with do-it-yourself instructions</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title level="m" type="main">BadUSB: Big, bad USB security problems ahead</title>
+		<ptr target="http://www.zdnet.com/article/badusb-big-bad-usb-security-problems-ahead/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+				<ptr target="http://www.pcworld.com/article/2840905/badusb-what-you-can-do-about-undetectable-malware-on-a-flash-drive.html" />
+		<title level="m">BadUSB: what you can do about undetectable malware on a flash drive</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Beaglebone</forename><surname>Black</surname></persName>
+		</author>
+		<ptr target="http://beagleboard.org/BLACK" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title level="m" type="main">Linux audio driver dereferences null pointer under invalid device</title>
+		<ptr target="http://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2016-2184" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<monogr>
+		<title level="m" type="main">Linux serial driver dereferences null pointer under device with no bulk-in or interrupt-in endpoints</title>
+		<ptr target="http://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2016-2782" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<monogr>
+				<ptr target="http://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-3184" />
+		<title level="m">Linux report_fixup HID functions out-of-bounds write</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<monogr>
+		<title level="m" type="main">Only half of USB devices have an unpatchable flaw, but no one knows which half</title>
+		<ptr target="http://www.wired.com/2014/11/badusb-only-affects-half-of-usbs/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Openssl</surname></persName>
+		</author>
+		<ptr target="https://www.openssl.org" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Os X</forename><surname>Usb</surname></persName>
+		</author>
+		<ptr target="http://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2012-3723" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O</forename><forename type="middle">S</forename><surname>Qubes</surname></persName>
+		</author>
+		<ptr target="https://www.qubes-os.org" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ducky</forename><surname>Usb Rubber</surname></persName>
+		</author>
+		<ptr target="http://usbrubberducky.com" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Using and Managing USB devices</title>
+		<ptr target="https://www.qubes-os.org/doc/usb/" />
+	</analytic>
+	<monogr>
+		<title level="j">Qubes OS Project</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+				<ptr target="https://www.hak5.org/episodes/episode-709" />
+	</analytic>
+	<monogr>
+		<title level="m">Usb rubber ducky part 1</title>
+		<imprint>
+			<date type="published" when="2013" />
+			<biblScope unit="volume">709</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<monogr>
+		<title level="m" type="main">Usb rubber ducky payloads</title>
+		<ptr target="https://github.com/hak5darren/USB-Rubber-Ducky/wiki/Payloads" />
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Usbdriveby</surname></persName>
+		</author>
+		<ptr target="http://samy.pl/usbdriveby/" />
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<monogr>
+				<ptr target="https://usb.org/sites/default/files/article_files/USB_Type-C_Authentication_PR_FINAL.pdf" />
+		<title level="m">USB 3.0 promoter group defines authentication protocol for USB</title>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<monogr>
+		<title level="m" type="main">Why does my usb flash drive write performance drop by more than 50% when running ubuntu vs windows 10?</title>
+		<ptr target="https://askubuntu.com/questions/853736/why-does-my-usb-flash-drive-write-performance-drop-by-more-than-50-when-running" />
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<monogr>
+		<title level="m" type="main">The transport layer security (tls) protocol version 1</title>
+		<ptr target="https://tools.ietf.org/html/rfc8446" />
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Filebench</surname></persName>
+		</author>
+		<ptr target="https://github.com/filebench/filebench,2020" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<monogr>
+		<title level="m" type="main">Kanguru flashtrust USB 3.0 flash drive with secure firmware | kanguru solutions</title>
+		<ptr target="https://www.kanguru.com/storage-accessories/kanguru-flashtrust-secure-firmware.shtml" />
+		<imprint>
+			<date type="published" when="2020" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Libfuse</surname></persName>
+		</author>
+		<ptr target="https://github.com/libfuse/libfuse,2020" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Unobservable communication over fully untrusted infrastructure</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Angel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Setty</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</title>
+		<meeting>the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</meeting>
+		<imprint>
+			<date type="published" when="2016-11" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">Defending against malicious peripherals with cinch</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Angel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">S</forename><surname>Wahby</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Howald</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">B</forename><surname>Leners</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Spilo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Sun</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">J</forename><surname>Blumberg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Walfish</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Security Symposium</title>
+		<meeting>the USENIX Security Symposium</meeting>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">Plug and Root,&quot; the USB key to the kingdom</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Barrall</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Dewey</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Black Hat USA Conference</title>
+		<meeting>the Black Hat USA Conference</meeting>
+		<imprint>
+			<date type="published" when="2005-07" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">Verifying a high-performance crash-safe file system using a tree specification</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Chajed</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Konradi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Undefinedleri</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Chlipala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">F</forename><surname>Kaashoek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Zeldovich</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM Symposium on Operating Systems Principles (SOSP</title>
+		<meeting>the ACM Symposium on Operating Systems Principles (SOSP</meeting>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<analytic>
+		<title level="a" type="main">Using crash Hoare logic for certifying the FSCQ file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Ziegler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Chajed</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Chlipala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">F</forename><surname>Kaashoek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Zeldovich</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM Symposium on Operating Systems Principles (SOSP)</title>
+		<meeting>the ACM Symposium on Operating Systems Principles (SOSP)</meeting>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Vnfs: Maximizing nfs performance with compounds and vectorized i/o</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">B</forename><surname>Bangera</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Hildebrand</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Jalia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Kuenning</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Nelson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Zadok</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Trans. Storage</title>
+		<imprint>
+			<date type="published" when="2017-09" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<analytic>
+		<title level="a" type="main">Metal: A metadata-hiding file-sharing system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">A</forename><surname>Popa</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Network and Distributed System Security Symposium (NDSS)</title>
+		<meeting>the Network and Distributed System Security Symposium (NDSS)</meeting>
+		<imprint>
+			<date type="published" when="2020" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">A quantitative analysis of cache policies for scalable network file systems. SIGMETRICS Perform</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">D</forename><surname>Dahlin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">J</forename><surname>Mather</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">Y</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">E</forename><surname>Anderson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">A</forename><surname>Patterson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Eval. Rev</title>
+		<imprint>
+			<date type="published" when="1994-05" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<monogr>
+		<title level="m" type="main">Lessons learned from 50 bugs: Common USB driver vulnerabilities</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Davis</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2013-01" />
+		</imprint>
+		<respStmt>
+			<orgName>NCC Group</orgName>
+		</respStmt>
+	</monogr>
+<note type="report_type">Technical report</note>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">USB attacks need physical access right? Not any more</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Davis</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Black Hat Asia Conference</title>
+		<meeting>the Black Hat Asia Conference</meeting>
+		<imprint>
+			<date type="published" when="2014-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<analytic>
+		<title level="a" type="main">New directions in cryptography</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Diffie</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">E</forename><surname>Hellman</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Trans. Inf. Theory</title>
+		<imprint>
+			<date type="published" when="1976" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<analytic>
+		<title level="a" type="main">USB attacks: Fun with Plug and 0wn</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">Dominguez</forename><surname>Vega</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the DEF CON Hacking Conference</title>
+		<meeting>the DEF CON Hacking Conference</meeting>
+		<imprint>
+			<date type="published" when="2009-08" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Falliere</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">O</forename><surname>Murchu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Chien</surname></persName>
+		</author>
+		<ptr target="http://www.symantec.com/content/en/us/enterprise/media/security_response/whitepapers/w32_stuxnet_dossier.pdf" />
+		<imprint/>
+	</monogr>
+<note type="report_type">W32.Stuxnet dossier</note>
+</biblStruct>
+
+<biblStruct xml:id="b36">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Goodspeed</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Facedancer21</surname></persName>
+		</author>
+		<ptr target="http://goodfet.sourceforge.net/hardware/facedancer21/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b37">
+	<analytic>
+		<title level="a" type="main">Informed mobile prefetching</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">D</forename><surname>Higgins</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Flinn</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">J</forename><surname>Giuli</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Noble</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Peplin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Watson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the International Conference on Mobile Systems, Applications, and Services (MobiSys)</title>
+		<meeting>the International Conference on Mobile Systems, Applications, and Services (MobiSys)</meeting>
+		<imprint>
+			<date type="published" when="2012-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b38">
+	<monogr>
+		<title level="m" type="main">Fs-cache: A network filesystem caching facility</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Howells</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2006" />
+			<biblScope unit="volume">01</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b39">
+	<analytic>
+		<title level="a" type="main">Proving confidentiality in a file system using DISKSEC</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Ileri</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Chajed</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Chlipala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Kaashoek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Zeldovich</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</title>
+		<meeting>the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</meeting>
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b40">
+	<analytic>
+		<title level="a" type="main">Usbwall: A novel security mechanism to protect against maliciously reprogrammed usb devices</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Kang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Saiedian</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Information Security Journal: A Global Perspective</title>
+		<imprint>
+			<biblScope unit="volume">26</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b41">
+	<analytic>
+		<title level="a" type="main">Finding semantic bugs in file systems with an extensible fuzzing framework</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Kashyap</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Yoon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Kim</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM Symposium on Operating Systems Principles (SOSP)</title>
+		<meeting>the ACM Symposium on Operating Systems Principles (SOSP)</meeting>
+		<imprint>
+			<date type="published" when="2019" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b42">
+	<monogr>
+		<title level="m" type="main">USB guard: USB device authorization policies</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Kopeek</surname></persName>
+		</author>
+		<ptr target="https://usbguard.github.io/" />
+		<imprint>
+			<date type="published" when="2020" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b43">
+	<analytic>
+		<title level="a" type="main">CLOUDBURST: A VMware guest to host escape story</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Kortchinsky</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Black Hat USA Conference</title>
+		<meeting>the Black Hat USA Conference</meeting>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b44">
+	<analytic>
+		<title level="a" type="main">Cryptographic extraction and key derivation: The HKDF scheme</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Krawczyk</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the International Cryptology Conference (CRYPTO)</title>
+		<meeting>the International Cryptology Conference (CRYPTO)</meeting>
+		<imprint>
+			<date type="published" when="2010-08" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b45">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Lampson</surname></persName>
+		</author>
+		<ptr target="http://research.microsoft.com/en-us/um/people/blampson/slides/accountabilityandfreedomabstract.htm" />
+		<imprint>
+			<date type="published" when="2005" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b46">
+	<analytic>
+		<title level="a" type="main">Design of cache backend using remote memory for network file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Lim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Ahn</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Cha</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Choi</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2017 International Conference on High Performance Computing Simulation (HPCS)</title>
+		<imprint>
+			<date type="published" when="2017-07" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b47">
+	<analytic>
+		<title level="a" type="main">SandUSB: An installation-free sandbox for USB peripherals</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">L</forename><surname>Loe</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Hsiao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">H</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Cheng</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the IEEE World Forum on Internet of Things (WF-IoT)</title>
+		<meeting>the IEEE World Forum on Internet of Things (WF-IoT)</meeting>
+		<imprint>
+			<date type="published" when="2016-12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b48">
+	<analytic>
+		<title level="a" type="main">I/O attacks in Intel PC-based architectures and countermeasures</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Sang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Nicomette</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Deswarte</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the SysSec Workshop</title>
+		<meeting>the SysSec Workshop</meeting>
+		<imprint>
+			<date type="published" when="2011-07" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b49">
+	<monogr>
+		<title level="m" type="main">How bad is BadUSB? security experts say there is no quick fix</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Mamiit</surname></persName>
+		</author>
+		<ptr target="http://www.techtimes.com/articles/17078/20141004/how-bad-is-badusb-security-experts-say-there-is-no-quick-fix.htm" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b50">
+	<analytic>
+		<title level="a" type="main">Finding crash-consistency bugs with bounded black-box crash testing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Mohan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Martinez</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Ponnapalli</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Raju</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Chidambaram</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</title>
+		<meeting>the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</meeting>
+		<imprint>
+			<date type="published" when="2018-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b51">
+	<analytic>
+		<title level="a" type="main">Everparse: Verified secure zero-copy parsers for authenticated message formats</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Ramananandro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Delignat-Lavaud</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Fournet</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Swamy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Chajed</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Kobeissi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Protzenko</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Security Symposium</title>
+		<meeting>the USENIX Security Symposium</meeting>
+		<imprint>
+			<date type="published" when="2019-08" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b52">
+	<analytic>
+		<title level="a" type="main">The design and verification of secure systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Rushby</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM Symposium on Operating Systems Principles (SOSP)</title>
+		<meeting>the ACM Symposium on Operating Systems Principles (SOSP)</meeting>
+		<imprint>
+			<date type="published" when="1981-12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b53">
+	<analytic>
+		<title level="a" type="main">Proof of separability-a verification technique for a class of security kernels</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">M</forename><surname>Rushby</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the International Symposium on Programming</title>
+		<meeting>the International Symposium on Programming</meeting>
+		<imprint>
+			<date type="published" when="1982-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b54">
+	<analytic>
+		<title level="a" type="main">User-guided device driver synthesis</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Ryzhyk</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Walker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Keys</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Legg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Raghunath</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Stumm</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Vij</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</title>
+		<meeting>the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</meeting>
+		<imprint>
+			<date type="published" when="2014-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b55">
+	<analytic>
+		<title level="a" type="main">Don&apos;t trust your USB! How to find bugs in USB device drivers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Schumilo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Spenneberg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Schwartke</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Black Hat Europe Conference</title>
+		<meeting>the Black Hat Europe Conference</meeting>
+		<imprint>
+			<date type="published" when="2014-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b56">
+	<analytic>
+		<title level="a" type="main">Funderbolt: Adventures in Thunderbolt DMA attacks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Sevinsky</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Black Hat USA Conference</title>
+		<meeting>the Black Hat USA Conference</meeting>
+		<imprint>
+			<date type="published" when="2013-07" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b57">
+	<analytic>
+		<title level="a" type="main">An adaptive partitioning scheme for dram-based cache in solid state drives</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Shim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Seo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Maeng</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2010 IEEE 26th Symposium on Mass Storage Systems and Technologies (MSST)</title>
+		<imprint>
+			<date type="published" when="2010-05" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b58">
+	<analytic>
+		<title level="a" type="main">A primitive for revealing stealthy peripheral-based attacks on the computing platform&apos;s main memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Stewin</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the International Symposium on Research in Attacks, Intrusions and Defenses (RAID)</title>
+		<meeting>the International Symposium on Research in Attacks, Intrusions and Defenses (RAID)</meeting>
+		<imprint>
+			<date type="published" when="2013-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b59">
+	<analytic>
+		<title level="a" type="main">Deviceveil: Robust authentication for individual usb devices using physical unclonable functions</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Suzaki</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Hori</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Kobara</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Mannan</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the IEEE/IFIP International Conference on Dependable Systems and Networks (DSN)</title>
+		<meeting>the IEEE/IFIP International Conference on Dependable Systems and Networks (DSN)</meeting>
+		<imprint>
+			<date type="published" when="2019-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b60">
+	<monogr>
+		<title level="m" type="main">Filebench: A flexible framework for file system benchmarking. ;login: The USENIX Magazine</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Tarasov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Zadok</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Shepler</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2016-03" />
+			<biblScope unit="volume">41</biblScope>
+			<biblScope unit="page" from="6" to="12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b61">
+	<analytic>
+		<title level="a" type="main">Defending against malicious USB firmware with GoodUSB</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Tian</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Bates</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Butler</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Annual Computer Security Applications Conference (ACSAC)</title>
+		<meeting>the Annual Computer Security Applications Conference (ACSAC)</meeting>
+		<imprint>
+			<date type="published" when="2015-12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b62">
+	<analytic>
+		<title level="a" type="main">Provusb: Block-level provenance-based data protection for usb storage devices</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">J</forename><surname>Tian</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Bates</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><forename type="middle">R</forename><surname>Butler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Rangaswami</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM Conference on Computer and Communications Security (CCS)</title>
+		<meeting>the ACM Conference on Computer and Communications Security (CCS)</meeting>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b63">
+	<analytic>
+		<title level="a" type="main">Making USB great again with USBFILTER</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Tian</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Scaife</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Bates</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><forename type="middle">R B</forename><surname>Butler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Traynor</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Security Symposium</title>
+		<meeting>the USENIX Security Symposium</meeting>
+		<imprint>
+			<date type="published" when="2016-08" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b64">
+	<analytic>
+		<title level="a" type="main">Fuzzing file systems via two-dimensional input space exploration</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Moon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Kashyap</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Tseng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Kim</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the IEEE Symposium on Security and Privacy (S&amp;P)</title>
+		<meeting>the IEEE Symposium on Security and Privacy (S&amp;P)</meeting>
+		<imprint>
+			<date type="published" when="2019" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b65">
+	<analytic>
+		<title level="a" type="main">Orion: A distributed file system for non-volatile main memory and rdma-capable networks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Izraelevitz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Swanson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Conference on File and Storage Technologies (FAST)</title>
+		<meeting>the USENIX Conference on File and Storage Technologies (FAST)</meeting>
+		<imprint>
+			<date type="published" when="2019-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b66">
+	<analytic>
+		<title level="a" type="main">A distributed cache for hadoop distributed file system in real-time cloud services</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Wu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Hu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Wu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2012 ACM/IEEE 13th International Conference on Grid Computing</title>
+		<imprint>
+			<date type="published" when="2012-09" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b67">
+	<analytic>
+		<title level="a" type="main">A client-side directory prefetching mechanism for glusterfs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zijian</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fang</forename><surname>Dong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Junxue</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pengcheng</forename><surname>Zhou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhuqing</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Junzhou</forename><surname>Luo</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2016 IEEE International Conference on Systems, Man, and Cybernetics (SMC)</title>
+		<imprint>
+			<date type="published" when="2016-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

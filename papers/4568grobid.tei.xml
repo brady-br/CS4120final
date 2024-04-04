@@ -1,0 +1,621 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T04:25+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Cumulus: Filesystem Backup to the Cloud</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Vrable</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Department of Computer Science and Engineering</orgName>
+								<orgName type="institution">University of California</orgName>
+								<address>
+									<settlement>San Diego</settlement>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stefan</forename><surname>Savage</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Department of Computer Science and Engineering</orgName>
+								<orgName type="institution">University of California</orgName>
+								<address>
+									<settlement>San Diego</settlement>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Geoffrey</forename><forename type="middle">M</forename><surname>Voelker</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Department of Computer Science and Engineering</orgName>
+								<orgName type="institution">University of California</orgName>
+								<address>
+									<settlement>San Diego</settlement>
+								</address>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Cumulus: Filesystem Backup to the Cloud</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>In this paper we describe Cumulus, a system for efficiently implementing filesystem backups over the Inter-net. Cumulus is specifically designed under a thin cloud assumption-that the remote datacenter storing the backups does not provide any special backup services, but only provides a least-common-denominator storage interface (i.e., get and put of complete files). Cumulus aggregates data from small files for remote storage, and uses LFS-inspired segment cleaning to maintain storage efficiency. Cumulus also efficiently represents incremen-tal changes, including edits to large files. While Cumulus can use virtually any storage service, we show that its efficiency is comparable to integrated approaches.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>It has become increasingly popular to talk of "cloud computing" as the next infrastructure for hosting data and deploying software and services. Not surprisingly, there are a wide range of different architectures that fall under the umbrella of this vague-sounding term, ranging from highly integrated and focused (e.g., Software As A Service offerings such as Salesforce.com) to decomposed and abstract (e.g., utility computing such as Amazon's EC2/S3). Towards the former end of the spectrum, complex logic is bundled together with abstract resources at a datacenter to provide a highly specific servicepotentially offering greater performance and efficiency through integration, but also reducing flexibility and increasing the cost to switch providers. At the other end of the spectrum, datacenter-based infrastructure providers offer minimal interfaces to very abstract resources (e.g., "store file"), making portability and provider switching easy, but potentially incurring additional overheads from the lack of server-side application integration.</p><p>In this paper, we explore this thin-cloud vs. thickcloud trade-off in the context of a very simple application: filesystem backup. Backup is a particularly attractive application for outsourcing to the cloud because it is relatively simple, the growth of disk capacity relative to tape capacity has created an efficiency and cost inflection point, and the cloud offers easy off-site storage, always a key concern for backup. For end users there are few backup solutions that are both trivial and reliable (especially against disasters such as fire or flood), and ubiquitous broadband now provides sufficient bandwidth resources to offload the application. For small to mid-sized businesses, backup is rarely part of critical business processes and yet is sufficiently complex to "get right" that it can consume significant IT resources. Finally, larger enterprises benefit from backing up to the cloud to provide a business continuity hedge against site disasters.</p><p>However, to price cloud-based backup services attractively requires minimizing the capital costs of data center storage and the operational bandwidth costs of shipping the data there and back. To this end, most existing cloud-based backup services (e.g., Mozy, Carbonite, Symantec's Protection Network) implement integrated solutions that include backup-specific software hosted on both the client and at the data center (usually using servers owned by the provider). In principle, this approach allows greater storage and bandwidth efficiency (server-side compression, cleaning, etc.) but also reduces portability-locking customers into a particular provider.</p><p>In this paper we explore the other end of the design space-the thin cloud. We describe a cloud-based backup system, called Cumulus, designed around a minimal interface (put, get, delete, list) that is trivially portable to virtually any on-line storage service. Thus, we assume that any application logic is implemented solely by the client. In designing and evaluating this system we make several contributions. First, we show through simulation that, through careful design, it is possible to build efficient network backup on top of a generic storage service-competitive with integrated backup solutions, in spite of having no specific backup support in the underlying storage service. Second, we build a working prototype of this system using Amazon's Simple Storage Service (S3) and demonstrate its effectiveness on real end-user traces. Finally, we describe how such systems can be tuned for cost instead of for bandwidth or storage, both using the Amazon pricing model as well as for a range of storage to network cost ratios.</p><p>In the remainder of this paper, we first describe prior work in backup and network-based backup, followed by a design overview of Cumulus and an in-depth description of its implementation. We then provide both simulation and experimental results of Cumulus performance, overhead, and cost in trace-driven scenarios. We conclude with a discussion of the implications of our work age system. Venti <ref type="bibr" target="#b14">[17]</ref> uses hashes of block contents to address data blocks, rather than a block number on disk. Identical data between snapshots (or even within a snapshot) is automatically coalesced into a single copy on disk-giving the space benefits of incremental backups automatically. Data Domain <ref type="bibr" target="#b22">[26]</ref> offers a similar but more recent and efficient product; in addition to performance improvements, it uses content-defined chunk boundaries so de-duplication can be performed even if data is offset by less than the block size.</p><p>A limitation of these tools is that backup data must be stored unencrypted at the server, so the server must be trusted. Box Backup <ref type="bibr" target="#b17">[21]</ref> modifies the protocol and storage representation to allow the client to encrypt data before sending, while still supporting rsync-style efficient network transfers.</p><p>Most of the previous tools use a specialized protocol to communicate between the client and the storage server. An alternate approach is to target a more generic interface, such as a network file system or an FTP-like protocol. Amazon S3 <ref type="bibr" target="#b2">[3]</ref> offers an HTTP-like interface to storage. The operations supported are similar enough between these different protocols-get/put/delete on files and list on directories-that a client can easily support multiple protocols. Cumulus tries to be network-friendly like rsync-based tools, while using only a generic storage interface.</p><p>Jungle Disk <ref type="bibr">[13]</ref> can perform backups to Amazon S3. However, the design is quite different from that of Cumulus. Jungle Disk is first a network filesystem with Amazon S3 as the backing store. Jungle Disk can also be used for backups, keeping copies of old versions of files instead of deleting them. But since it is optimized for random access it is less efficient than Cumulus for pure backup-features like aggregation in Cumulus can improve compression, but are at odds with efficient random access.</p><p>Duplicity <ref type="bibr" target="#b7">[8]</ref> aggregates files together before storage for better compression and to reduce per-file storage costs at the server. Incremental backups use spaceefficient rsync-style deltas to represent changes. However, because each incremental backup depends on the previous, space cannot be reclaimed from old snapshots without another full backup, with its associated large upload cost. Cumulus was inspired by duplicity, but avoids this problem of long dependency chains of snapshots.</p><p>Brackup <ref type="bibr" target="#b8">[9]</ref> has a design very similar to that of Cumulus. Both systems separate file data from metadata: each snapshot contains a separate copy of file metadata as of that snapshot, but file data is shared where possible. The split data/metadata design allows old snapshots to be easily deleted. Cumulus differs from Brackup primarily in that it places a greater emphasis on aggregating small files together for storage purposes, and adds a seg- <ref type="table">Multiple  snapshots  Simple server  Incremental   forever  Sub-file delta  storage  Encryption</ref> rsync </p><formula xml:id="formula_0">N/A rsnapshot   rdiff-backup    Box Backup     Jungle Disk     duplicity     Brackup     Cumulus     </formula><p>Multiple snapshots: Can store multiple versions of files at different points in time; Simple server: Can back up almost anywhere; does not require special software at the server; Incremental forever: Only initial backup must be a full backup; Sub-file delta storage: Efficiently represents small differences between files on storage; only relevant if storing multiple snapshots; Encryption: Data may be encrypted for privacy before sending to storage server. ment cleaning mechanism to manage the inefficiency introduced. Additionally, Cumulus tries to efficiently represent small changes to all types of large files and can share metadata where unchanged; both changes reduce the cost of incremental backups.</p><p>Peer-to-peer systems may be used for storing backups. Pastiche <ref type="bibr" target="#b4">[5]</ref> is one such system, and focuses on the problem of identifying and sharing data between different users. Pastiche uses content-based addressing for deduplication. But if sharing is not needed, Brackup and Cumulus could use peer-to-peer systems as well, simply treating it as another storage interface offering get and put operations.</p><p>While other interfaces to storage may be availableAntiquity <ref type="bibr" target="#b20">[24]</ref> for example provides a log append operation-a get/put interface likely still works best since it is simpler and a single put is cheaper than multiple appends to write the same data. <ref type="table" target="#tab_0">Table 1</ref> summarizes differences between some of the tools discussed above for backup to networked storage. In relation to existing systems, Cumulus is most similar to duplicity (without the need to occasionally re-upload a new full backup), and Brackup (with an improved scheme for incremental backups including rsync-style deltas, and improved reclamation of storage space).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Design</head><p>In this section we present the design of our approach for making backups to a thin cloud remote storage service.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Storage Server Interface</head><p>We assume only a very narrow interface between a client generating a backup and a server responsible for storing the backup. The interface consists of four operations:</p><p>Get: Given a pathname, retrieve the contents of a file from the server.</p><p>Put: Store a complete file on the server with the given pathname.</p><p>List: Get the names of files stored on the server.</p><p>Delete: Remove the given file from the server, reclaiming its space.</p><p>Note that all of these operations operate on entire files; we do not depend upon the ability to read or write arbitrary byte ranges within a file. Cumulus neither requires nor uses support for reading and setting file attributes such as permissions and timestamps. The interface is simple enough that it can be implemented on top of any number of protocols: FTP, SFTP, WebDAV, S3, or nearly any network file system. Since the only way to modify a file in this narrow interface is to upload it again in full, we adopt a writeonce storage model, in which a file is never modified after it is first stored, except to delete it to recover space. The write-once model provides convenient failure guarantees: since files are never modified in place, a failed backup run cannot corrupt old snapshots. At worst, it will leave a partially-written snapshot which can garbage-collected. Because Cumulus does not modify files in place, we can keep snapshots at multiple points in time simply by not deleting the files that make up old snapshots.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Storage Segments</head><p>When storing a snapshot, Cumulus will often group data from many smaller files together into larger units called segments. Segments become the unit of storage on the server, with each segment stored as a single file. Filesystems typically contain many small files (both our traces described later and others, such as <ref type="bibr" target="#b0">[1]</ref>, support this observation). Aggregation of data produces larger files for storage at the server, which can be beneficial to:</p><p>Avoid inefficiencies associated with many small files: Storage servers may dislike storing many small files for various reasons-higher metadata costs, wasted space from rounding up to block boundaries, and more seeks when reading. This preference may be expressed in the </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Snapshot Descriptors</head><p>Figure 1: Simplified schematic of the basic format for storing snapshots on a storage server. Two snapshots are shown, taken on successive days. Each snapshot contains two files. file1 changes between the two snapshots, but the data for file2 is shared between the snapshots. For simplicity in this figure, segments are given letters as names instead of the 128-bit UUIDs used in practice.</p><p>cost model of the provider. Amazon S3, for example, has both a per-request and a per-byte cost when storing a file that encourages using files greater than 100 KB in size.</p><p>Avoid costs in network protocols: Small files result in relatively larger protocol overhead, and may be slower over higher-latency connections. Pipelining (if supported) or parallel connections may help, but larger segments make these less necessary. We study one instance of this effect in more detail in Section 5.4.5.</p><p>Take advantage of inter-file redundancy with segment compression: Compression can be more effective when small files are grouped together. We examine this effect in Section 5.4.2.</p><p>Provide additional privacy when encryption is used: Aggregation helps hide the size as well as contents of individual files.</p><p>Finally, as discussed in Sections 3.4 and 4.3, changes to small parts of larger files can be efficiently represented by effectively breaking those files into smaller pieces during backup. For the reasons listed above, re-aggregating this data becomes even more important when sub-file incremental backups are supported. <ref type="figure">Figure 1</ref> illustrates the basic format for backup snapshots. Cumulus snapshots logically consist of two parts: a metadata log which lists all the files backed up, and the file data itself. Both metadata and data are broken apart into blocks, or objects, and these objects are then packed together into segments, compressed as a unit and optionally encrypted, and stored on the server. Each segment has a unique name-we use a randomly generated 128-bit UUID so that segment names can be assigned without central coordination. Objects are numbered sequentially within a segment.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">Snapshot Format</head><p>Segments are internally structured as a TAR file, with each file in the archive corresponding to an object in the segment. Compression and encryption are provided by filtering the raw segment data through gzip, bzip2, gpg, or other similar external tools.</p><p>A snapshot can be decoded by traversing the tree (or, in the case of sharing, DAG) of objects. The root object in the tree is the start of the metadata log. The metadata log need not be stored as a flat object; it may contain pointers to objects containing other pieces of the metadata log. For example, if many files have not changed, then a single pointer to a portion of the metadata for an old snapshot may be written. The metadata objects eventually contain entries for individual files, with pointers to the file data as the leaves of the tree.</p><p>The metadata log entry for each individual file specifies properties such as modification time, ownership, and file permissions, and can be extended to include additional information if needed. It includes a cryptographic hash so that file integrity can be verified after a restore. Finally, it includes a list of pointers to objects containing the file data. Metadata is stored in a text, not binary, format to make it more transparent. Compression applied to the segments containing the metadata, however, makes the format space-efficient.</p><p>The one piece of data in each snapshot not stored in a segment is a snapshot descriptor, which includes a timestamp and a pointer to the root object.</p><p>Starting with the root object stored in the snapshot descriptor and traversing all pointers found, a list of all segments required by the snapshot can be constructed. Since segments may be shared between multiple snapshots, a garbage collection process deletes unreferenced segments when snapshots are removed. To simplify garbage-collection, each snapshot descriptor includes (though it is redundant) a summary of segments on which it depends.</p><p>Pointers within the metadata log include cryptographic hashes so that the integrity of all data can be validated starting from the snapshot descriptor, which can be digitally signed. Additionally, Cumulus writes a summary file with checksums for all segments so that it can quickly check snapshots for errors without a full restore.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.4">Sub-File Incrementals</head><p>If only a small portion of a large file changes between snapshots, only the changed portion of the file should be stored. The design of the Cumulus format supports this. The contents of each file is specified as a list of objects, so new snapshots can continue to point to old objects when data is unchanged. Additionally, pointers to objects can include byte ranges to allow portions of old objects to be reused even if some data has changed. We discuss how our implementation identifies data that is unchanged in Section 4.3.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.5">Segment Cleaning</head><p>When old snapshots are no longer needed, space is reclaimed by deleting the root snapshot descriptors for those snapshots, then garbage collecting unreachable segments. It may be, however, that some segments only contain a small fraction of useful data-the remainder of these segments, data from deleted snapshots, is now wasted space. This problem is similar to the problem of reclaiming space in the Log-Structured File System (LFS) <ref type="bibr" target="#b15">[18]</ref>.</p><p>There are two approaches that can be taken to segment cleaning given that multiple backup snapshots are involved. The first, in-place cleaning, is most like the cleaning in LFS. It identifies segments with wasted space and rewrites the segments to keep just the needed data.</p><p>This mode of operation has several disadvantages, however. It violates the write-once storage model, in that the data on which a snapshot depends is changed after the snapshot is written. It requires detailed bookkeeping to determine precisely which data must be retained. Finally, it requires downloading and decrypting old segments-normal backups only require an encryption key, but cleaning needs the decryption key as well.</p><p>The alternative to in-place cleaning is to never modify segments in old snapshots. Instead, Cumulus avoids referring to data in inefficient old segments when creating a new snapshot, and writes new copies of that data if needed. This approach avoids the disadvantages listed earlier, but is less space-efficient. Dead space is not reclaimed until snapshots depending on the old segments are deleted. Additionally, until then data is stored redundantly since old and new snapshots refer to different copies of the same data.</p><p>We analyzed both approaches to cleaning in simulation. We found that the cost benefits of in-place cleaning were not large enough to outweigh its disadvantages, and so our Cumulus prototype does not clean in place.</p><p>The simplest policy for selecting segments to clean is to set a minimum segment utilization threshold, α, that triggers cleaning of a segment. We define utilization as the fraction of bytes within the segment which are referenced by a current snapshot. For example, α = 0.8 will ensure that at least 80% of the bytes in segments are useful. Setting α = 0 disables segment cleaning altogether. Cleaning thresholds closer to 1 will decrease storage overhead for a single snapshot, but this more aggressive cleaning requires transferring more data.</p><p>More complex policies are possible as well, such as a cost-benefit evaluation that favors repacking long-lived segments. Cleaning may be informed by snapshot retention policies: cleaning is more beneficial immediately before creating a long-term snapshot, and cleaning can also consider which other snapshots currently reference a segment. Finally, segment cleaning may reorganize data, such as by age, when segments are repacked.</p><p>Though not currently implemented, Cumulus could use heuristics to group data by expected lifetime when a backup is first written in an attempt to optimize segment data for later cleaning (as in systems such as WOLF <ref type="bibr" target="#b19">[23]</ref>).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.6">Restoring from Backup</head><p>Restoring data from previous backups may take several forms. A complete restore extracts all files as they were on a given date. A partial restore recovers one or a small number of files, as in recovering from an accidental deletion. As an enhancement to a partial restore, all available versions of a file or set of files can be listed.</p><p>Cumulus is primarily optimized for the first form of restore-recovering all files, such as in the event of the total loss of the original data. In this case, the restore process will look up the root snapshot descriptor at the date to restore, then download all segments referenced by that snapshot. Since segment cleaning seeks to avoid leaving much wasted space in the segments, the total amount of data downloaded should be only slightly larger than the size of the data to restore.</p><p>For partial restores, Cumulus downloads those segments that contain metadata for the snapshot to locate the files requested, then locates each of the segments containing file data. This approach might require fetching many segments-for example, if restoring a directory whose files were added incrementally over many daysbut will usually be quick.</p><p>Cumulus is not optimized for tracking the history of individual files. The only way to determine the list of changes to a file or set of files is to download and process the metadata logs for all snapshots. However, a client could keep a database of this information to allow more efficient queries.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.7">Limitations</head><p>Cumulus is not designed to replace all existing backup systems. As a result, there are situations in which other systems will do a better job.</p><p>The approach embodied by Cumulus is for the client making a backup to do most of the work, and leave the backup itself almost entirely opaque to the server. This approach makes Cumulus portable to nearly any type of storage server. However, a specialized backup server could provide features such as automatically repacking backup data when deleting old snapshots, eliminating the overhead of client-side segment cleaning.</p><p>Cumulus, as designed, does not offer coordination between multiple backup clients, and so does not offer features such as de-duplication between backups from different clients. While Cumulus could use convergent encryption <ref type="bibr" target="#b5">[6]</ref> to allow de-duplication even when data is first encrypted at the client, several issues prevent us from doing so. Convergent encryption would not work well with the aggregation in Cumulus. Additionally, server-side de-duplication is vulnerable to dictionary attacks to determine what data clients are storing, and storage accounting for billing purposes is more difficult.</p><p>Finally, the design of Cumulus is predicated on the fact that backing up each file on the client to a separate file on the server may introduce too much overhead, and so Cumulus groups data together into segments. If it is known that the storage server and network protocol can efficiently deal with small files, however, then grouping data into segments adds unnecessary complexity and overhead. Other disk-to-disk backup programs may be a better match in this case.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Implementation</head><p>We discuss details of the implementation of the Cumulus prototype in this section. Our implementation is relatively compact: only slightly over 3200 lines of C++ source code (as measured by SLOCCount <ref type="bibr" target="#b21">[25]</ref>) implementing the core backup functionality, along with another roughly 1000 lines of Python for tasks such as restores, segment cleaning, and statistics gathering.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">Local Client State</head><p>Each client stores on its local disk information about recent backups, primarily so that it can detect which files have changed and properly reuse data from previous snapshots. This information could be kept on the storage server. However, storing it locally reduces network bandwidth and improves access times. We do not need this information to recover data from a backup so its loss is not catastrophic, but this local state does enable various performance optimizations during backups.</p><p>The client's local state is divided into two parts: a local copy of the metadata log and an SQLite database <ref type="bibr" target="#b16">[20]</ref> containing all other needed information.</p><p>Cumulus uses the local copy of the previous metadata log to quickly detect and skip over unchanged files based on modification time. Cumulus also uses it to deltaencode the metadata log for new snapshots.</p><p>An SQLite database keeps a record of recent snapshots and all segments and objects stored in them. The table of objects includes an index by content hash to support data de-duplication. Enabling de-duplication leaves Cumulus vulnerable to corruption from a hash collision <ref type="bibr" target="#b10">[11,</ref><ref type="bibr" target="#b11">12]</ref>, but, as with other systems, we judge the risk to be small. The hash algorithm (currently SHA-1) can be upgraded as weaknesses are found. In the event that client data must be recovered from backup, the content indices can be rebuilt from segment data as it is downloaded during the restore.</p><p>Note that the Cumulus backup format does not specify the format of this information stored locally. It is entirely possible to create a new and very different implementation which nonetheless produces backups conforming to the structure described in Section 3.3 and readable by our Cumulus prototype.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Segment Cleaning</head><p>The Cumulus backup program, written in C++, does not directly implement segment cleaning heuristics. Instead, a separate Cumulus utility program, implemented in Python, controls cleaning.</p><p>When writing a snapshot, Cumulus records in the local database a summary of all segments used by that snapshot and the fraction of the data in each segment that is actually referenced. The Cumulus utility program uses these summaries to identify segments which are poorlyutilized and marks the selected segments as "expired" in the local database. It also considers which snapshots refer to the segments, and how long those snapshots are likely to be kept, during cleaning. On subsequent backups, the Cumulus backup program re-uploads any data that is needed from expired segments. Since the database contains information about the age of all data blocks, segment data can be grouped by age when it is cleaned.</p><p>If local client state is lost, this age information will be lost. When the local client state is rebuilt all data will appear to have the same age, so cleaning may not be optimal, but can still be done.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.3">Sub-File Incrementals</head><p>As discussed in Section 3.4, the Cumulus backup format supports efficiently encoding differences between file versions. Our implementation detects changes by dividing files into small chunks in a content-sensitive manner (using Rabin fingerprints) and identifying chunks that are common, as in the Low-Bandwidth File System <ref type="bibr" target="#b12">[15]</ref>.</p><p>When a file is first backed up, Cumulus divides it into blocks of about a megabyte in size which are stored individually in objects. In contrast, the chunks used for subfile incrementals are quite a bit smaller: the target size is 4 KB (though variable, with a 2 KB minimum and 64 KB maximum). Before storing each megabyte block, Cumulus computes a set of chunk signatures: it divides the data block into non-overlapping chunks and computes a (20-byte SHA-1 signature, 2-byte length) tuple for each chunk. The list of chunk signatures for each object is stored in the local database. These signatures consume 22 bytes for every roughly 4 KB of original data, so the signatures are about 0.5% of the size of the data to back up.</p><p>Unlike LBFS, we do not create a global index of chunk hashes-to limit overhead, we do not attempt to find common data between different files. When a file changes, we limit the search for unmodified data to the chunks in the previous version of the file. Cumulus computes chunk signatures for the new file data, and matches with old chunks are written as a reference to the old data. New chunks are written out to a new object. However, Cumulus could be extended to perform global data deduplication while maintaining backup format compatibility.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.4">Segment Filtering and Storage</head><p>The core Cumulus backup implementation is only capable of writing segments as uncompressed TAR files to local disk. Additional functionality is implemented by calling out to external scripts.</p><p>When performing a backup, all segment data may be filtered through a specified command before writing it. Specifying a program such as gzip can provide compression, or gpg can provide encryption.</p><p>Similarly, network protocols are implemented by calling out to external scripts. Cumulus first writes segments to a temporary directory, then calls an upload script to transfer them in the background while the main backup process continues. Slow uploads will eventually throttle the backup process so that the required temporary storage space is bounded. Upload scripts may be quite simple; a script for uploading to Amazon S3 is merely 12 lines long in Python using the boto <ref type="bibr">[4]</ref> library.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.5">Snapshot Restores</head><p>The Cumulus utility tool implements complete restore functionality. This tool can automatically decompress and extract objects from segments, and can efficiently extract just a subset of files from a snapshot.</p><p>To reduce disk space requirements, the restore tool downloads segments as needed instead of all at once at the start, and can delete downloaded segments as it goes along. The restore tool downloads the snapshot descriptor first, followed by the metadata. The backup tool segregates data and metadata into separate segments, so this phase does not download any file data. Then, file contents are restored-based on the metadata, as each segment is downloaded data from that segment is restored. For partial restores, only the necessary segments are downloaded.</p><p>Currently, in the restore tool it is possible that a segment may be downloaded multiple times if blocks for some files are spread across many segments. However, this situation is merely an implementation issue and can be fixed by restoring data for these files non-sequentially as it is downloaded.</p><p>Finally, Cumulus includes a FUSE <ref type="bibr" target="#b9">[10]</ref> interface that allows a collection of backup snapshots to be mounted as a virtual filesystem on Linux, thereby providing random access with standard filesystem tools. This interface relies on the fact that file metadata is stored in sorted order by filename, so a binary search can quickly locate any specified file within the metadata log.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Evaluation</head><p>We use both trace-based simulation and a prototype implementation to evaluate the use of thin cloud services for remote backup. Our goal is to answer three high-level sets of questions:</p><p>• What is the penalty of using a thin cloud service with a very simple storage interface compared to a more sophisticated service?</p><p>• What are the monetary costs for using remote backup for two typical usage scenarios? How should remote backup strategies adapt to minimize monetary costs as the ratio of network and storage prices varies?</p><p>• How does our prototype implementation compare with other backup systems? What are the additional benefits (e.g., compression, sub-file incrementals) and overheads (e.g., metadata) of an implementation not captured in simulation? What is the performance of using an online service like Amazon S3 for backup?</p><p>The following evaluation sections answer these questions, beginning with a description of the trace workloads we use as inputs to the experiments.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1">Trace Workloads</head><p>We use two traces as workloads to drive our evaluations. A fileserver trace tracks all files stored on our research group fileserver, and models the use of a cloud service for remote backup in an enterprise setting. A user trace is taken from the Cumulus backups of the home directory of one of the author's personal computers, and models the use of remote backup in a home setting. The traces contain a daily record of the metadata of all files in each setting, including a hash of the file contents. The user  <ref type="table">Table 2</ref>: Key statistics of the two traces used in the evaluations. File counts and sizes are for the last day in the trace. "Entries" is files plus directories, symlinks, etc.</p><p>trace further includes complete backups of all file data, and enables evaluation of the effects of compression and sub-file incrementals. <ref type="table">Table 2</ref> summarizes the key statistics of each trace.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2">Remote Backup to a Thin Cloud</head><p>First we explore the overhead of using remote backup to a thin cloud service that has only a simple storage interface. We compare this thin service model to an "optimal" model representing more sophisticated backup systems. We use simulation for these experiments, and start by describing our simulator. We then define our optimal baseline model and evaluate the overhead of using a simple interface relative to a more sophisticated system.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2.1">Cumulus Simulator</head><p>The Cumulus simulator models the process of backing up collections of files to a remote backup service. It uses traces of daily records of file metadata to perform backups by determining which files have changed, aggregating changed file data into segments for storage on a remote service, and cleaning expired data as described in Section 3. We use a simulator, rather than our prototype, because a parameter sweep of the space of cleaning parameters on datasets as large as our traces is not feasible in a reasonable amount of time.</p><p>The simulator tracks three overheads associated with performing backups. It tracks storage overhead, or the total number of bytes to store a set of snapshots computed as the sum of the size of each segment needed. Storage overhead includes both actual file data as well as wasted space within segments. It tracks network overhead, the total data that must be transferred over the network to accomplish a backup. On graphs, we show this overhead as a cumulative value: the total data transferred from the beginning of the simulation until the given day.</p><p>Since remote backup services have per-file charges, the simulator also tracks segment overhead as the number of segments created during the process of making backups.</p><p>The simulator also models two snapshot scenarios. In the single snapshot scenario, the simulator maintains only one snapshot remotely and it deletes all previous snapshots. In the multiple snapshot scenario, the simulator retains snapshots according to a pre-determined backup schedule. In our experiments, we keep the most recent seven daily snapshots, with additional weekly snapshots retained going back farther in time so that a total of 12 snapshots are kept. This schedule emulates the backup policy an enterprise might employ.</p><p>The simulator makes some simplifying assumptions that we explore later when evaluating our implementation. The simulator detects changes to files in the traces using a per-file hash. Thus, the simulator cannot detect changes to only a portion of a file, and assumes that the entire file is changed. The simulator also does not model compression or metadata. We account for subfile changes, compression, and metadata overhead when evaluating the prototype in Section 5.4.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2.2">Optimal Baseline</head><p>A simple storage interface for remote backup can incur an overhead penalty relative to more sophisticated approaches. To quantify the overhead of this approach, we use an idealized optimal backup as a basis of comparison.</p><p>For our simulations, the optimal backup is one in which no more data is stored or transferred over the network than is needed. Since simulation is done at a file granularity, the optimal backup will transfer the entire contents of a file if any part changes. Optimal backup will, however, perform data de-duplication at a file level, storing only one copy if multiple files have the same hash value. In the optimal backup, no space is lost to fragmentation when deleting old snapshots. Cumulus could achieve this optimal performance in this simulation by storing each file in a separate segment-that is, to never bundle files together into larger segments. As discussed in Section 3.2 and as our simulation results show, though, there are good reasons to use segments with sizes larger than the average file.</p><p>As an example of these costs and how we measure them, <ref type="figure">Figure 2(a)</ref> shows the optimal storage and upload overheads for daily backups of the 223 days of the user trace. In this simulation, only a single snapshot is retained each day. Storage grows slowly in proportion to the amount of data in a snapshot, and the cumulative network transfer grows linearly over time. sults clearly demonstrate the need for cleaning when using a simple storage interface for backup. When segments are not cleaned (only deleting segments that by chance happen to be entirely no longer needed), wasted storage space grows quickly with time-by the end of the simulation at day 223, the size of a snapshot is nearly double the required size. In contrast, when segments are marked for cleaning at the 60% utilization threshold, storage overhead quickly stabilizes below 10%. The overhead in extra network transfers is similarly modest.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2.3">Cleaning Policies</head><p>Cleaning is clearly necessary for efficient backup, but it is also parameterized by two metrics: the size of the segments used for aggregation, transfer, and storage (Section 3.2), and the threshold at which segments will be cleaned (Section 3.5). In our next set of experiments, we explore the parameter space to quantify the impact of these two metrics on backup performance. <ref type="figure" target="#fig_1">Figures 3 and 4</ref> show the simulated overheads of backup with Cumulus using the fileserver and user traces, respectively. The figures show both relative overheads to optimal backup (left y-axis) as well as the absolute overheads (right y-axis). We use the backup policy of multiple daily and weekly snapshots as described in Section 5.2.1. The figures show cleaning overhead for a range of cleaning thresholds and segment sizes. Each figure has three graphs corresponding to the three overheads of remote backup to an online service. Average daily storage shows the average storage requirements per day over the duration of the simulation; this value is the total storage needed for tracking multiple backup snapshots, not just the size of a single snapshot. Similarly, average daily upload is the average of the data transferred each day of the simulation, excluding the first; we exclude the first day since any backup approach must transfer the entire initial filesystem. Finally, average segments per day tracks the number of new segments uploaded each day to account for per-file upload and storage costs.</p><p>Storage and upload overheads improve with decreasing segment size, but at small segment sizes (&lt; 1 MB) backups require very large numbers of segments and limit the benefits of aggregating file data (Section 3.2). As expected, increasing the cleaning threshold increases the network upload overhead. Storage overhead with multiple snapshots, however, has an optimum cleaning threshold value. Increasing the threshold initially decreases storage overhead, but high thresholds increase it again; we explore this behavior further below.</p><p>Both the fileserver and user workloads exhibit similar sensitivities to cleaning thresholds and segment sizes. The user workload has higher overheads relative to optimal due to smaller average files and more churn in the file data, but overall the overhead penalties remain low.</p><p>Figures 3(a) and 4(a) show that there is a cleaning threshold that minimizes storage overheads. Increasing the cleaning threshold intuitively reduces storage overhead relative to optimal since the more aggressive cleaning at higher thresholds will delete wasted space in segments and thereby reduce storage requirements. <ref type="figure" target="#fig_6">Figure 5</ref> explains why storage overhead increases again at higher cleaning thresholds. It shows three curves, the 16 MB segment size curve from <ref type="figure" target="#fig_1">Figure 3</ref>(a) and two curves that decompose the storage overhead into individual components (Section 3.5). One is overhead due to duplicate copies of data stored over time in the cleaning process; cleaning at lower thresholds reduces this component. The other is due to wasted space in segments which have not been cleaned; cleaning at higher thresholds reduces this component. A cleaning threshold near the middle, however, minimizes the sum of both of these overheads.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.3">Paying for Remote Backup</head><p>The evaluation in the previous section measured the overhead of Cumulus in terms of storage, network, and segment resource usage. Remote backup as a service, however, comes at a price. In this section, we calculate        monetary costs for our two workload models, evaluate cleaning threshold and segment size in terms of costs instead of resource usage, and explore how cleaning should adapt to minimize costs as the ratio of network and storage prices varies. While similar, there are differences between this problem and the typical evaluation of cleaning policies for a typical log-structured file system: instead of a fixed disk size and a goal to minimize I/O, we have no fixed limits but want to minimize monetary cost.</p><p>We use the prices for Amazon S3 as an initial point in the pricing space. As of January 2009, these prices are (in US dollars):  <ref type="table">Table 3</ref>: Costs for backups in US dollars, if performed optimally, for the fileserver and user traces using current prices for Amazon S3.</p><p>Storage: $0.15 per GB · month Upload: $0.10 per GB Segment: $0.01 per 1000 files uploaded With this pricing model, the segment cost for uploading an empty file is equivalent to the upload cost for uploading approximately 100 KB of data, i.e., when uploading 100 KB files, half of the cost is for the bandwidth and half for the upload request itself. As the file size increases, the per-request component becomes an increasingly smaller part of the total cost.</p><p>Neglecting for the moment the segment upload costs, <ref type="table">Table 3</ref> shows the monthly storage and upload costs for each of the two traces. Storage costs dominate ongoing costs. They account for about 95% and 78% of the monthly costs for the fileserver and user traces, respectively. Thus, changes to the storage efficiency will have a more substantial effect on total cost than changes in bandwidth efficiency. We also note that the absolute costs for the home backup scenario are very low, indicating that Amazon's pricing model is potentially quite reasonable for consumers: even for home users with an order of magnitude more data to backup than our user workload, yearly ongoing costs are roughly US$50. Whereas <ref type="figure" target="#fig_1">Figure 3</ref> explored the parameter space of cleaning thresholds and segment sizes in terms of resource overhead, <ref type="figure" target="#fig_7">Figure 6</ref> shows results in terms of overall cost for backing up the fileserver trace. These results show that using a simple storage interface for remote backup also incurs very low additional monetary cost than optimal backup, from 0.5-2% for the fileserver trace depending on the parameters, and as low as about 5% in the user trace.</p><p>When evaluated in terms of monetary costs, though, the choices of cleaning parameters change compared to the parameters in terms of resource usage. The cleaning threshold providing the minimum cost is smaller and less aggressive (threshold = 0.4) than in terms of resource usage (threshold = 0.6). However, since overhead is not overly sensitive to the cleaning threshold, Cumulus still provides good performance even if the cleaning threshold is not tuned optimally. Furthermore, in contrast to resource usage, decreasing segment size does not always decrease overall cost. At some point-in this case between 1-4 MB-decreasing segment size increases overall cost due to the per-file pricing. We do not evaluate segment sizes less than 1 MB for the fileserver trace since, by 1 MB, smaller segments are already a loss. The results for the user workload, although not shown, are qualitatively similar, with a segment size of 0.5 MB to 1 MB best.</p><p>The pricing model of Amazon S3 is only one point in the pricing space. As a final cost experiment, we ex- plore how cleaning should adapt to changes in the relative price of storage versus network. <ref type="figure" target="#fig_8">Figure 7</ref> shows the optimal cleaning threshold for the fileserver and user workloads as a function of the ratio of storage to network cost. The storage to network ratio measures the relative cost of storing a gigabyte of data for a month and uploading a gigabyte of data. Amazon S3 has a ratio of 1.5. In general, as the cost of storage increases, it becomes advantageous to clean more aggressively (the optimal cleaning threshold increases). The ideal threshold stabilizes around 0.5-0.6 when storage is at least ten times more expensive than network upload, since cleaning too aggressively will tend to increase storage costs.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.4">Prototype Evaluation</head><p>In our final set of experiments, we compare the overhead of the Cumulus prototype implementation with other backup systems. We also evaluate the sensitivity of compression on segment size, the overhead of metadata in the implementation, the performance of sub-file incrementals and restores, and the time it takes to upload data to a remote service like Amazon S3.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.4.1">System Comparisons</head><p>First, we provide some results from running our Cumulus prototype and compare with two existing backup tools that also target Amazon S3: Jungle Disk and Brackup. We use the complete file contents included in the user trace to accurately measure the behavior of our full Cumulus prototype and other real backup systems. For each day in the first three months of the user trace, we extract a full snapshot of all files, then back up these files with each of the backup tools. We compute the average cost, per month, broken down into storage, upload bandwidth, and operation count (files created or modified  <ref type="table">Table 4</ref>: Cost comparison for backups based on replaying actual file changes in the user trace over a three month period. Costs for Cumulus are lower than those shown in <ref type="table">Table 3</ref> since that evaluation ignored the possible benefits of compression and sub-file incrementals, which are captured here. Values are listed on a per-month basis.</p><p>(this setting is recommended). Since this setting still results in many small files (many of the small files are still larger than 1 KB), a "high aggregation" run sets merge_files_under=16kB to capture most of the small files and further reduce the operation count. Brackup includes the digest database in the files backed up, which serves a role similar to the database Cumulus stores locally. For fairness in the comparison, we subtract the size of the digest database from the sizes reported for Brackup. Both Brackup and Cumulus use gpg to encrypt data in the test; gpg compresses the data with gzip prior to encryption. Encryption is enabled in Jungle Disk, but no compression is available.</p><p>In principle, we would expect backups with Jungle Disk to be near optimal in terms of storage and upload since no space is wasted due to aggregation. But, as a tradeoff, Jungle Disk will have a much higher operation count. In practice, Jungle Disk will also suffer from a lack of de-duplication, sub-file incrementals, and compression. <ref type="table">Table 4</ref> compares the estimated backup costs for Cumulus with Jungle Disk and Brackup. Several key points stand out in the comparison:</p><p>• Storage and upload requirements for Jungle Disk are larger, owing primarily to the lack of compression.</p><p>• Except in the high aggregation case, both Brackup and Jungle Disk incur a large cost due to the many small files stored to S3. The per-file cost for uploads is larger than the per-byte cost, and for Jungle Disk significantly so.</p><p>• Brackup stores a complete copy of all file metadata with each snapshot, which in total accounts for 150-200 MB/month of the upload cost. The cost in Cumulus is lower since Cumulus can re-use metadata.</p><p>Comparing storage requirements of Cumulus with the average size of a full backup with the venerable tar utility, both are within 1%: storage overhead in Cumulus is roughly balanced out by gains achieved from deduplication. Using duplicity as a proxy for near-optimal incremental backups, in a test with two months from the user trace Cumulus uploads only about 8% more data than is needed. Without sub-file incrementals in Cumulus, the figure is closer to 33%.</p><p>The Cumulus prototype thus shows that a service with a simple storage interface can achieve low overhead, and that Cumulus can achieve a lower total cost than other existing backup tools targeting S3.</p><p>While perhaps none of the systems are yet optimized for speed, initial full backups in Brackup and Jungle Disk were both notably slow. In the tests, the initial Jungle Disk backup took over six hours, Brackup (to local disk, not S3) took slightly over two hours, and Cumulus (to S3) approximately 15 minutes. For comparison, simply archiving all files with tar to local disk took approximately 10 minutes.</p><p>For incremental backups, elapsed times for the tools were much more comparable. Jungle Disk averaged 248 seconds per run archiving to S3. Brackup averaged 115 seconds per run and Cumulus 167 seconds, but in these tests each were storing snapshots to local disk rather than to Amazon S3.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.4.2">Segment Compression</head><p>Next we isolate the effectiveness of compression at reducing the size of the data to back up, particularly as a function of segment size and related settings. We used as a sample the full data contained in the first day of the user trace: the uncompressed size is 1916 MB, the compressed tar size is 1152 MB (factor of 1.66), and files individually compressed total 1219 MB (1.57×), 5.8% larger than whole-snapshot compression.</p><p>When aggregating data together into segments, we found that larger input segment sizes yielded better compression, up to about 300 KB when using gzip and 1-2 MB for bzip2 where compression ratios leveled off.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.4.3">Metadata</head><p>The Cumulus prototype stores metadata for each file in a backup snapshot in a text format, but after compression the format is still quite efficient. In the full tests on the user trace, the metadata for a full backup takes roughly 46 bytes per item backed up. Since most items include a 20-byte hash value which is unlikely to be compressible, the non-checksum components of the metadata average under 30 bytes per file.   <ref type="table">Table 5</ref>: Comparison of Cumulus sub-file incrementals with an idealized system based on rdiff, evaluated on two sample files from the user trace.</p><p>Metadata logs can be stored incrementally: new snapshots can reference the portions of old metadata logs that are not modified. In the full user trace replay, a full metadata log was written to a snapshot weekly. On days where only differences were written out, though, the average metadata log delta was under 2% of the size of a full metadata log. Overall, across all the snapshots taken, the data written out for file metadata was approximately 5% of the total size of the file data itself.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.4.4">Sub-File Incrementals</head><p>To evaluate the support for sub-file incrementals in Cumulus, we make use of files extracted from the user trace that are frequently modified in place. We extract files from a 30-day period at the start of the trace. File A is a frequently-updated Bayesian spam filtering database, about 90% of which changes daily. File B records the state for a file-synchronization tool (unison), of which an average of 5% changes each day-however, unchanged content may still shift to different byte offsets within the file. While these samples do not capture all behavior, they do represent two distinct and notable classes of subfile updates.</p><p>To provide a point of comparison, we use rdiff <ref type="bibr">[14]</ref> to generate an rsync-style delta between consecutive file versions. <ref type="table">Table 5</ref> summarizes the results.</p><p>The size overhead measures the storage cost of subfile incrementals in Cumulus. To reconstruct the latest version of a file, Cumulus might need to read data from many past versions, though cleaning will try to keep this bounded. This overhead compares the average size of a daily snapshot ("Cumulus size") against the average compressed size of the file backed up. As file churn increases overhead tends to increase.</p><p>The delta overhead compares the data that must be uploaded daily by Cumulus ("Cumulus delta") against the average size of patches generated by rdiff ("rdiff delta"). When only a small portion of the file changes each day (File B), rdiff is more efficient than Cumulus in representing the changes. However, sub-file incrementals are still a large win for Cumulus, as the size of the incrementals is still much smaller than a full copy of the file. When large parts of the file change daily (File A), the efficiency of Cumulus approaches that of rdiff.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.4.5">Upload Time</head><p>As a final experiment, we consider the time to upload to a remote storage service. Our Cumulus prototype is capable of uploading snapshot data directly to Amazon S3. To simplify matters, we evaluate upload time in isolation, rather than as part of a full backup, to provide a more controlled environment. Cumulus uses the boto <ref type="bibr">[4]</ref> Python library to interface with S3.</p><p>As our measurements are from one experiment from a single computer (on a university campus network), they should not be taken as a good measure of the overall performance of S3. For large files-a megabyte or largeruploads proceed at a maximum rate of about 800 KB/s. According to our results there is an overhead equivalent to a latency of roughly 100 ms per upload, and for small files this dominates the actual time for data transfer. It is thus advantageous to upload data in larger segments, as Cumulus does. More recent tests indicate that speeds may have improved.</p><p>The S3 protocol, based on HTTP, does not support pipelining multiple upload requests. Multiple uploads in parallel could reduce overhead somewhat. Still, it remains beneficial to perform uploads in larger units.</p><p>For perspective, assuming the maximum transfer rates above, ongoing backups for the fileserver and user workloads will take on average 3.75 hours and under a minute, respectively. Overheads from cleaning will increase these times, but since network overheads from cleaning are generally small, these upload times will not change by much. For these two workloads, backup times are very reasonable for daily snapshots.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.4.6">Restore Time</head><p>To completely restore all data from one of the user snapshots takes approximately 11 minutes, comparable to but slighly faster than the time required for an initial full backup.</p><p>When restoring individual files from the user dataset, almost all time is spent extracting and parsing metadata-there is a fixed cost of approximately 24 seconds to parse the metadata to locate requested files. Extracting requested files is relatively quick, under a second for small files.</p><p>Both restore tests were done from local disk; restoring from S3 will be slower by the time needed to download the data.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Conclusions</head><p>It is fairly clear that the market for Internet-hosted backup service is growing. However, it remains unclear what form of this service will dominate. On one hand, it is in the natural interest of service providers to package backup as an integrated service since that will both create a "stickier" relationship with the customer and allow higher fees to be charged as a result. On the other hand, given our results, the customer's interest may be maximized via an open market for commodity storage services (such as S3), increasing competition due to the low barrier to switching providers, and thus driving down prices. Indeed, even today integrated backup providers charge between $5 and $10 per month per user while the S3 charges for backing up our test user using the Cumulus system was only $0. Moreover, a thin-cloud approach to backup allows one to easily hedge against provider failures by backing up to multiple providers. This strategy may be particularly critical for guarding against business risk-a lesson that has been learned the hard way by customers whose hosting companies have gone out of business. Providing the same hedge using the integrated approach would require running multiple backup systems in parallel on each desktop or server, incurring redundant overheads (e.g., scanning, compression, etc.) that will only increase as disk capacities grow.</p><p>Finally, while this paper has focused on an admittedly simple application, we believe it identifies a key research agenda influencing the future of "cloud computing": can one build a competitive product economy around a cloud of abstract commodity resources, or do underlying technical reasons ultimately favor an integrated service-oriented infrastructure?</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 2 (Figure 2 :</head><label>22</label><figDesc>Figure 2: (a) Storage and network overhead for an optimal backup of the files from the user trace. (b) Overheads with and without cleaning; segments are cleaned at 60% utilization. Only storage overheads are shown for the no-cleaning case since there is no network transfer overhead without cleaning.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: Overheads for backups in the fileserver trace.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_4"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: Overheads for backups in the user trace.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_6"><head>Figure 5 :</head><label>5</label><figDesc>Figure 5: Detailed breakdown of storage overhead when using a 16 MB segment size for the fileserver workload.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_7"><head>Figure 6 :</head><label>6</label><figDesc>Figure 6: Costs in US dollars for backups in the fileserver assuming Amazon S3 prices. Costs for the user trace differ in absolute values but are qualitatively similar.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_8"><head>Figure 7 :</head><label>7</label><figDesc>Figure 7: How the optimal threshold for cleaning changes as the relative cost of storage vs. network varies.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_9"><head>File</head><label></label><figDesc></figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_10"><head></head><label></label><figDesc>24 per month. (For example, Symantec's Protection Network charges $9.99 per month for 10GB of storage and EMC's MozyPro service costs $3.95 + $0.50/GB per month per desktop.)</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="false"><head>Table 1 :</head><label>1</label><figDesc>Comparison of features among selected tools that back up to networked storage.</figDesc><table></table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_2" validated="false"><head></head><label></label><figDesc>7th USENIX Conference on File and Storage Technologies USENIX Association</figDesc><table>Fileserver 
+User 
+Duration (days) 
+157 
+223 
+Entries 
+26673083 
+122007 
+Files 
+24344167 
+116426 
+File Sizes 
+Median 
+0.996 KB 
+4.4 KB 
+Average 
+153 KB 21.4 KB 
+Maximum 
+54.1 GB 169 MB 
+Total 
+3.47 TB 2.37 GB 
+Update Rates 
+New data/day 
+9.50 GB 10.3 MB 
+Changed data/day 
+805 MB 29.9 MB 
+Total data/day 
+10.3 GB 40.2 MB 
+
+</table></figure>
+
+			<note place="foot" n="7">th USENIX Conference on File and Storage Technologies USENIX Association</note>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Acknowledgments</head><p>The authors would like to thank Chris X. Edwards and Brian Kantor for assistance in collecting fileserver traces and other computing support. We would also like to thank our shepherd Niraj Tolia and the anonymous reviewers for their time and insightful comments regarding Cumulus and this paper. This work was supported in part by the National Science Foundation grant CNS-0433668 and the UCSD Center for Networked Systems. Vrable was further supported in part by a National Science Foundation Graduate Research Fellowship.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">A five-year study of file-system metadata</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Agrawal</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Bolosky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">J</forename><surname>Douceur</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">R</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lorch</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">R</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Trans. Storage</title>
+		<imprint>
+			<biblScope unit="volume">3</biblScope>
+			<biblScope unit="page">9</biblScope>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title level="m" type="main">The Advanced Maryland Automatic Network Disk Archiver</title>
+		<ptr target="http://www.amanda.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Web</forename><surname>Amazon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Services</surname></persName>
+		</author>
+		<ptr target="http://aws.amazon.com/s3/" />
+	</analytic>
+	<monogr>
+		<title level="j">Amazon Simple Storage Service</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+				<ptr target="http://code.google.com/p/boto/" />
+		<title level="m">Python interface to Amazon Web Services</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Making backup cheap and easy</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cox</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">P</forename><surname>Murray</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Noble</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">D</forename><surname>Pastiche</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 5th Symposium on Operating Systems Design and Implementation (OSDI</title>
+		<meeting>the 5th Symposium on Operating Systems Design and Implementation (OSDI<address><addrLine>USENIX</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2002" />
+			<biblScope unit="page" from="285" to="298" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title level="m" type="main">Reclaiming space from duplicate files in a serverless distributed file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Douceur</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">R</forename><surname>Adya</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Bolosky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">J</forename><surname>Simon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Theimer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+		<idno>MSR-TR- 2002-30</idno>
+		<imprint/>
+	</monogr>
+<note type="report_type">Technical Report</note>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Escoto</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename></persName>
+		</author>
+		<ptr target="http://www.nongnu.org/rdiff-backup/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Escoto</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Loafman</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Duplicity</surname></persName>
+		</author>
+		<ptr target="http://duplicity.nongnu.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fitzpatrick</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Brackup</surname></persName>
+		</author>
+		<ptr target="http://brad.livejournal.com/tag/brackup" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<monogr>
+				<ptr target="http://fuse.sourceforge.net/" />
+		<title level="m">FUSE: Filesystem in userspace</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">An analysis of compare-by-hash</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Henson</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of HotOS IX: The 9th Workshop on Hot Topics in Operating Systems</title>
+		<meeting>HotOS IX: The 9th Workshop on Hot Topics in Operating Systems</meeting>
+		<imprint>
+			<date type="published" when="2003" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<monogr>
+		<title level="m" type="main">The code monkey&apos;s guide to cryptographic hashes for content-based addressing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Henson</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename></persName>
+		</author>
+		<ptr target="http://www.linuxworld.com/news/2007/111207-hash.html" />
+		<imprint>
+			<date type="published" when="2007-11" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">A low-bandwidth network file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Muthitacharoen</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mazi`eresmazi` Mazi`eres</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 18th ACM Symposium on Operating Systems Principles (SOSP)</title>
+		<meeting>the 18th ACM Symposium on Operating Systems Principles (SOSP)</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2001" />
+			<biblScope unit="page" from="174" to="187" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Preston</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">C</forename><surname>Backup &amp;amp; Recovery</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>O&amp;apos;reilly</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2006" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Venti: a new approach to archival storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Quinlan</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dorward</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 1st USENIX Conference on File and Storage Technologies (FAST)</title>
+		<meeting>the 1st USENIX Conference on File and Storage Technologies (FAST)</meeting>
+		<imprint>
+			<date type="published" when="2002" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">The design and implementation of a log-structured file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rosenblum</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ousterhout</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">K</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Trans. Comput. Syst</title>
+		<imprint>
+			<biblScope unit="volume">10</biblScope>
+			<biblScope unit="page" from="26" to="52" />
+			<date type="published" when="1992" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Sqlite</surname></persName>
+		</author>
+		<ptr target="http://www.sqlite.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Summers</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wilson</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Box Backup</surname></persName>
+		</author>
+		<ptr target="http://www.boxbackup.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<monogr>
+		<title level="m" type="main">Efficient Algorithms for Sorting and Synchronization</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tridgell</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1999-02" />
+		</imprint>
+		<respStmt>
+			<orgName>Australian National University</orgName>
+		</respStmt>
+	</monogr>
+<note type="report_type">PhD thesis</note>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">WOLF-A novel reordering write buffer to boost the performance of log-structured file systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">U</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 1st USENIX Conference on File and Storage Technologies (FAST)</title>
+		<meeting>the 1st USENIX Conference on File and Storage Technologies (FAST)</meeting>
+		<imprint>
+			<date type="published" when="2002" />
+		</imprint>
+	</monogr>
+	<note>USENIX Association</note>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Antiquity: Exploiting a secure log for wide-area distributed storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Weatherspoon</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Eaton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Chun</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B.-G</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kubi-Atowicz</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">EuroSys &apos;07: Proceedings of the 2nd ACM SIGOPS/EuroSys European Conference on Computer Systems</title>
+		<meeting><address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2007" />
+			<biblScope unit="page" from="371" to="384" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wheeler</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">A</forename><surname>Sloccount</surname></persName>
+		</author>
+		<ptr target="http://www.dwheeler.com/sloccount/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Avoiding the disk bottleneck in the data domain deduplication file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhu</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Patterson</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 6th USENIX Conference on File and Storage Technologies (FAST) (2008), USENIX Association</title>
+		<meeting>the 6th USENIX Conference on File and Storage Technologies (FAST) (2008), USENIX Association</meeting>
+		<imprint>
+			<biblScope unit="page" from="269" to="282" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

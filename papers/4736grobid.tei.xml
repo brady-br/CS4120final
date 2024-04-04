@@ -1,0 +1,1396 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T04:30+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">End-to-end Data Integrity for File Systems: A ZFS Case Study</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yupu</forename><surname>Zhang</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Computer Sciences Department</orgName>
+								<orgName type="institution">University of Wisconsin-Madison</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Abhishek</forename><surname>Rajimwale</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Computer Sciences Department</orgName>
+								<orgName type="institution">University of Wisconsin-Madison</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Computer Sciences Department</orgName>
+								<orgName type="institution">University of Wisconsin-Madison</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi</forename><forename type="middle">H</forename><surname>Arpaci-Dusseau</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Computer Sciences Department</orgName>
+								<orgName type="institution">University of Wisconsin-Madison</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">End-to-end Data Integrity for File Systems: A ZFS Case Study</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>We present a study of the effects of disk and memory corruption on file system data integrity. Our analysis fo-cuses on Sun&apos;s ZFS, a modern commercial offering with numerous reliability mechanisms. Through careful and thorough fault injection, we show that ZFS is robust to a wide range of disk faults. We further demonstrate that ZFS is less resilient to memory corruption, which can lead to corrupt data being returned to applications or system crashes. Our analysis reveals the importance of considering both memory and disk in the construction of truly robust file and storage systems.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>One of the primary challenges faced by modern file systems is the preservation of data integrity despite the presence of imperfect components in the storage stack. Disk media, firmware, controllers, and the buses and networks that connect them all can corrupt data <ref type="bibr" target="#b3">[4,</ref><ref type="bibr" target="#b51">52,</ref><ref type="bibr" target="#b53">54,</ref><ref type="bibr" target="#b57">58]</ref>; higher-level storage software is thus responsible for both detecting and recovering from the broad range of corruptions that can (and do <ref type="bibr" target="#b6">[7]</ref>) occur.</p><p>File and storage systems have evolved various techniques to handle corruption. Different types of checksums can be used to detect when corruption occurs <ref type="bibr" target="#b8">[9,</ref><ref type="bibr" target="#b13">14,</ref><ref type="bibr" target="#b48">49,</ref><ref type="bibr" target="#b51">52]</ref>, and redundancy, likely in mirrored or paritybased form <ref type="bibr" target="#b42">[43]</ref>, can be applied to recover from it. While such techniques are not foolproof <ref type="bibr" target="#b31">[32]</ref>, they clearly have made file systems more robust to disk corruptions.</p><p>Unfortunately, the effects of memory corruption on data integrity have been largely ignored in file system design. Hardware-based memory corruption occurs as both transient soft errors and repeatable hard errors due to a variety of radiation mechanisms <ref type="bibr" target="#b10">[11,</ref><ref type="bibr" target="#b34">35,</ref><ref type="bibr" target="#b61">62]</ref>, and recent studies have confirmed their presence in modern systems <ref type="bibr" target="#b33">[34,</ref><ref type="bibr" target="#b40">41,</ref><ref type="bibr" target="#b45">46]</ref>. Software can also cause memory corruption; bugs can lead to "wild writes" into random memory contents <ref type="bibr" target="#b17">[18]</ref>, thus polluting memory; studies confirm the presence of software-induced memory corruptions in operating systems <ref type="bibr" target="#b0">[1,</ref><ref type="bibr" target="#b1">2,</ref><ref type="bibr" target="#b2">3,</ref><ref type="bibr" target="#b59">60]</ref>.</p><p>The problem of memory corruption is critical for file systems that cache a great deal of data in memory for performance. Almost all modern file systems use a page cache or buffer cache to store copies of on-disk data and metadata in memory. Moreover, frequently-accessed data and important metadata may be cached in memory for long periods of time, making them more susceptible to memory corruptions.</p><p>In this paper, we ask: how robust are modern file systems to disk and memory corruptions? To answer this query, we analyze a state-of-the-art file system, Sun Microsystem's ZFS, by performing fault injection tests representative of realistic disk and memory corruptions. We choose ZFS for our analysis because it is a modern and important commercial file system with numerous robustness features, including end-to-end checksums, data replication, and transactional updates; the result, according to the designers, is "provable data integrity" <ref type="bibr" target="#b13">[14]</ref>.</p><p>In our analysis, we find that ZFS is indeed robust to a wide range of disk corruptions, thus partially confirming that many of its design goals have been met. However, we also find that ZFS often fails to maintain data integrity in the face of memory corruption. In many cases, ZFS is either unable to detect the corruption, returns bad data to the user, or simply crashes. We further find that many of these cases could be avoided with simple techniques.</p><p>The contributions of this paper are:</p><p>• To our knowledge, the first study to empirically analyze the reliability of ZFS.</p><p>• To our knowledge, the first study to analyze local file system reliability techniques in the face of memory corruption.</p><p>• A novel holistic approach to analyzing both disk and memory corruptions using carefully-controlled fault-injection techniques.</p><p>• A simple framework to measure the likelihood of different memory corruption failure scenarios.</p><p>• Results that demonstrate the importance of both memory and disk in end-to-end data protection.</p><p>The rest of this paper is organized as follows. In Section 2, we motivate our work by discussing the problem of disk and memory corruption. In Section 3, we provide some background on the reliability features of ZFS. Section 4 and Section 5 present our analysis of data integrity in ZFS with disk and memory corruptions. Section 6 gives an preliminary analysis of the probabilities of different failure scenarios in ZFS due to memory errors. In Section 7, we present initial results of the data integrity analysis in ext2 with memory corruptions. Section 8 discusses related work and Section 9 concludes our work.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">Disk corruptions</head><p>We define disk corruption as a state when any data accessed from disk does not have the expected contents due to some problem in the storage stack. This is different from latent sector errors, not-ready-condition errors and recovered errors (discussed in <ref type="bibr" target="#b5">[6]</ref>) in disk drives, where there is an explicit notification from the drive about the error condition.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1.1">Why they happen</head><p>Disk corruptions happen due to many reasons originating at different layers of the storage stack. Errors in the magnetic media lead to the problem of "bit-rot" where the magnetic properties of a single bit or few bits are damaged. Spikes in power, erratic arm movements, and scratches in media can also cause corruptions in disk blocks <ref type="bibr" target="#b3">[4,</ref><ref type="bibr" target="#b46">47,</ref><ref type="bibr" target="#b53">54]</ref>. On-disk ECC catches many (but not all) of these corruptions.</p><p>Errors are also induced due to bugs in complex drive firmware (modern drives contain hundreds of thousands of lines of firmware code <ref type="bibr" target="#b43">[44]</ref>). Some reported firmware problems include a misdirected write where the firmware accidentally writes to the wrong location <ref type="bibr" target="#b57">[58]</ref> or a lost write (or phantom write) where the disk reports a write as completed when in fact it never reaches the disk <ref type="bibr" target="#b51">[52]</ref>. Bus controllers have also been found to incorrectly report disk requests as complete or to corrupt data <ref type="bibr" target="#b23">[24,</ref><ref type="bibr" target="#b56">57]</ref>.</p><p>Finally, software bugs in operating systems are also potential sources of corruption. Buggy device drivers can issue disk requests with bad parameters or data <ref type="bibr" target="#b19">[20,</ref><ref type="bibr" target="#b21">22,</ref><ref type="bibr" target="#b52">53]</ref>. Software bugs in the file system itself can cause incorrect data to be written to disk.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1.2">How frequently they happen</head><p>Disk corruptions are prevalent across a broad range of modern drives. In a recent study of 1.53 million disk drives over 41 months <ref type="bibr" target="#b6">[7]</ref>, <ref type="bibr">Bairavasundaram et al.</ref> show that more than 400,000 blocks had checksum mismatches, 8% of which were discovered during RAID reconstruction, creating the possibility of real data loss. They also found that nearline disks develop checksum mismatches an order of magnitude more often than enterprise class disk drives. In addition, there is much anecdotal evidence of corruption in storage stacks <ref type="bibr" target="#b8">[9,</ref><ref type="bibr" target="#b51">52,</ref><ref type="bibr" target="#b57">58]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1.3">How to handle them</head><p>Systems use a number of techniques to handle disk corruptions. We discuss some of the most widely used techniques along with their limitations. Checksums: Checksums are block hashes computed with a collision-resistant hash function and are used to verify data integrity. For on-disk data integrity, checksums are stored or updated on disk during write operations and read back to verify the block or sector contents during reads.</p><p>Many storage systems have used checksums for ondisk data integrity, such as Tandem NonStop <ref type="bibr" target="#b8">[9]</ref> and NetApp Data ONTAP <ref type="bibr" target="#b51">[52]</ref>. Similar checksumming techniques have also been used in file systems <ref type="bibr" target="#b13">[14,</ref><ref type="bibr" target="#b41">42]</ref>.</p><p>However, <ref type="bibr">Krioukov et al.</ref> show that checksumming, if not carefully integrated into the storage system, can fail to protect against complex failures such as lost writes and misdirected writes <ref type="bibr" target="#b31">[32]</ref>. Further, checksumming does not protect against corruptions that happen due to bugs in software, typically in large code bases <ref type="bibr" target="#b19">[20,</ref><ref type="bibr" target="#b60">61]</ref>. Redundancy: Redundancy in on-disk structures also helps to detect and, in some cases, recover from disk corruptions. For example, some B-Tree file systems such as ReiserFS <ref type="bibr" target="#b14">[15]</ref> store page-level information in each internal page in the B-Tree. Thus, a corrupt pointer that does not connect pages in adjacent levels is caught by checking this page-level information. Similarly, ext2 <ref type="bibr" target="#b15">[16]</ref> and ext3 <ref type="bibr" target="#b55">[56]</ref> use redundant copies of superblock and group descriptors to recover from corruptions.</p><p>However, it has been shown that many of these file systems still sometimes fail to detect corruptions, leading to greater problems <ref type="bibr" target="#b43">[44]</ref>. Further, Gunawi et al. show instances where ext2/ext3 file system checkers fail to use available redundant information for recovery <ref type="bibr" target="#b25">[26]</ref>. RAID storage: Another popular technique is to use a RAID storage system <ref type="bibr" target="#b42">[43]</ref> underneath the file system. However, RAID is designed to tolerate the loss of a certain number of disks or blocks (e.g., RAID-5 tolerates one, and RAID-6 two) and it may not be possible with RAID alone to accurately identify the block (in a stripe) that is corrupted. Secondly, some RAID systems have been shown to have flaws where a single block loss leads to data loss or silent corruption <ref type="bibr" target="#b31">[32]</ref>. Finally, not all systems incorporate multiple disks, which limits the applicability of RAID.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">Memory corruptions</head><p>We define memory corruption as the state when the contents accessed from the main memory have one or more bits changed from the expected value (from a previous store to the location). From the software perspective, it may not be possible to distinguish memory corruption from disk corruption on a read of a disk block.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2.1">Why they happen</head><p>Errors in the memory chip are one source of memory corruptions. Memory errors can be classified as soft errors which randomly flip bits in RAM without leaving any permanent damage, and hard errors which corrupt bits in a repeatable manner due to physical damage.</p><p>Researchers have discovered radiation mechanisms that cause errors in semiconductor devices at terrestrial altitudes. Nearly three decades ago, May and Woods found that if an alpha particle penetrates the die surface, it can cause a random, single-bit error <ref type="bibr" target="#b34">[35]</ref>. Zeigler and Lanford found that cosmic rays can also disrupt electronic circuits <ref type="bibr" target="#b61">[62]</ref>. More recent studies and measurements confirm the effect of atmospheric neutrons causing single event upsets (SEU) in memories <ref type="bibr" target="#b39">[40,</ref><ref type="bibr" target="#b40">41]</ref>.</p><p>Memory corruption can also happen due to software bugs. The use of unsafe languages like C and C++ makes software vulnerable to bugs such as dangling pointers, buffer overflows and heap corruption <ref type="bibr" target="#b11">[12]</ref>, which can result in seemingly random memory corruptions.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2.2">How frequently they happen</head><p>Early studies and measurements on memory errors provided evidence of soft errors. Data collected from a vast storehouse of data at IBM over a 15-year period <ref type="bibr" target="#b40">[41]</ref> confirmed the presence of errors in RAM and that the upset rates increase with elevation, indicating atmospheric neutrons as the likely cause.</p><p>In a recent measurement-based study of memory errors in a large fleet of commodity servers over a period of 2.5 years <ref type="bibr" target="#b45">[46]</ref>, Schroeder et al. observe DRAM error rates that are orders of magnitude higher than previously reported, with 25,000 to 70,000 FIT per Mbit (1 FIT equals 1 failure in 10 9 device hours). They also find that more than 8% of the DIMMs they examined (from multiple vendors, with varying capacities and technologies) were affected by bit errors each year. Finally, they also provide strong evidence that memory errors are dominated by hard errors, rather than soft errors.</p><p>Another study <ref type="bibr" target="#b33">[34]</ref> of production systems including 300 machines for a multi-month period found 2 cases of suspected soft errors and 9 cases of hard errors suggesting the commonness of hard memory faults.</p><p>Besides hardware errors, software bugs that lead to memory corruption are widely extant. Reports from the Linux Kernel Bugzilla Database <ref type="bibr" target="#b1">[2]</ref>, USCERT Vulnerabilities Notes Database <ref type="bibr" target="#b2">[3]</ref>, CERT/CC advisories <ref type="bibr" target="#b0">[1]</ref>, as well as other anecdotal evidence <ref type="bibr" target="#b17">[18]</ref> show cases of memory corruption happening due to software bugs.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2.3">How to handle them</head><p>Systems use both hardware and software techniques to handle memory corruptions. Below, we discuss the most relevant hardware and software techniques.</p><p>ECC: Traditionally, memory systems have employed Error Correction Codes <ref type="bibr" target="#b18">[19]</ref> to correct memory errors. Unfortunately, ECC is unable to address all soft-error problems. Studies found that the most commonly-used ECC algorithms called SEC/DED (Single Error Correct/Double Error Detect) can recover from only 94% of the errors in DRAMs <ref type="bibr" target="#b22">[23]</ref>. Further, many commodity systems simply do not use ECC protection in order to reduce cost <ref type="bibr" target="#b27">[28]</ref>.</p><p>More sophisticated techniques like Chipkill <ref type="bibr" target="#b29">[30]</ref> have been proposed to withstand multi-bit failure in DRAMs. However, such techniques are expensive and have been restricted to proprietary server systems, leaving the problem of memory corruptions open in commodity systems. Programming models and tools: Another approach to deal with memory errors is to use recoverable programming models <ref type="bibr" target="#b37">[38]</ref> at different levels (firmware, operating system, and applications). However, such techniques require support from hardware to detect memory corruptions. Further, a holistic change in software is required to provide recovery solution at various levels.</p><p>Much effort has also gone into detecting software bugs which cause memory corruptions. Tools such as metal <ref type="bibr" target="#b26">[27]</ref> and CSSV <ref type="bibr" target="#b20">[21]</ref> apply static analysis to detect memory corruptions. Others such as Purify <ref type="bibr" target="#b28">[29]</ref> and SafeMem <ref type="bibr" target="#b44">[45]</ref> use dynamic monitoring to detect memory corruptions at runtime. However, as discussed in Section 2.2.2, software-induced memory corruptions still remain a problem.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.3">Summary</head><p>In modern systems corruption occurs both within the storage system and in memory. Many commercial systems apply sophisticated techniques to detect and recover from disk-level corruptions; beyond ECC, little is done to protect against memory-level problems. Therefore, the protection of critical user data against memory corruptions is largely left to software.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">ZFS reliability features</head><p>ZFS is a state-of-the-art file system from Sun which takes a unified approach to data management. It provides data integrity, transactional consistency, scalability, and a multitude of useful features such as snapshots, copyon-write clones, and simple administration <ref type="bibr" target="#b13">[14]</ref>.</p><p>In terms of reliability, ZFS claims to provide provable data integrity by using techniques like checksums, replication, and transactional updates. Further, the use of a pooled storage in ZFS lends it additional RAID-like reliability features. In the words of the designers, ZFS is the "The Last Word in File Systems." We now describe the reliability mechanisms in ZFS. Checksums for data integrity checking: ZFS maintains data integrity by using checksums for on-disk blocks. The checksums are kept separate from the corresponding blocks by storing them in the parent blocks. ZFS provides for these parental checksums of blocks by using a generic block pointer structure to address all ondisk blocks.</p><p>The block pointer structure contains the checksum of the block it references. Before using a block, ZFS calculates its checksum and verifies it against the stored checksum in the block pointer. The checksum hierarchy forms a self-validating Merkle tree <ref type="bibr" target="#b36">[37]</ref>. With this mechanism, ZFS is able to detect silent data corruption, such as bit rot, phantom writes, and misdirected reads and writes. Replication for data recovery: Besides using RAID techniques (described below), ZFS provides for recovery from disk corruption by keeping replicas of certain "important" on-disk blocks. Each block pointer contains pointers to up to three copies (ditto blocks) of the block being referenced. By default ZFS stores multiple copies for metadata and one copy for data. Upon detecting a corruption due to checksum mismatch, ZFS uses a redundant copy with a correctly-matching checksum. COW transactions for atomic updates: ZFS maintains data consistency in the event of system crashes by using a copy-on-write transactional update model. ZFS manages all metadata and data as objects. Updates to all objects are grouped together as a transaction group. To commit a transaction group to disk, new copies are created for all the modified blocks (in a Merkle tree). The root of this tree (the uberblock) is updated atomically, thus maintaining an always-consistent disk image. In effect, the copy-on-write transactions along with block checksums (in a Merkle tree) preclude the need for journaling <ref type="bibr" target="#b58">[59]</ref>, though ZFS occasionally uses a write-ahead log for performance reasons. Storage pools for additional reliability: ZFS provides additional reliability by enabling RAID-like configuration for devices using a common storage pool for all file system instances. ZFS presents physical storage to file systems in the form of a storage pool (called zpool). A storage pool is made up of virtual devices (vdev). A virtual device could be a physical device (e.g., disks) or a logical device (e.g., a mirror that is constructed by two disks). This storage pool can be used to provide additional reliability by using devices as RAID arrays. Further, ZFS also introduces a new data replication model, RAID-Z, a novel solution similar to RAID-5 but using a variable stripe width to eliminate the write-hole issue in RAID-5 <ref type="bibr" target="#b12">[13]</ref>. Finally, ZFS provides automatic repairs in mirrored configurations and provides a disk scrubbing facility to detect latent sector errors.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">On-disk data integrity in ZFS</head><p>In this section, we analyze the robustness of ZFS against disk corruptions. Our aim is to find whether ZFS can maintain data integrity under a variety of disk corruption scenarios. Specifically, we wish to find if ZFS can detect and recover from all disk corruptions in data and metadata and how ZFS reacts to multiple block corruptions at the same time.</p><p>We find that ZFS is able to detect all and recover from most disk corruptions. We present our analysis, including methodology and results in later sections. First, we present a brief background about the on-disk organization in ZFS, focusing on how data integrity is maintained.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">ZFS on-disk organization</head><p>All on-disk data and metadata in ZFS are treated as objects, where an object is a collection of blocks. Objects are further grouped into object sets. Other structures such as uberblocks are also used to organize data on disk. We now discuss these basic on-disk structures and their usage in ZFS.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1.1">Basic structures</head><p>Block pointers: A block pointer is the basic structure in ZFS for addressing a block on disk. It provides a generic mechanism to keep parental checksums and replicas of on-disk blocks. <ref type="figure">Figure 1</ref> shows the block pointer used by ZFS. As shown, the block pointer contains up to three block addresses, called DVAs (data virtual addresses), each pointing to a different block having the same contents. These are referred to as ditto blocks. The number of DVAs varies depending on the importance of the block. The current policy in ZFS is that there is one DVA for user data, two DVAs for file system metadata, and three DVAs for global metadata across all file system instances in the pool <ref type="bibr" target="#b38">[39]</ref>. As discussed earlier, the block pointer also contains a single copy of the checksum of the block being pointed to. Objects: All blocks on disk are organized in objects. Physically, an object is represented on disk by a structure called dnode phys t (hereafter referred to as dnode). A dnode contains an array of up to three block pointers, each of which points to either a leaf block (e.g., a data block) or an indirect block (full of block pointers). These blocks pointed to by the dnode form a block tree. A dnode also contains a bonus buffer at the end, which stores an object-specific data structure for different types  of objects. For example, a dnode of a file object contains a structure called znode phys t (znode) in the bonus buffer, which stores file attributes such as access time, file mode and size of the file. Object sets: Object sets are used in ZFS to group related objects. An example of a object set is a file system, which contains file objects and directory objects belonging to this file system. An object set is represented by a structure called objset phys t, which consists of a meta dnode and a ZIL (ZFS Intent Log) header. The meta dnode points to a group of dnode blocks; dnodes representing the objects in this object set are stored in these dnode blocks. The object described by the meta dnode is called "dnode object". The ZIL header points to a list of blocks, which holds transaction records for ZFS's logging mechanism.</p><p>Other structures: ZFS uses other structures to organize on-disk data. Each physical vdev is labeled with a vdev label that describes this device and other related virtual devices. Four copies of the label are stored in each physical vdev to provide redundancy and a two-stage update mechanism is used to guarantee that there is always a valid vdev label in the device <ref type="bibr" target="#b50">[51]</ref>. An uberblock (similar to a superblock) inside the vdev label is used to provide access to the pool data and verify its integrity. The uberblock is self-checksummed and updated atomically.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1.2">On-disk layout</head><p>In this section, we present some details about ZFS ondisk layout. This overview will help the reader to understand the range of our fault injection experiments presented in later sections. A complete description of ZFS on-disk structures can be found elsewhere <ref type="bibr" target="#b50">[51]</ref>.</p><p>For the purpose of illustration, we demonstrate the steps that ZFS takes to locate a file system and to locate file data in it in a simple storage pool. <ref type="figure">Figure 2</ref> shows the on-disk layout of the simplified pool with a sample file system called "myfs", along with the sequence of objects and blocks accessed by ZFS. A simple explanation of all visited objects is described in <ref type="table" target="#tab_1">Table 1</ref>. Note that we skip the details of how in-memory structures are set up and assume that data and metadata are not cached in memory to begin with. Find pool metadata (steps 1-2): As the starting point, ZFS locates the active uberblock in the vdev label of the device. ZFS then uses the uberblock to locate and verify the integrity of pool-wide metadata contained in an object set called Meta Object Set (MOS). There are three copies of the object set block representing the MOS. Find a file system (steps 3-10): To locate a file system, ZFS accesses a series of objects in MOS, all of which have three ditto blocks. Once the dataset representing "myfs" is found, it is used to access file system wide metadata contained in an object set. The integrity of file system metadata is checked using the block pointer in the dataset, which points to the object set block. All file system metadata blocks have two ditto copies. Find a file and a data block (steps 11-18): To locate a file, ZFS then uses the directory objects in the "myfs" object set. Finally, by following the block pointers in the dnode of the file object, ZFS finds the required data block. The integrity of every traversed block is confirmed by verifying the checksum in its block pointers.</p><p>The legend in <ref type="figure">Figure 2</ref> shows a summary of all the ondisk block types visited during the traversal. Our fault injection tests for analyzing robustness of ZFS against disk corruptions (discussed in the next subsection) inject bit errors in the on-disk blocks shown in <ref type="figure">Figure 2</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Methodology of analysis</head><p>In this section, we discuss the methodology of our reliability analysis of ZFS against disk corruptions. We discuss our fault injection framework first and then present our test procedures and workloads.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2.1">Fault injection framework</head><p>Our experiments are performed on a 64-bit Solaris Express Community Edition (build 108) virtual machine with 2GB non-ECC memory. We use ZFS pool version 14 and ZFS filesystem version 3. We run ZFS on top of a single disk for our experiments.</p><p>To emulate disk corruptions, we developed a fault injection framework consisting of a pseudo-driver to perform fault injection on disk blocks and an application for ... Figure 2: ZFS on-disk structures. The figure shows the on-disk structures of ZFS including the pool-wide metadata and file system metadata. In the example above, the zpool contains a sample file system named "myfs". All ZFS on-disk data structures are shown by rounded boxes, and on-disk blocks are shown by rectangular boxes. Solid arrows point to allocated blocks and dotted arrows represent references to objects inside blocks. The legend at the top shows the types of on-disk blocks and their contents.</p><formula xml:id="formula_0">y          y     y     y     y     y        y        y           d e f  g         d e f  g ..</formula><p>controlling the experiments. The pseudo-driver is a standard Solaris layered driver that interposes between the ZFS virtual device and the disk driver beneath. We analyze the behavior of ZFS by looking at return values, checking system logs, and tracing system calls.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2.2">Test procedure and workloads</head><p>In our tests, we wanted to understand the behavior of ZFS to disk corruptions on different types of blocks. We injected faults by flipping bits at random offsets in disk blocks. Since we used the default setting in ZFS for compression (metadata compressed and data uncompressed), our fault injection tests corrupted compressed metadata and uncompressed data blocks on disk. We injected faults on nine different classes of ZFS on-disk blocks and for each class, we corrupted a single copy as well as all copies of blocks.</p><p>In our fault injection experiments on pool-wide and file system level metadata, we used "mount" and "remount" operations as our workload. The "mount" workload indicates that the target block is corrupted with the pool exported and "myfs" not mounted, and we subsequently mount it. This workload forces ZFS to use ondisk copies of metadata. The "remount" workload indicates that the target block is corrupted with "myfs" mounted and we subsequently umount and mount it. ZFS uses in-memory copies of metadata in this workload.</p><p>For injecting faults in file and directory blocks in a file system, we used two simple operations as workloads: "create file" creates a new file in a directory, and "read file" reads a file's contents.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.3">Results and observations</head><p>The results of our fault injection experiments are shown in <ref type="table">Table 2</ref>. The table reports the results of experiments on pool-wide metadata and file system metadata and data. It also shows the results of corrupting a single copy as well as all copies of blocks. We now explain the results in detail in terms of the observations we made from our fault injection experiments.</p><p>Observation 1: ZFS detects all corruptions due to the use of checksums. In our fault injection experiments on all metadata and data, we found that bad data was never returned to the user because ZFS was able to detect all corruptions due to the use of checksums in block pointers. The parental checksums are used in ZFS to ver-  <ref type="table">Table 2</ref>: On-disk corruption analysis. <ref type="table">The table shows</ref> the results of on-disk experiments. Each cell indicates whether ZFS was able to recover from the corruption (R), whether ZFS reported an error (E), whether ZFS returned bad data to the user (B), or whether the system crashed (C). Blank cells mean that the workload was not exercised for the block.</p><note type="other">zpool vdev label 1 R R E R uberblock R R E R MOS object set block R R E R MOS dnode block R R E R zfs myfs object set block R R E R myfs indirect block R R E R myfs dnode block R R E R dir ZAP block R R E E file data block E E 1 excluding the uberblocks contained in it.</note><p>ify the integrity of all the on-disk blocks accessed. The only exception are uberblocks, which do not have parent block pointers. Corruptions to the uberblock are detected by the use of checksums inside the uberblock itself.</p><p>Observation 2: ZFS gracefully recovers from single metadata block corruptions. For pool-wide metadata and file system wide metadata, ZFS recovered from disk corruptions by using the ditto blocks. ZFS keeps three ditto blocks for pool-wide metadata and two for file system metadata. Hence, on single-block corruption to metadata, ZFS was successfully able to detect the corruption and use other available correct copies to recover from it; this is shown by the cells (R) in the "Single ditto" column for all metadata blocks.</p><p>Observation 3: ZFS does not recover from data block corruptions. For data blocks belonging to files, ZFS was not able to recover from corruptions. ZFS detected the corruption and reported an error on reading the data block. Since ZFS does not keep multiple copies of data blocks by default, this behavior is expected; this is shown by the cells (E) for the file data block.</p><p>Observation 4: In-memory copies of metadata help ZFS to recover from serious multiple block corruptions. In an active storage pool, ZFS caches metadata in memory for performance. ZFS performs operations on these cached copies of metadata and writes them to disk on transaction group commits. These in-memory copies of metadata, along with periodic transaction commits, help ZFS recover from multiple disk corruptions.</p><p>In the "remount" workload that corrupted all copies of uberblock, ZFS recovered from the corruptions because the in-memory copy of the active uberblock remains as long as the pool exists. The in-memory copy is subsequently written to a new disk block in a transaction group commit, making the old corrupted copy void. Similar results were obtained when corrupting other pool-wide metadata and file system metadata, and ZFS was able to recover from these multiple block corruptions (R).</p><p>Observation 5: ZFS cannot recover from multiple block corruptions affecting all ditto blocks when no inmemory copy exists. For file system metadata, like directory ZAP blocks, ZFS does not always keep an inmemory copy unless the directory has been accessed. Thus, on corruptions to both ditto blocks, ZFS reported an error. This behavior is shown by the results (E) for directories indicating for the "create file" and "read file" operations. Note that we performed these corruptions without first accessing the directory, so that there were no in-memory copies. Similarly, in the "mount" workload, when the pool was inactive (exported) and thus no inmemory copies existed, ZFS was unable to recover from multiple disk corruptions and responded with errors (E).</p><p>Observation 4 and 5 also lead to an interesting conclusion that an active storage pool is likely to tolerate more serious disk corruptions than an inactive one.</p><p>In summary, ZFS successfully detects all corruptions and recovers from them as long as one correct copy exists. The in-memory caching and periodic flushing of metadata on transaction commits help ZFS recover from serious disk corruptions affecting all copies of metadata. For user data, ZFS does not keep redundant copies and is unable to recover from corruptions. ZFS, however, detects the corruptions and reports an error to the user.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">In-memory data integrity in ZFS</head><p>In the last section we showed the robustness of ZFS to disk corruptions. Although ZFS was not specifically designed to tolerate memory corruptions, we still would like to know how ZFS reacts to memory corruptions, i.e., whether ZFS can detect and recover from a single bit flip in data and metadata blocks. Our fault injection experiments indicate that ZFS has no precautions for memory corruptions: bad data blocks are returned to the user or written to disk, file system operations fail, and many times the whole system crashes.</p><p>This section is organized as follows. First, we briefly describe ZFS in-memory structures. Then, we discuss the test methodology and workloads we used to conduct the analysis. Finally, we present the experimental results and our observations.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1">ZFS in-memory structures</head><p>In order to better understand the in-memory experiments, we present some background information on ZFS inmemory structures.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1.1">In-memory structures</head><p>ZFS in-memory structures can be classified into two categories: those that exist in the page cache and those that are in memory outside of the page cache; for convenience we call the latter in-heap structures. Whenever a disk block is accessed, it is loaded into memory. Disk blocks containing data and metadata are cached in the ARC page cache <ref type="bibr" target="#b35">[36]</ref>, and stay there until evicted. Data blocks are stored only in the page cache, while most metadata structures are stored in both the page cache (as copies of on-disk structures) and the heap. Note that block pointers inside indirect blocks are also metadata, but they only reside in the page cache. Uberblocks and vdev labels, on the other hand, only stay in the heap.</p><formula xml:id="formula_1">                                               G V                         ¡ ¢ £ ¤ ¥ ¦ § ¨ © ¦ © ª ¨ « ¬ ­ ® ¯ ° ® ¯ ± ² ³ ´ « ¬ ­ ® ¯ ° ® ¯ ± µ ¶      ·     ¸    ¹           ¸          º  ¸  º    »    º  ¸             º             º  ·  º    »   º ... ... ...             º              ·   º  ¸</formula></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>READ WRITE</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1.2">Lifecycle of a block</head><p>To help the reader understand the vulnerability of ZFS to memory corruptions discussed in later sections, <ref type="figure" target="#fig_0">Figure 3</ref> illustrates one example of the lifecycle of a block (i.e., how a block is read from and written asynchronously to disk). To simplify the explanation, we consider a pair of blocks in which the target block to be read or written is pointed to by a block pointer contained in the parental block. The target block could be a data block or a metadata block. The parental block could be an indirect block (full of block pointers), a dnode block (array of dnodes, each of which contains block pointers) or an object set block (a dnode is embedded in it). The user of the block could be a user-level application or ZFS itself. Note that only the target block is shown in the figure.</p><p>At first, the target block is read from disk to memory. For read, there are two scenarios, as shown in the left half of <ref type="figure" target="#fig_0">Figure 3</ref>. On first read of a target block not in the page cache, it is read from the disk and immediately verified against the checksum stored in the block pointer in the parental block. Then the target block is returned to the user. On a subsequent read of a block already in the page cache, the read request gets the cached block from the page cache directly, without verifying the checksum.</p><p>In both cases, after the read, the target block stays in the page cache until evicted. The block remains in the page cache for an unbounded interval of time depending on many factors such as the workload and the cache replacement policy.</p><p>After some time, the block is updated. The write timeline is illustrated in the right half of <ref type="figure" target="#fig_0">Figure 3</ref>. All updates are first done in the page cache and then flushed to disk. Thus before the updates occur, the target block is either in the page cache already or just loaded to the page cache from disk. After the write, the updated block stays in the page cache for at most 30 seconds and then it is flushed to disk. During the flush, a new physical block is allocated and a new checksum is generated for the dirty target block. The new disk address and checksum are then written to the block pointer contained in the parental block, thus making it dirty. After the target block is written to the disk, the flush procedure continues to allocate a new block and calculate a new checksum for the parental block, which in turn dirties its subsequent parental block. Following the updates of block pointers along the tree (solid arrows in <ref type="figure">Figure 2</ref>), it finally reaches the uberblock which is self-checksummed. After the flush, the target block is kept in the page cache until it is evicted.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2">Methodology of analysis</head><p>In this section, we discuss the fault injection framework, and the test procedure and workloads. The injection framework is similar to the one used for on-disk experiments. The only difference is the pseudo-driver, which in this case, interacts with the ZFS stack by calling internal functions to locate the in-memory structures.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2.1">Test procedure and workloads</head><p>We wished to find out the behavior of ZFS in response to corruptions in different in-memory objects. Since all data and metadata in memory are uncompressed, we performed a controlled fault injection in various objects. For metadata, we randomly flipped a bit in each individual field of the structure separately; for data, we randomly corrupted a bit in a data block of a file in memory. We repeated each fault injection test five times. We performed   <ref type="table">Table 4</ref>: Summary of data structures and fields corrupted.</p><p>The table lists all fields we corrupted in the inmemory experiments. mzap phys t and mzap ent phys t are metadata stored in ZAP blocks. The last three structures are object-specific structures stored in the dnode bonus buffer. fault injection tests on nine different types of objects at two levels (zfs and zpool) and exercised different set of workloads as listed in <ref type="table" target="#tab_6">Table 3</ref>. <ref type="table">Table 4</ref> shows all data structures inside the objects and all the fields we corrupted during the experiments.</p><p>For data blocks, we injected bit flips at an appropriate time as described below. For reads, we flipped a random bit in the data block after it was loaded to the page cache; then we issued a subsequent read() on that block to see if ZFS returned the corrupted block. In this case, the read() call fetched the block from the page cache. For writes, we corrupted the block after the write() call finished but before the target block was written to the disk.</p><p>For metadata, in our fault injection experiments, we covered a broad range of metadata structures. However, to reduce the sample space for experiments to more interesting cases, we made two choices. First, we always injected faults to the in-memory structure after it was accessed by the file system, so that both the in-heap version and page cache version already exist in the memory. Second, among the in-heap structures, we only corrupted the dnode t structure (in-heap version of dnode phys t). The dnode structure is the most widely used metadata structure in ZFS and every object in ZFS is represented by a dnode. Hence, we anticipate that corrupting the inheap dnode structure will cover many interesting cases.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.3">Results and observations</head><p>We present the results of our in-memory experiments in <ref type="table" target="#tab_9">Table 5</ref>. As shown, ZFS fails to catch data block corruptions due to memory errors in both read and write experiments. Single bit flips in metadata blocks not only lead to returning bad data blocks, but also cause more serious problems like failure of operations and system crashes. Note that <ref type="table" target="#tab_9">Table 5</ref> is a subset of the results showing only cases with apparent problems. In other cases that are either indicated by a dot (.) in the result cells or not shown at all in <ref type="table" target="#tab_9">Table 5</ref>, the corresponding operation either did not access the corrupted field or completed successfully with the corrupted field. However, in all cases, ZFS did not correct the corrupted field.</p><p>Next we present our observations on ZFS behavior and user-visible results. The first five observations are about ZFS behavior and the last five observations are about user-visible results of memory corruptions.</p><p>Observation 1: ZFS does not use the checksums in the page cache along with the blocks to detect memory corruptions. Checksums are the first guard for detecting data corruption in ZFS. However, when a block is already in the page cache, ZFS implicitly assumes that it is protected against corruptions. In the case of reads, the checksum is verified only when the block is being read from the disk. Following that, as long as the block stays in the page cache, it is never checked against the checksum, despite the checksum also being in the page cache (in the block pointer contained in its parental block). The result is that ZFS returns bad data to the user on reads.</p><p>For writes, the checksum is generated only when the block is being written to disk. Before that, the dirty block stays in the page cache with an outdated checksum in the block pointer pointing to it. If the block is corrupted in the page cache before it is flushed to disk, ZFS calculates a checksum for the bad block and stores the new checksum in the block pointer. Both the block and its parental block containing the block pointer are written to disk. On subsequent reads of the block, it passes the checksum verification and is returned to the user.</p><p>Moreover, since the detection mechanisms already fail to detect memory corruptions, recovery mechanisms    are O(open), R(read), W(write), A(access), L(link), U(unlink), N(rename), T(truncate), M(mkdir), C(chdir), D(rmdir), c(zfs create), d(zfs destroy), r(zfs rename), l(zfs list), m(zfs mount) and u(zfs umount). Each result cell indicates whether the system crashed (C), whether the operation failed with wrong results or with a misleading message (E), whether a bad data block was returned (B) or whether the operation completed (.). Large blanks mean that the operations are not applicable.</p><note type="other">E E E E E E E E E E E dsl dir phys t dd head dataset obj E E E E . . dd child dir zapobj EC EC EC EC EC C dsl dataset phys t ds dir obj . E</note><p>such as ditto blocks and the mirrored zpool are not triggered to recover from the damage.</p><p>The results in <ref type="table" target="#tab_9">Table 5</ref> indicate that when a data block was corrupted, the application that issued a read() or write() request was returned bad data (B), as shown in the last row. When metadata blocks were corrupted, ZFS accessed the corrupted data structures and thus behaved wrongly, as shown by other cases in the result table.</p><p>Observation 2: The window of vulnerability of blocks in the page cache is unbounded. As <ref type="figure" target="#fig_0">Figure 3</ref> shows, after a block is loaded into the page cache by first read, it stays there until evicted. During this interval, if a corruption happens to the block, any subsequent read will get the corrupted block because the checksum is not verified. Therefore, as long as the block is in the page cache (unbounded), it is susceptible to memory corruptions.</p><p>Observation 3: Since checksums are created when blocks are written to disk, any corruption to blocks that are dirty (or will be dirtied) is written to disk permanently on a flush. As described in Section 5.1.2, dirty blocks in the page cache are written to disk during a flush. During the flush, any dirty block will further cause updates of all its parental blocks; a new checksum is then calculated for each updated block and all of them are flushed to disk. If a memory corruption happens to any of those blocks before a flush (above the black dotted line before G in <ref type="figure" target="#fig_0">Figure 3)</ref>, the corrupted block is written to disk with a new checksum. The checksum is thus valid for the corrupted block, which makes the corruption permanent. Since the window of vulnerability is long (30 seconds), and there are many blocks that will be flushed to disk in each flush, we conjecture that the likelihood of memory corruption leading to permanent on-disk corruptions is high.</p><p>We did a block-based fault injection to verify this observation. We injected a single bit flip to a dirty (or to-bedirtied) block before a flush; as long as the flipped bit in the block was not overwritten by subsequent operations, the corrupted block was written to disk permanently.</p><p>Observation 4: Dirtying blocks due to updating file access time increases the possibility of making corruptions permanent. By default, access time updates are enabled in ZFS; therefore, a read-only workload will update the access time of any file accessed. Consequently, when the structure containing the access time (znode) goes inactive (or when there is another workload that updates the znode), ZFS writes the block holding the znode to disk and updates and writes all its parental blocks. Therefore, any corruption to these blocks will become permanent after the flush caused by the access time update. Further, as mentioned earlier, the time interval when the corruption could happen is unbounded.</p><p>Observation 5: For most metadata blocks in the page cache, checksums are not valid and thus useless in detecting memory corruptions. By default, most metadata blocks such as indirect blocks and dnode blocks are compressed on disk. Since the checksums for these blocks are used to prevent disk corruptions, they are only valid for compressed blocks, which are calculated after they are compressed during writes and verified before they are decompressed during reads. When metadata blocks are in the page cache, they are uncompressed. Therefore, the checksums contained in the corresponding block pointers are useless.</p><p>We now discuss our observations about user-visible results of memory corruptions.</p><p>Observation 6: When metadata is corrupted, operations fail with wrong results, or give misleading error messages (E). As shown in <ref type="table" target="#tab_9">Table 5</ref>, when zp flags in dnode phys t for a file object was corrupted, in one case open() returned an error code EACCES (permission denied). This case occurred when the 41 st bit of zp flags was flipped from 0 to 1, which signifies that the file is quarantined by an anti-virus software. Therefore, open() was incorrectly denied, giving an error code EACCES. The calls access(), rename() and truncate() also failed for the same reason.</p><p>Another example of a misleading error message happened when dd head dataset obj in dsl dir phys t for a dataset directory object was corrupted; there is one case where "zfs create" failed to create a new file system under the parent file system represented by the corrupted object. ZFS gave a misleading error message saying that the parent file system did not exist. ZFS gave similar error messages in other cases (E) under "Dataset directory" and "Dataset".</p><p>A case where wrong results are returned occurred when dd child dir zapobj was corrupted. This field refers to a dataset child map object containing references to child file systems. On corrupting this field, "zfs list", which should list all file systems in the pool, did not list the child file systems of the corrupted dataset directory.</p><p>Observation 7: Many corruptions lead to a system crash (C). For example, when dn nlevels (the height of the block tree pointed to by the dnode) in dnode phys t for a file object was corrupted and the file was read, the system crashed due to a NULL pointer dereference. In this case, ZFS used the wrong value of dn nlevels to traverse the block tree of the file object and obtained an invalid block pointer. Therefore, the block size obtained from the block pointer was an arbitrary value, which was then used to index into an array whose size was much less than the value. As a result, the system crashed when a NULL pointer was dereferenced.</p><p>Observation 8: The read() system call may return bad data. As shown in <ref type="table" target="#tab_9">Table 5</ref>, for metadata corruptions, there were three cases where read() gave bad data block to the user. In these cases, ZFS simply trusted the value of the corrupted field and used it to traverse the block tree pointed to by the dnode, thus returning bad blocks. For example, when dn nlevels in dnode phys t for a file object was changed from 3 to 1, ZFS gave an incorrect block to the user on a read request for the first block of the file. The bad block was returned because ZFS assumed that the tree only had one level, and incorrectly returned an indirect block to the user. Such cases where wrong blocks are returned to the user also have the potential for security vulnerabilities.</p><p>Observation 9: There is no recovery for corrupted metadata. In the cases where no apparent error happened (as indicated by a dot or not shown) and the operation was not meant to update the corrupted field, the corruption remained in the metadata block in the page cache.</p><p>In summary, ZFS fails to detect and recover from many corruptions. Checksums in the page cache are not used to protect the integrity of blocks. Therefore, bad data blocks are returned to the user or written to disk. Moreover, corrupted metadata blocks are accessed by ZFS and lead to operation failure and system crashes.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Probability of bit-flip induced failures</head><p>In this section, we present a preliminary analysis of the likelihood of different failure scenarios due to memory errors in a system using ZFS. Specifically, given that one random bit in memory is flipped, we compute the probabilities of four scenarios: reading corrupt data (R), writing corrupt data (W), crashing/hanging (C) and running successfully to complete (S). These probabilities help us to understand how severely filesystem data integrity is affected by memory corruptions and how much effort filesystem developers should make to add extra protection to maintain data integrity.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6.1">Methodology</head><p>We apply fault-injection techniques to perform the analysis. Considering one run of a specific workload as a trial, we inject a fixed number number of random bit flips to the memory and record how the system reacts. Therefore, by doing multiple trials, we measure the number of trials where each scenario occurs, thus estimating the probability of each scenario given that certain number of bits are flipped. Then, we calculate the probability of each scenario given the occurrence of one single bit flip.</p><p>We have extended our fault injection framework to conduct the experiments. We replaced the pseudo-driver with a user-level "injector" which injects random bit flips to the physical memory. We used filebench <ref type="bibr" target="#b49">[50]</ref> to generate complex workloads. We modified filebench such that it always writes predefined data blocks (e.g., full of 1s) to disk. Therefore, we can check every read operation to verify that the returned data matches the predefined pattern. We can also verify the data written to disk by checking the contents of on-disk files.</p><p>We used the framework as follows. For a specific workload, we ran 100 trials. For each trial, we used the injector to generate 16 random bit flips at the same time when the workload has been running for 3 minutes. We then kept the workload running for 5 minutes. Any occurrence of reading corrupt data (R) was reported. When the workload was done, we checked all on-disk files to see if there was any corrupt data written to the disk (W). Since we only verify write operations after each run of a workload, some intermediate corrupt data might have been overwritten and thus the actual number of occurrence of writing corrupt data could be higher than measured here. We also logged whether the system hung or crashed (C) during each trial, but we did not determine if it was due to corruption of ZFS metadata or other kernel data structures.</p><p>It is important to notice that we injected 16 bit flips in each trial because it let us observe a sufficient number of failure trials in 100 trials. However, we apply the following calculation to derive the probabilities of different failure scenarios given that 1 bit is flipped.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6.2">Calculation</head><p>We use P k (X) to represent the probability of scenario X given that k random bits are flipped, in which X could be R, W, C or S. Therefore, P k ( ¯ X) = 1 − P k (X) is the probability of scenario X not happening given that k bits are flipped. In order to calculate P 1 (X), we first measure P k (X) using the method described above and then derive P 1 (X) from P k (X), as explained below.</p><p>• Measure P k (X) Given that k random bit flips are injected in each trial, we denote the total number of trials as N and the number of trials in which scenario X occurs at least once as N X . Therefore,</p><formula xml:id="formula_2">P k (X) = N X N</formula><p>• Derive P 1 (X) Assume k bit flips are independent, then we have</p><formula xml:id="formula_3">P k ( ¯ X) = (P 1 ( ¯ X)) k , when X = R, W or C P k (X) = (P 1 (X)) k , when X = S</formula><p>Substituting P k ( ¯ X) = 1−P k (X) into the equations above, we can get,</p><formula xml:id="formula_4">P 1 (X) = 1−(1−P k (X)) 1 k , when X = R, W or C P 1 (X) = (P k (X)) 1 k , when X = S</formula></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6.3">Results</head><p>The analysis is performed on the same virtual machine as mentioned in Section 4.2.1. The machine is configured with 2GB non-ECC memory and a single disk running ZFS. We first ran some controlled micro-benchmarks (e.g., sequential read) to verify that the methodology and the calculation is correct (the result is not shown due to limited space). Then, we chose four workloads from filebench: varmail, oltp, webserver and fileserver, all of which were exercised with their default parameters. A detailed description of these workloads can be found elsewhere <ref type="bibr" target="#b49">[50]</ref>.</p><formula xml:id="formula_5">Workload P 16 (R) P 16 (W ) P 16 (C) P 16 (S) varmail</formula><p>9% <ref type="bibr" target="#b3">[4,</ref><ref type="bibr" target="#b16">17]</ref> 0% <ref type="bibr">[0,</ref><ref type="bibr" target="#b2">3]</ref> 5% <ref type="bibr" target="#b0">[1,</ref><ref type="bibr" target="#b11">12]</ref> 86% <ref type="bibr">[77,</ref><ref type="bibr">93]</ref> oltp 26% <ref type="bibr" target="#b16">[17,</ref><ref type="bibr" target="#b35">36]</ref> 2% <ref type="bibr">[0,</ref><ref type="bibr" target="#b7">8]</ref> 16% <ref type="bibr" target="#b8">[9,</ref><ref type="bibr" target="#b24">25]</ref> 60% <ref type="bibr" target="#b48">[49,</ref><ref type="bibr">70]</ref> webserver 11% <ref type="bibr" target="#b4">[5,</ref><ref type="bibr" target="#b18">19]</ref> 20% <ref type="bibr" target="#b11">[12,</ref><ref type="bibr" target="#b29">30]</ref> 19% <ref type="bibr" target="#b10">[11,</ref><ref type="bibr" target="#b28">29]</ref> 61% <ref type="bibr" target="#b49">[50,</ref><ref type="bibr">71]</ref> fileserver 69% <ref type="bibr" target="#b57">[58,</ref><ref type="bibr">78]</ref> 44% <ref type="bibr" target="#b33">[34,</ref><ref type="bibr" target="#b54">55]</ref> 23% <ref type="bibr" target="#b14">[15,</ref><ref type="bibr" target="#b32">33]</ref> 28% <ref type="bibr" target="#b18">[19,</ref><ref type="bibr" target="#b37">38]</ref> Workload  percentage values of the probabilities and 95% confidence intervals (in square brackets) of reading corrupt data (R), writing corrupt data (W), crash/hang and everything being fine (S), given that 16 bits are flipped, on a machine of 2GB memory. The lower table gives the derived percentage values given that 1 bit is corrupted. The working set size of each workload is less than 2GB; the average amount of page cache consumed by each workload after the bit flips are injected is 31MB (varmail), 129MB (oltp), 441MB (webserver) and 915MB (fileserver). <ref type="table" target="#tab_11">Table 6</ref> provides the probabilities and confidence intervals given that 16 bits are flipped and the derived values given that 1 bit is flipped. Note that for each workload, the sum of P k (R), P k (W ), P k (C) and P k (S) is not necessary equal to 1, because there are cases where multiple failure scenarios occur in one trial.</p><formula xml:id="formula_6">P 1 (R) P 1 (W ) P 1 (C) P 1 (S) varmail 0.6% [</formula><p>From the lower table in <ref type="table" target="#tab_11">Table 6</ref>, we see that a single bit flip in memory causes a small but non-negligible percentage of runs to experience an failure. For all workloads, the probability of reading corrupt data is greater than 0.6% and the probability of crashing or hanging is higher than 0.3%. The probability of writing corrupt data varies widely from 0 to 3.6%. Our results also show that in most cases, when the working set size is less than the memory size, the more page cache the workload consumes, the more likely that a failure would occur if one bit is flipped.</p><p>In summary, when a single bit flip occurs, the chances of failure scenarios happening can not be ignored. Therefore, efforts should be made to preserve data integrity in memory and prevent these failures from happening.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Beyond ZFS</head><p>In addition to ZFS, we have applied the same fault injection framework used in Section 5 to a simpler filesystem, ext2. Our initial results indicate that ext2 is also vulnerable to memory corruptions. For example, corrupt data can be returned to the user or written to disk. When certain fields of a VFS inode are corrupted, operations on that inode fail or the whole system crashes. If the inode is dirty, the corrupted fields of the VFS inode are propagated to the inode in the page cache and are then written to disk, making the corruptions permanent. Moreover, if the superblock in the page cache is corrupted and flushed to disk, it might result in an unmountable filesystem.</p><p>In summary, so far we have studied two extremes: ZFS, a complex filesystem with many techniques to maintain on-disk data integrity, and ext2, a simpler filesystem with few mechanisms to provide extra reliability. Both are vulnerable to memory corruptions. It seems that regardless of the complexity of the file system and the amount of machinery used to protect against disk corruptions, memory corruptions are still a problem.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="8">Related work</head><p>Software-implemented fault injection techniques have been widely used to analyze the robustness of systems <ref type="bibr" target="#b9">[10,</ref><ref type="bibr" target="#b16">17,</ref><ref type="bibr" target="#b24">25,</ref><ref type="bibr" target="#b30">31,</ref><ref type="bibr" target="#b47">48,</ref><ref type="bibr" target="#b54">55]</ref>. For example, FINE used fault injection to emulate hardware and software faults in the operating system <ref type="bibr" target="#b30">[31]</ref>; Weining et al. <ref type="bibr" target="#b24">[25]</ref> injected faults to instruction streams of Linux kernel function to characterize Linux kernel behavior.</p><p>More recent works <ref type="bibr" target="#b4">[5,</ref><ref type="bibr" target="#b7">8,</ref><ref type="bibr" target="#b43">44]</ref> have applied type-aware fault injection to analyze failure behaviors of different file systems to disk corruptions. Our analysis of on-disk data integrity in ZFS is similar to these studies.</p><p>Further, fault injection has also been used to analyze effects of memory corruptions on systems. FIAT <ref type="bibr" target="#b9">[10]</ref> used fault injection to study the effects of memory corruptions in a distributed environment. <ref type="bibr">Krishnan et al. applied</ref> a memory corruption framework to analyze the effects of metadata corruption on NFS <ref type="bibr" target="#b32">[33]</ref>. Our study on in-memory data integrity is related to these studies in their goal of finding effects of memory corruptions.</p><p>However, our work on ZFS is the first comprehensive reliability analysis of local file system that covers carefully controlled experiments to analyze both on-disk and in-memory data integrity. Specifically, for our study of memory corruptions, we separately analyze ZFS behavior for faults in page cache metadata and data and for metadata structures in the heap. To the best of our knowledge, this is the first such comprehensive study of endto-end file system data integrity.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="9">Summary and discussion</head><p>In this paper, we analyzed a state-of-the-art file system, ZFS, to study the implications of disk and memory corruptions to data integrity. We used carefully controlled fault injection experiments to simulate realistic disk and memory errors and presented our observations about ZFS behavior and its robustness.</p><p>While the reliability mechanisms in ZFS are able to provide reasonable robustness against disk corruptions, memory corruptions still remain a serious problem to data integrity. Our results for memory corruptions indicate cases where bad data is returned to the user, operations silently fail, and the whole system crashes. Our probability analysis shows that one single bit flip has small but non-negligible chances to cause failures such as reading/writing corrupt data and system crashing.</p><p>We argue that file systems should be designed with end-to-end data integrity as a goal. File systems should not only provide protection against disk corruptions, but also aim to protect data from memory corruptions. Although dealing with memory corruptions is hard, we conclude by discussing some techniques that file systems can use to increase protection against memory corruptions. Block-level checksums in the page cache: File systems could protect the vulnerable data and metadata blocks in the page cache by using checksums. For example, ZFS could use the checksums inside block pointers in the page cache, update them on block updates, and verify the checksums on reads. However, this does incur an overhead in computation as well as some complexity in implementation; these are always the tradeoffs one has to make for reliability. Metadata checksums in the heap: Even with blocklevel checksums in the page cache, there are still copies of metadata structures in the heap that are vulnerable to memory corruptions. To provide end-to-end data integrity, data-structure checksums may be useful in protecting in-heap metadata structures. Programming for error detection: Many serious effects of memory corruptions can be mitigated by using simple programming practices. One technique is to use existing redundancy in data structures for simple consistency checks. For instance, the case described in Observation 8 (Section 5.3) could be detected by comparing the expected level calculated from the dn levels field of dnode phys t with the actual level stored inside the first block pointer. Another simple technique is to include magic numbers in metadata structures for sanity checking. For example, some "crash" cases happened due to bad block pointers obtained during the block tree traversal (Observation 7 in Section 5.3). Using a magic number in block pointers could help detect such cases and prevent unexpected behavior.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: Lifecycle of a block. This figure illustrates one example of the lifecycle of a block. The left half represents the read timeline and the right half represents the write timeline. The black dotted line is a protection boundary, below which a block is protected by the checksum, otherwise unprotected.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="false"><head>object whose blocks contain name-value pairs referencing further objects in the MOS object set. Dataset It represents an object set (e.g., a file system) and tracks its relationships with its snapshots and clones. Dataset directory It maintains an active dataset object along with its child datasets. It has a reference to a dataset child map object. It also maintains properties such as quotas for all datasets in this directory.</head><label></label><figDesc></figDesc><table>Level 
+
+Object Name 
+Simplified Explanation 
+
+zpool 
+
+MOS dnode 
+A dnode object that contains dnode blocks, which store dnodes representing pool-level objects. 
+Object directory 
+A ZAP Dataset child map 
+A ZAP object whose blocks hold name-value pairs referencing child dataset directories. 
+
+zfs 
+
+FS dnode 
+A dnode object that contains dnode blocks, which store dnodes representing filesystem-level objects. 
+Master node 
+A ZAP object whose blocks contain name-value pairs referencing further objects in this file system. 
+File 
+An object whose blocks contain file data. 
+Directory 
+A ZAP object whose blocks contain name-value pairs referencing files and directories inside this directory. 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_1" validated="false"><head>Table 1 :</head><label>1</label><figDesc></figDesc><table>Summary of ZFS objects visited. The table presents a summary of all ZFS objects visited in the walkthrough, along 
+
+with a simplified explanation. Note that ZAP stands for ZFS Attribute Processor. A ZAP object is used to store name-value pairs. 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_6" validated="true"><head>Table 3 :</head><label>3</label><figDesc>Summary of objects and data structures cor- rupted. The table presents a summary of all the ZFS objects and structures corrupted in our in-memory analysis, along with their data structures and the workloads exercised on them.</figDesc><table>Data Structure 
+Fields 
+dnode t 
+dn nlevels, dn bonustype, dn indblkshift, 
+dn nblkptr, dn datablkszsec, dn maxblkid, 
+dn compress, dn bonuslen, dn checksum, 
+dn type 
+dnode phys t 
+dn nlevels, dn bonustype, dn indblkshift, 
+dn nblkptr, dn datablkszsec, dn maxblkid, 
+dn compress, dn bonuslen, dn checksum, 
+dn type, dn used, dn flags, 
+mzap phys t 
+mz block type, mz salt 
+mzap ent phys t 
+mze value, mze name 
+znode phys t 
+zp mode, zp size, zp links, 
+zp flags, zp parent 
+dsl dir phys t 
+dd head dataset obj, dd child dir zapobj, 
+dd parent obj 
+dsl dataset phys t 
+ds dir obj 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_9" validated="false"><head>Table 5 :</head><label>5</label><figDesc>In-memory corruption results. The table shows a subset of memory corruption results. The operations exercised</figDesc><table></table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_11" validated="false"><head>Table 6 :</head><label>6</label><figDesc></figDesc><table>P 16 (X) and P 1 (X). The upper table presents 
+
+</table></figure>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgment</head><p>We thank the anonymous reviewers and Craig Soules (our shepherd) for their tremendous feedback and comments, which have substantially improved the content and presentation of this paper. We thank Asim Kadav for his initial work on ZFS on-disk fault injection. We also thank the members of the ADSL research group for their insightful comments.</p><p>This material is based upon work supported by the National Science Foundation under the following grants: CCF-0621487, CNS-0509474, CNS-0834392, CCF-0811697, CCF-0811697, CCF-0937959, as well as by generous donations from NetApp, Inc, Sun Microsystems, and Google.</p><p>Any opinions, findings, and conclusions or recommendations expressed in this material are those of the authors and do not necessarily reflect the views of NSF or other institutions.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cert/Cc</forename><surname>Advisories</surname></persName>
+		</author>
+		<ptr target="http://www.cert.org/advisories/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Kernel Bug Tracker</surname></persName>
+		</author>
+		<ptr target="http://bugzilla.kernel.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Us-Cert</forename><surname>Vulnerabilities</surname></persName>
+		</author>
+		<ptr target="http://www.kb.cert.org/vuls/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">More Than an Interface: SCSI vs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Anderson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Dykes</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Riedel</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ATA. In FAST</title>
+		<imprint>
+			<date type="published" when="2003" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Dependability Analysis of Virtual Memory Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">N</forename><surname>Bairavasundaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">H</forename><surname>Arpacidusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">DSN</title>
+		<imprint>
+			<date type="published" when="2006" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">An Analysis of Latent Sector Errors in Disk Drives</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">N</forename><surname>Bairavasundaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">R</forename><surname>Goodson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Pasupathy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Schindler</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGMETRICS</title>
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">An Analysis of Data Corruption in the Storage Stack</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">N</forename><surname>Bairavasundaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">R</forename><surname>Goodson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Schroeder</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">H</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FAST</title>
+		<imprint>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Analyzing the Effects of Disk-Pointer Corruption</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">N</forename><surname>Bairavasundaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Rungta</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Agrawal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">C</forename><surname>Arpacidusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">H</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">M</forename><surname>Swift</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">DSN</title>
+		<imprint>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Commercial Fault Tolerance: A Tale of Two Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Bartlett</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Spainhower</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Trans. on Dependable and Secure Computing</title>
+		<imprint>
+			<biblScope unit="volume">1</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<date type="published" when="2004" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Fault Injection Experiments Using FIAT</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Barton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Czeck</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Segall</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Siewiorek</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Trans. on Comp</title>
+		<imprint>
+			<biblScope unit="volume">39</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<date type="published" when="1990" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Soft errors in advanced computer systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Baumann</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Des. Test</title>
+		<imprint>
+			<biblScope unit="volume">22</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<biblScope unit="page" from="258" to="266" />
+			<date type="published" when="2005" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Diehard: probabilistic memory safety for unsafe languages</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">D</forename><surname>Berger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">G</forename><surname>Zorn</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">PLDI</title>
+		<imprint>
+			<date type="published" when="2006" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Bonwick</surname></persName>
+		</author>
+		<ptr target="http://blogs.sun.com/bonwick/entry/raidz" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<monogr>
+		<title level="m" type="main">ZFS: The Last Word in File Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Bonwick</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Moore</surname></persName>
+		</author>
+		<ptr target="http://opensolaris.org/os/community/zfs/docs/zfslast.pdf" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<monogr>
+		<title level="m" type="main">The structure of the Reiser file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Buchholz</surname></persName>
+		</author>
+		<ptr target="http://homes.cerias.purdue.edu/∼florian/reiser/reiserfs.php" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Design and Implementation of the Second Extended Filesystem</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Card</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Ts&amp;apos;o</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Tweedie</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the First Dutch International Symposium on Linux</title>
+		<meeting>the First Dutch International Symposium on Linux</meeting>
+		<imprint>
+			<date type="published" when="1994" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">Xception: A Technique for the Experimental Evaluation of Dependability in Modern Computers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Carreira</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Madeira</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">G</forename><surname>Silva</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Trans. on Software Engg</title>
+		<imprint>
+			<date type="published" when="1998" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Hive: Fault Containment for Shared-Memory Multiprocessors</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Chapin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Rosenblum</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Devine</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Lahiri</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Teodosiu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Gupta</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP</title>
+		<imprint>
+			<date type="published" when="1995" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Error-correcting codes for semiconductor memories</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">L</forename><surname>Chen</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">SIGARCH Comput. Archit. News</title>
+		<imprint>
+			<biblScope unit="volume">12</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<biblScope unit="page" from="245" to="247" />
+			<date type="published" when="1984" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">An Empirical Study of Operating System Errors</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Chou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Chelf</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Hallem</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Engler</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP</title>
+		<imprint>
+			<date type="published" when="2001" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">CSSV: towards a realistic tool for statically detecting all buffer overflows in C</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Dor</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Rodeh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Sagiv</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">PLDI</title>
+		<imprint>
+			<date type="published" when="2003" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">Bugs as Deviant Behavior: A General Approach to Inferring Errors in Systems Code</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Engler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">Y</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Hallem</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Chou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Chelf</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP</title>
+		<imprint>
+			<date type="published" when="2001" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Impact of neutron flux on soft errors in mos memories</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Eto</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Hidaka</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Okuyama</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Kimura</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Hosono</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">IEDM</title>
+		<imprint>
+			<date type="published" when="1998" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<monogr>
+		<title level="m" type="main">EIDE Controller Flaws Version 24</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Green</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">Characterization of Linux Kernel Behavior Under Errors</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Gu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Kalbarczyk</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">K</forename><surname>Iyer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Yang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">DSN</title>
+		<imprint>
+			<date type="published" when="2003" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">SQCK: A Declarative File System Checker</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">S</forename><surname>Gunawi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Rajimwale</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">H</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI</title>
+		<imprint>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">A system and language for building system-specific, static analyses</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Hallem</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Chelf</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Xie</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Engler</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">PLDI</title>
+		<imprint>
+			<date type="published" when="2002" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<monogr>
+		<title level="m" type="main">Successfully Challenging the Server Tax</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Hamilton</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Purify: Fast detection of memory leaks and access errors</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Hastings</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Joyce</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX Winter</title>
+		<imprint>
+			<date type="published" when="1992" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<monogr>
+		<title level="m" type="main">A white paper on the benefits of chipkill-correct ecc for pc server main memory. IBM Microelectronics Division</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">T J</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1997" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">FINE: A Fault Injection and Monitoring Environment for Tracing the UNIX System Behavior Under Faults</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Kao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">K</forename><surname>Iyer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Tang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Trans. on Software Engg</title>
+		<imprint>
+			<date type="published" when="1993" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Krioukov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">N</forename><surname>Bairavasundaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">R</forename><surname>Goodson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Srinivasan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Thelen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">H</forename><surname>Arpacidusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Parity Lost and Parity Regained. In FAST</title>
+		<imprint>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">The Effects of Metadata Corruption on NFS</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Krishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Ravipati</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">H</forename><surname>Arpacidusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">P</forename><surname>Miller</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">StorageSS</title>
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<analytic>
+		<title level="a" type="main">A memory soft error measurement on production systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Shen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">C</forename><surname>Huang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Chu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX</title>
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<analytic>
+		<title level="a" type="main">Alpha-particle-induced soft errors in dynamic memories</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">C</forename><surname>May</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">H</forename><surname>Woods</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Trans. on Electron Dev</title>
+		<imprint>
+			<biblScope unit="volume">26</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<date type="published" when="1979" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<analytic>
+		<title level="a" type="main">Arc: A self-tuning, low overhead replacement cache</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Megiddo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Modha</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FAST</title>
+		<imprint>
+			<date type="published" when="2003" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b36">
+	<analytic>
+		<title level="a" type="main">A digital signature based on a conventional encryption function</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">C</forename><surname>Merkle</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">CRYPTO</title>
+		<imprint>
+			<date type="published" when="1987" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b37">
+	<analytic>
+		<title level="a" type="main">Increasing relevance of memory hardware errors: a case for recoverable programming models</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Milojicic</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Messer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Shau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Fu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Munoz</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM SIGOPS European Workshop</title>
+		<imprint>
+			<date type="published" when="2000" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b38">
+	<monogr>
+		<title level="m" type="main">Ditto Blocks -The Amazing Tape Repellent</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Moore</surname></persName>
+		</author>
+		<ptr target="http://blogs.sun.com/bill/entry/dittoblockstheamazingtape" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b39">
+	<analytic>
+		<title level="a" type="main">Single event upset at ground level. Nuclear Science</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Normand</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Transactions on</title>
+		<imprint>
+			<biblScope unit="volume">43</biblScope>
+			<biblScope unit="issue">6</biblScope>
+			<biblScope unit="page" from="2742" to="2750" />
+			<date type="published" when="1996" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b40">
+	<analytic>
+		<title level="a" type="main">Field testing for cosmic ray soft errors in semiconductor memories</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">J</forename><surname>O&amp;apos;gorman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">M</forename><surname>Ross</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">H</forename><surname>Taber</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">F</forename><surname>Ziegler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">P</forename><surname>Muhlfeld</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">J</forename><surname>Montrose</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">W</forename><surname>Curtis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">L</forename><surname>Walsh</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IBM J. Res. Dev</title>
+		<imprint>
+			<biblScope unit="volume">40</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="41" to="50" />
+			<date type="published" when="1996" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b41">
+	<analytic>
+		<title level="a" type="main">Oracle Corporation</title>
+		<ptr target="http://oss.oracle.com/projects/btrfs/" />
+	</analytic>
+	<monogr>
+		<title level="m">Btrfs: A Checksumming Copy on Write Filesystem</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b42">
+	<analytic>
+		<title level="a" type="main">A Case for Redundant Arrays of Inexpensive Disks (RAID)</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Patterson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Gibson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Katz</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGMOD</title>
+		<imprint>
+			<date type="published" when="1988" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b43">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Prabhakaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">N</forename><surname>Bairavasundaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Agrawal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">S</forename><surname>Gunawi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">H</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<title level="m">IRON File Systems. In SOSP</title>
+		<imprint>
+			<date type="published" when="2005" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b44">
+	<analytic>
+		<title level="a" type="main">Safemem: Exploiting ecc-memory for detecting memory leaks and memory corruption during production runs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Qin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Lu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhou</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">HPCA</title>
+		<imprint>
+			<date type="published" when="2005" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b45">
+	<analytic>
+		<title level="a" type="main">DRAM errors in the wild: a large-scale field study</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Schroeder</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Pinheiro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W.-D</forename><surname>Weber</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGMETRICS</title>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b46">
+	<analytic>
+		<title level="a" type="main">Disk Scrubbing in Large Archival Storage Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">J</forename><surname>Schwarz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Q</forename><surname>Xin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">L</forename><surname>Miller</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">D</forename><surname>Long</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Hospodor</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Ng</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">MASCOTS</title>
+		<imprint>
+			<date type="published" when="2004" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b47">
+	<analytic>
+		<title level="a" type="main">Development of a Benchmark to Measure System Robustness</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Siewiorek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Hudak</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Suh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Segal</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FTCS-23</title>
+		<imprint>
+			<date type="published" when="1993" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b48">
+	<analytic>
+		<title level="a" type="main">Unifying File System Protection</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">A</forename><surname>Stein</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">H</forename><surname>Howard</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">I</forename><surname>Seltzer</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX</title>
+		<imprint>
+			<date type="published" when="2001" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b49">
+	<analytic>
+		<title/>
+		<ptr target="http://www.solarisinternals.com/wiki/index.php/FileBench" />
+	</analytic>
+	<monogr>
+		<title level="j">Sun Microsystems. Solaris Internals: FileBench</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b50">
+	<analytic>
+		<title/>
+		<ptr target="http://www.opensolaris.org/os/community/zfs/docs/ondiskformat0822.pdf" />
+	</analytic>
+	<monogr>
+		<title level="j">Sun Microsystems. ZFS On-Disk Specification</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b51">
+	<monogr>
+		<title level="m" type="main">The Private Lives of Disk Drives</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Sundaram</surname></persName>
+		</author>
+		<ptr target="http://partners.netapp.com/go/techontap/matl/sample/0206totresiliency.html" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b52">
+	<analytic>
+		<title level="a" type="main">Improving the Reliability of Commodity Operating Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">M</forename><surname>Swift</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">N</forename><surname>Bershad</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">M</forename><surname>Levy</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP</title>
+		<imprint>
+			<date type="published" when="2003" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b53">
+	<monogr>
+		<title level="m" type="main">Hard Disk Failure</title>
+		<ptr target="http://www.dataclinic.co.uk/hard-disk-failures.htm" />
+		<imprint/>
+	</monogr>
+	<note>The Data Clinic</note>
+</biblStruct>
+
+<biblStruct xml:id="b54">
+	<analytic>
+		<title level="a" type="main">Measuring Fault Tolerance with the FTAPE Fault Injection Tool</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">K</forename><surname>Tsai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">K</forename><surname>Iyer</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">The 8th International Conference On Modeling Techniques and Tools for Computer Performance Evaluation</title>
+		<imprint>
+			<date type="published" when="1995" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b55">
+	<analytic>
+		<title level="a" type="main">Journaling the Linux ext2fs File System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">C</forename><surname>Tweedie</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">The Fourth Annual Linux Expo</title>
+		<meeting><address><addrLine>Durham, North Carolina</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="1998" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b56">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Wehman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Den Haan</surname></persName>
+		</author>
+		<ptr target="http://thef-nym.sci.kun.nl/cgi-pieterh/atazip/atafq.html" />
+		<title level="m">The Enhanced IDE/Fast-ATA FAQ</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b57">
+	<monogr>
+		<title level="m" type="main">The Solaris Dynamic File System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Weinberg</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b58">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Wenas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Zfs Faq</surname></persName>
+		</author>
+		<ptr target="http://blogs.sun.com/awenas/entry/zfsfaq" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b59">
+	<analytic>
+		<title level="a" type="main">Archer: using symbolic, pathsensitive analysis to detect memory access errors</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Xie</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Chou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Engler</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FSE</title>
+		<imprint>
+			<date type="published" when="2003" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b60">
+	<analytic>
+		<title level="a" type="main">EXPLODE: A Lightweight, General System for Finding Serious Storage System Errors</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Sar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Engler</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI</title>
+		<imprint>
+			<date type="published" when="2006" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b61">
+	<analytic>
+		<title level="a" type="main">Effect of cosmic rays on computer memories</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">F</forename><surname>Ziegler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">A</forename><surname>Lanford</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Science</title>
+		<imprint>
+			<biblScope unit="volume">206</biblScope>
+			<biblScope unit="issue">4420</biblScope>
+			<biblScope unit="page" from="776" to="788" />
+			<date type="published" when="1979" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

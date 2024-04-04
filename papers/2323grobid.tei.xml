@@ -1,0 +1,868 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:35+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">USENIX Association 11th USENIX Conference on File and Storage Technologies (FAST &apos;13) 285 Gecko: Contention-Oblivious Disk Arrays for Cloud Storage</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ji-Yong</forename><surname>Shin</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">Cornell University ‡ Microsoft Research † Google</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mahesh</forename><surname>Balakrishnan</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">Cornell University ‡ Microsoft Research † Google</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tudor</forename><surname>Marian</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">Cornell University ‡ Microsoft Research † Google</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hakim</forename><surname>Weatherspoon</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">Cornell University ‡ Microsoft Research † Google</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">USENIX Association 11th USENIX Conference on File and Storage Technologies (FAST &apos;13) 285 Gecko: Contention-Oblivious Disk Arrays for Cloud Storage</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Disk contention is increasingly a significant problem for cloud storage, as applications are forced to co-exist on machines and share physical disk resources. Disks are notoriously sensitive to contention; a single appli-cation&apos;s random I/O is sufficient to reduce the through-put of a disk array by an order of magnitude, disrupting every other application running on the same array. Log-structured storage designs can alleviate write-write contention between applications by sequentializing all writes, but have historically suffered from read-write contention triggered by garbage collection (GC) as well as application reads. Gecko is a novel log-structured design that eliminates read-write contention by chaining together a small number of drives into a single log, effectively separating the tail of the log (where writes are appended) from its body. As a result, writes proceed to the tail drive without contention from either GC reads or first-class reads, which are restricted to the body of the log with the help of a tail-specific caching policy. Gecko trades-off maximum contention-free sequential through-put from multiple drives in exchange for a stable and predictable maximum throughput from a single uncon-tended drive, and achieves better performance compared to native log-structured or RAID based systems for most cases. Our in-kernel implementation provides random write bandwidth to applications of 60 to 120MB/s, despite concurrent GC activity, application reads, and an adversarial workload.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Modern data centers are heavily virtualized, with the compute and storage resources of each physical server multiplexed across a large number of applications. Two trends point to increased virtualization. The first is the emergence of cloud computing, where multiple tenants are routinely assigned to different cores on the same machine. The second trend is the increasing number of cores on individual machines, driven by the end of frequency scaling, which forces applications to co-exist on the same server. Virtualization enables applications to share machine resources without resorting to physical partitioning, allowing resources such as disk capacity or network bandwidth to be temporally multiplexed across many different tenants.</p><p>Unfortunately, virtualization leads to contention. In virtualized settings, applications are susceptible to the behavior of other applications executing on the same machine, network and storage infrastructure. In particular, contention in the storage subsystem of a single machine is a significant issue, especially when a disk array is shared by multiple applications running on different cores. In such a setting, an application designed for high I/O performance -for example, one that always writes or reads sequentially to disk -can perform poorly due to random I/O introduced by applications running on other cores <ref type="bibr" target="#b7">[8]</ref>; later in this paper, we quantify this effect. In fact, even in the case where every application on the physical machine accesses storage strictly sequentially, the disk array can still see a non-sequential I/O workload due to the inter-mixing of multiple sequential streams <ref type="bibr" target="#b9">[10]</ref>. Disk contention of this nature is endemic to any system design where a single disk array is shared by multiple applications running on different cores.</p><p>Existing solutions to mitigate the effects of disk contention revolve around careful scheduling decisions, either spatial or temporal. For instance, one solution to minimize interference involves careful placement of applications on machines <ref type="bibr" target="#b7">[8,</ref><ref type="bibr" target="#b8">9]</ref>. However, this requires the cloud provider to accurately predict the future I/O patterns of applications. Additionally, placement decisions are usually driven by a wide number of considerations, not just disk I/O patterns; these include data/network locality, bandwidth and CPU usage, migration costs, security concerns, etc. A different solution involves scheduling I/O to maintain the sequentiality of the workload seen by the disk array. Typically, this involves delaying the I/O of other applications while a particular application is accessing the disk array. However, I/O scheduling sacrifices access latency for better throughput, which may not be an acceptable trade-off for many applications.</p><p>A more promising approach is to build systems that are oblivious to contention by design. For instance, logstructured designs for storage -such as the log-structured filesystem (LFS) <ref type="bibr" target="#b17">[18]</ref> -can support sequential or random write streams from multiple applications at the full sequential speed of the underlying media. Unfortunately, the Achilles' Heel of LFS is read-write contention caused by garbage collection (GC) <ref type="bibr" target="#b20">[21,</ref><ref type="bibr" target="#b12">13]</ref>; specifically, the random reads introduced by GC often interfere with first- <ref type="figure">Figure 1</ref>: Chained Logging: all writes go to the tail drive of the chain, while reads are serviced mostly from the body of the chain or a cache. Mirrors in the body can be powered down.</p><p>class writes by the application, negating any improvement in write throughput. Additionally, LFS can also be subject to read-write contention from application reads; the original LFS work assumed that large caches would eliminate reads to the point where they did not interfere with write throughput. More recently, systems have emerged that utilize new flash technology to implement read caches or log-structured write caches <ref type="bibr" target="#b3">[4]</ref> that can support contention-free I/O from multiple applications. However, this results in a highly stressful write workload for the flash drives that can wear them out within months <ref type="bibr" target="#b22">[23]</ref>.</p><p>In this paper, we propose Gecko, a new log-structured design for disk arrays. The key idea in Gecko is chained logging, in which the tail of the log -where writes occur -is separated from its body by placing it on a different drive. In other words, the log is formed by concatenating or chaining multiple drives. <ref type="figure">Figure 1</ref> shows a chain of three drives, D 0 , D 1 and D 2 . On a brand new deployment, writes will first go to D 0 ; once D 0 fills up, the log spills over to D 1 , and then in turn to D 2 . In this state, new writes go to D 2 , where the tail of the log is now located, while reads go to all drives. As space on D 0 and D 1 is freed due to overwrites on the logical address space, compaction and garbage collection is initiated. As a result, when D 2 finally fills up, the log can switch back to using free space on D 0 and D 1 . Any number of drives can be chained in this fashion. Also, each link in the chain can be a mirrored pair of drives (e.g., D 0 and D 񮽙 0 ) for fault-tolerance and better read performance.</p><p>The key insight in chained logging is that the sequential, contention-free write bandwidth of a single drive is preferable to the randomized, contention-affected bandwidth of a larger array. As with any logging design, chained logging ensures that write-write contention between applications does not result in degraded throughput, since all writes are logged sequentially at the tail drive of the chain. Crucially, chained logging also eliminates read-write contention between garbage collection (GC) activity and first-class writes by separating the tail of the log from its body. In the process, it trades off the maximum contention-free write throughput of the array -which is now limited to the sequential bandwidth of the tail drive of the chain -in exchange for stable, predictable write performance in the face of contention. In our evaluation, we show that a Gecko chain can operate at 60MB/s to 120MB/s under heavy write-write contention and concurrent GC activity, whereas a conventional log-structured RAID-0 configuration over the same drives collapses to around 10MB/s during GC.</p><p>To tackle read-write contention caused by application reads, Gecko uses flash and RAM-based caching policies that leverage the unique structure of the logging chain. All new writes to the tail drive in the chain are first cached in RAM, and then lazily moved to an SSD cache dedicated to the tail drive. As a result, reads on recently written data on the tail drive are served by the RAM cache, and reads on older data on the tail drive are served by the SSD tail cache. This caching design has two important properties. First, it is tail-specific: it prevents application reads from reaching the tail drive and randomizing its workload, thus allowing writes to proceed sequentially without interference from reads. Based on our analysis of server block-level traces, we found that a RAM cache of 2GB and an SSD cache of 32GB was sufficient to absorb over 86% of reads directed at the 512GB tail drive of a Gecko chain for all the workload combinations we tried. Second, it's two-tier structure allows overwrites to be coalesced in RAM before they reach the SSD cache; as we show in our evaluation, this can prolong the lifetime of the SSD by 2X to 8X compared to a conventional caching design.</p><p>Chained logging has other benefits. Eliminating readwrite contention has the side-effect that writes no longer slow down reads. As a result, chained logs can exhibit higher read throughput for many workloads compared to conventional RAID variants, since reads are served by either the tail cache or the body of the log and consequently do not have to contend with write traffic. Chained logging can also be used to save power: when mirrored drives are chained together, half the disks in the body of the log can be safely switched off since they do not receive any writes. This lowers the read throughput of the log, but does not compromise fault-tolerance.</p><p>Importantly, Gecko is a log-structured block device rather than a filesystem; as a result, any filesystem or database can execute over it without modification. Historically, the difficulty of persistently maintaining metadata under the block layer has outweighed the benefits of block-level logging, forcing such designs to incur meta- data seeks on disk or restricting them to expensive enterprise storage solutions that can afford battery-backed RAM or other forms of NVRAM <ref type="bibr" target="#b4">[5,</ref><ref type="bibr" target="#b5">6,</ref><ref type="bibr" target="#b24">25,</ref><ref type="bibr" target="#b18">19,</ref><ref type="bibr" target="#b13">14]</ref>. Gecko is the first system to use a commodity MLC SSD to store metadata for a log-structured disk array; accordingly, it uses a new metadata scheme carefully designed to exploit the access characteristics of flash as well as conserve its lifetime. This paper makes the following contributions. First, we propose the novel technique of chained logging, which provides the benefits of log-structured storage (obliviousness to write-write contention) without suffering from its drawbacks (susceptibility to read-write contention). Second, we describe the design of a block storage device called Gecko that implements chained logging, focusing on how the system utilizes inexpensive commodity flash for caching and persistence over the chained log structure. Third, we evaluate a software implementation of Gecko, showing that chained logging provides high, stable write throughput during GC activity, in contrast to log-structured RAID-0; it effectively prevents reads from impacting write throughput by using a tail-specific cache; and it outperforms log-structured RAID-0 in terms of both read and write performance on real workloads.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Motivation</head><p>In this section, we first motivate the problem of disk contention in virtualized data centers. We then provide the rationale for log-structured designs in such settings.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">Disk Contention</head><p>Our focus is on settings where multiple applications share common disk infrastructure on a single physical machine. A common example of such a setting is a virtualized environment where multiple virtual machines (VMs) execute on a single machine and operate on filesystems that are stored on virtual disks. The guest OS within each VM is oblivious to the virtual nature of the underlying disk and the existence of other VMs on the same machine. In reality, virtual disks are implemented as logical volumes or files in a host filesystem. While performance isolation across VMs can be achieved by storing each virtual disk in a separate disk or disk array, this defeats the goal of virtualization to achieve efficient multiplexing of resources. Accordingly, it is usual for different virtual disks to reside on the same set of physical disks.</p><p>Disk virtualization leads to disk contention. A single badly behaved application that continually issues random I/O to a disk array can disrupt the throughput of every other application running over that array <ref type="bibr" target="#b7">[8]</ref>. As machines come packed with increasing numbers of cores -and as cloud providers cram more tenants on a single physical box -it becomes increasingly likely that some application is issuing random I/O at any given time, disrupting the overall throughput of the entire system. In fact, throughput in such settings is likely to be sub-optimal even if every application on the system is well-behaved and perfectly sequential in its I/O behavior, since the physical disk array sees a mix of multiple sequential streams that is unlikely to stay sequential <ref type="bibr" target="#b9">[10]</ref>.</p><p>To illustrate these problems, we ran a simple experiment on an 8-core machine with 4 disks configured as a RAID-0 array. In the experiment, we ran multiple writers concurrently on different cores to observe the resulting impact on throughput. To make sure that the results were not specific to virtual machines, we ran the experiments with different levels of layering: processes writing to a raw volume (RAW Disk), processes writing to a filesystem (EXT4 FS), processes within different VMs writing to a raw volume (VM + RAW disk), and processes within different VMs writing to a filesystem (VM + EXT4 FS). In the absence of contention (i.e., with a single sequential writer), we were able to obtain 300 to 400MB/s of write throughput in this setup, depending on the degree of layering. Adding more sequential writers lowered throughput; with 8 writers, the system ran at between 120 and 300MB/s. <ref type="figure" target="#fig_0">Figure 2</ref> shows the impact on throughput of a single random writer when collocated with sequential writers. We show measurements of system throughput for increasing numbers of sequential writers, along with a single random writer issuing 4KB writes. For any number of sequential writers and any degree of layering, throughput is limited to less than 25MB/s, representing an order of magnitude drop compared to 300 to 400MB/s throughput without the random writer. One interesting point is that added layering improves throughput in the presence of a random writer; we believe this is due to scheduling intelligence in these layers that delays random I/O to improve sequentiality, a hypothesis borne out by observed I/O latencies. This graph is not meant to be a comprehensive picture of contention in the cloud; rather, it illustrates how easy it is for a single application to disrupt system throughput in virtualized settings. Next, we look at how log-structured systems can help.</p><p>2.2 Flash and the Return of Log-Structured Systems Log-structured filesystems were introduced in the 90s on the premise that the falling price of RAM would allow for large, inexpensive read caches. Accordingly, workloads were expected to be increasingly write-dominated, prompting designs such as LFS that converted slow random writes into fast sequential writes to disk.</p><p>Today, a similar argument can be made for flash instead of RAM. Flash drives have been steadily dropping in price; today, raw flash costs around $1 per GB, and SATA SSDs typically cost $2 per GB. Given this trend, it is tempting to imagine that flash will soon replace disk, or more pragmatically, act as a write cache for disk. Unfortunately, cheaper flash translates into less reliable flash, which in turn translates into limited device lifetime. The two ways of lowering flash cost -decreasing process sizes and cramming more bits per flash cell (i.e., MLC flash) -both result in much higher error rates, straining the ability of hardware ECC to provide disk-like reliability. As a result, lower costs have been accompanied by lower erase cycle thresholds, which determine the lifetime of the device when it is subjected to heavy write workloads. In other words, the cost per GB of flash has dropped, but not the cost per erase cycle; for example, today's MLC drives offer an order of magnitude fewer erase cycles compared to drives made from older SLC technology, while cutting price per GB by 25% to 50%.</p><p>On the other hand, read caches are a more promising use of flash. Unlike primary stores or write caches, read caches do not need to see every update immediately, but instead have leeway in deciding when (and whether) to cache data. For example, a read cache might wait for some time period before caching a newly written block in order for overwrites to be coalesced, extending flash longevity. It could also avoid caching data that's frequently overwritten but rarely read. Crucially, read caches do not need to be durable and hence the lower reliability of flash over time is not as much of a barrier to deployment; all that's required is a reliable mechanism to detect data corruption, which effectively translates into a cache miss.</p><p>Accordingly, our core assumption is nearly identical to that of the original LFS work: larger, effective (flashbased) read caches will result in write-dominated workloads. Unfortunately, simply using LFS under a flashbased read cache doesn't work, because of two key problems. First, as noted earlier, LFS is notorious for its garbage collection woes; GC reads (which are unlikely to be caught by a read cache) can contend with first-class writes, negating the positive effect of logging writes. Second, even a small fraction of random reads sneaking past the cache can interfere with write throughput. In other words, LFS effectively prevents write-write contention but is very susceptible to read-write contention, both from GC reads and first-class reads. Our goal in this paper is to build a log-structured storage design that prevents both write-write as well as read-write contention.</p><p>In addition to caching reads, MLC flash further acts as a catalyst for log-structured designs by providing an inexpensive, durable metadata store. A primary challenge for any log-structured system involves maintaining an index over the log. As a result, log-structured designs are usually found at layers of the stack that already require indices in some form, such as filesystems or databases. Designs at the block-level with a logging component (or indeed, any kind of indirection layer) have historically been hamstrung by seeks on on-disk metadata, or predicated on the availability of battery-backed RAM or NV-RAM <ref type="bibr" target="#b4">[5,</ref><ref type="bibr" target="#b5">6,</ref><ref type="bibr" target="#b24">25]</ref>. Consequently, such designs have been restricted to expensive enterprise storage solutions. By providing an inexpensive means of durably storing an index and accessing it rapidly, MLC flash enables logstructured designs at lower layers of the stack, such as the block device.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Design</head><p>Gecko implements the abstraction of a block device, supporting reads and writes to a linear address space of fixed-size sectors. Underneath, this address space is implemented over a chained log structure, in which a single logical log is chained or concatenated across multiple drives such that the tail of the log and its body are on different drives. A new write to a sector in the address space is sent to the tail of the log; if it's an overwrite, the previous entry in the log for that sector is invalidated or trimmed. As the body of the log gets fragmented due to such overwrites on the address space, it is cleaned so that the freed space can be reused; importantly, this GC activity incurs reads on the body of the chained log, which do not interfere with first-class writes occurring at the tail drive of the log.</p><p>We first present the simplest possible instantiation of chained logging in Gecko, and then describe more sophisticated features. Gecko is implemented as a block device driver, occupying the same slot in the OS stack as software RAID; as with RAID, it can also be implemented in the form of a hardware controller. Gecko maintains an in-memory map (implemented as a simple array) from logical sectors on the supported address space to physical locations on the drives composing the array. In addition, it maintains an inverse map (also a simple array) to find the logical sector that a physical location stores; a special 'blank' value is used to indicate that the physical location does not contain valid data. Also, Gecko maintains two counters -one for the tail of the log and one for the head -each of which indexes into the total physical space available on the disk array.</p><p>When the application issues a read on a logical sector in the address space, the primary map is consulted to determine the corresponding physical location. When the application writes to a logical sector, the tail counter is checked and a write I/O is issued to the corresponding physical location on the tail drive. Both the primary map and the inverse map are then updated to reflect the linkage between the logical sector and the physical location, and the tail counter is incremented.</p><p>In the default form of GC supported by Gecko, data is constantly moved from the head of the chained log to its tail in order to reclaim space; we call this 'move-totail' GC. A cleaning process examines the next physical entry at the head of the log, checks if it is occupied by consulting the inverse map, and if so re-appends it to the tail of the log. It then increments the head and (if the entry was moved) the tail counter.</p><p>The basic system described thus far provides the main benefit of log chains -logging without interference from GC reads -but suffers from other problems. It does not offer tolerance to power failures or to disk failures. While GC writes do not drastically affect first-class writes, they do occur on the same drive as application writes and hence reduce write throughput to some extent. Further, the system is susceptible to contention between application reads and writes: reads to recently written data will go to the tail disk and disrupt first-class writes. Below, we discuss solutions to address these concerns.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Metadata</head><p>The total amount of metadata required by Gecko can easily fit into RAM on modern machines; to support a mirrored 4TB address space of 4KB sectors (i.e., 1 billion sectors) on an 16TB array, we need 4GB for the primary map (1 billion 4-byte entries), 8GB for the inverse map (2 billion 4-byte entries) and two 4-byte counters. However, a RAM-based solution poses the obvious problem of persistence: how do we recover the state of the Gecko address space from power failures?</p><p>One possibility is to store some part of the metadata on an SSD. An obvious candidate is the primary map, which is sufficient to reconstruct both the inverse map and the tail / head counters. Random reads on SSDs are fast enough (at roughly 200 microseconds) to exist comfortably in the critical path of a Gecko read. However, the primary map has very little update locality; a series of Gecko writes can in the worst case be distributed evenly across the entire logical address space. As a result, the metadata SSD is subjected to a workload of random 4-byte writes, which can wear it out very quickly.</p><p>Instead, Gecko provides persistence across power failures by storing the inverse map on an SSD, as shown in <ref type="figure" target="#fig_1">Figure 3</ref>. Each 4KB page on the SSD stores 1024 entries in the physical-to-logical map; we call this a metadata block. Accordingly, the larger log on the address space of the disk array is reflected at much smaller scale (a factor of 1K smaller) on the address space of the SSD. The ith 4-byte entry on the SSD is the logical address stored in the ith physical sector on the disk array. On a brandnew Gecko deployment, each such 4-byte metadata entry on the SSD is set to the 'blank' value, indicating that no valid data exists at that physical location on the array.</p><p>Gecko buffers a small number of metadata pages (in the simplest case, just one page) corresponding to the tail of the log in RAM; accordingly, as first-class writes are issued on the logical address space, these buffered metadata pages are modified in-memory. The metadata pages are flushed to the SSD when all entries in them have been updated, with the important condition that these flushes occur in strict sequential logging order. Correspondingly, Gecko also buffers the metadata pages at the head of the log during GC, which updates metadata entries to point to the 'blank' value. As a result of the flush-in-order condition, at any moment in time the SSD consists of two contiguous segments: one containing 'blank' entries and one with non-'blank' entries. As a result, on recovery from power failure, it is a simple task to reconstruct not only the primary map but also the head and tail counters, since they are simply the beginning and end of the contiguous non-'blank' segment.</p><p>The metadata buffering scheme described above avoids small random writes to the SSD due to the perfect update locality of the inverse map. However, it does in-troduce a window of vulnerability; all buffered metadata is lost on a power failure. A useful property of Gecko's log-structured design is that any such data loss is confined to a recent suffix of the log; in other words, the logical drive supported by Gecko simply reverts to an earlier (but consistent) state. If the application does want to guarantee durability of data, it can issue a 'sync' command to the Gecko block device, which causes Gecko to flush its current metadata page ahead of time to the SSD (and do an overwrite subsequently when the rest of the metadata page is updated). Alternatively, if Gecko is implemented as a hardware controller, battery-backed RAM or supercapacitors can be used to store the metadata pages being actively modified.</p><p>Under normal operation, this solution imposes a gentle, sequential workload on the SSD. The SSD only sees two 4KB page writes (one to change the entry from 'blank' to a valid location, and another to change it back during GC) for every 1024 4KB writes to the Gecko array. One of these writes can be avoided if the SSD supports a persistent trim command <ref type="bibr" target="#b15">[16]</ref>, since metadata blocks at the head can be trimmed instead of changed back to 'blank'. In the example above of a 16TB disk array with a mirrored 4TB address space, an 8GB SSD with 10K erase cycles (which should cost somewhere between $8 and $16 at current flash prices) should be able to support 10K times 8TB of writes, or 80PB of writes.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Caching</head><p>In Gecko the role of caching is multi-fold: to reduce read latencies to data, but also to prevent application reads from interfering with writes (read-write contention). In conventional storage designs, it is difficult to predict which data to cache in order to minimize read-write contention. In contrast, eliminating read-write contention in Gecko is simply a matter of caching the data on the tail drive in the system, thus avoiding any disruption to the write throughput of the array.</p><p>To do so, Gecko uses a combination of RAM and an SSD (this can be a separate volume created on the same SSD used for storing metadata, or a separate SSD). When data is first written to a Gecko volume, it is sent to the tail drive and simultaneously cached in RAM. As a result, if the data is read back immediately, it can be served from RAM without disturbing sequentiality of the tail drive. As the tail drive and RAM cache continue to accept new data, older data is evicted from the RAM cache to the SSD cache in simple FIFO order (taking overwrites on the Gecko logical address space into account), and the SSD cache in turn uses an LRU-based eviction policy.</p><p>This simple caching scheme also prolongs the lifetime of the SSD cache by coalescing overwrites in the RAM cache. It is partly inspired by the technique of using a hard disk as a write cache for an SSD <ref type="bibr" target="#b22">[23]</ref>, and similarly extends the lifetime of the SSD by 2X to 8X.</p><p>Additionally, Gecko can optionally use RAM and SSD (again, another volume on the same SSD or a different drive) as a read cache for the body of the log, with the goal of improving read performance on the body of the log. In the rest of the paper, we use the term 'SSD cache' to refer to the tail cache, unless explicitly specified otherwise.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">Smarter Cleaning</head><p>Thus far, we have described the system as using move-totail GC, a simple cleaning scheme where data is moved in strict log order from the head of the log to its tail. While this scheme ensures that GC reads do not interfere with write throughput, GC writes do impact first-class writes to some extent. In particular, GC writes in move-to-tail GC do not disrupt the sequentiality of the tail drive, but instead take up a proportion of the sequential bandwidth of the drive; in the worst case where every element in the log is valid and has to be re-appended, this proportion can be as high as 50%, since every first-class write is accompanied by a single GC write.</p><p>To prevent GC writes from interfering with first-class writes, Gecko supports a more sophisticated form of GC called 'compact-in-body'. The key observation in compact-in-body is that any valid entry in the body of the log can be moved to any other position that succeeds it in the log without impacting correctness. Accordingly, instead of moving data from the head to the tail, we move it from the head to empty positions in the body of the log.</p><p>The cleaning process for compact-in-body GC is very similar to that of move-to-tail GC. It examines the next physical entry at the head of the log, checks if it is occupied by consulting the inverse physical-to-logical map, and if so, finds a free position in the body of the log between the current head and current tail. It then increments the head counter but leaves the tail counter alone (unless no free positions were found in the body of the log, forcing the update to go to the tail). Finding a free position requires the cleaning process to periodically scan ahead on the inverse map and create a free list of positions. These scans occur on the metadata SSD rather than the disk array and hence do not impact read throughput on the body of the log.</p><p>Compact-in-body has the significant benefit compared to move-to-tail that GC activity is now completely independent of first-class writes. It creates space at the head of the log by moving data to the body of the log rather than its tail, and hence does not use up a proportion of the write bandwidth of the tail drive. In addition, it requires no changes to the metadata or caching schemes described above.</p><p>However, as described, compact-in-body does have one major disadvantage; it randomizes the workload seen by the metadata SSD, since we are moving data from the head to free positions in the log, which could be ran-domly distributed. In practice, the difference in write bandwidth of a Gecko chain running move-to-tail GC versus compact-in-body GC is at most a factor of two, since move-to-tail GC uses up 50% of the tail drive's write bandwidth in the worst case whereas compact-inbody does not use any. Accordingly, we provide users the option of using either form of GC, depending on whether they want to maximize write bandwidth or minimize SSD wear.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.4">Discussion</head><p>Chain Length: As mentioned previously, chained logging is based on the premise that the sequential write throughput of a single, uncontended drive is preferable to the overall throughput of multiple, contention-hit drives. This argument obviously does not scale to a large number of drives; beyond a certain array size, the random write throughput of the entire array will exceed the sequential throughput of a single drive. The shorter the length of the chain, the more likely it is that chained logging will outperform conventional RAID-0 over the same number of drives.</p><p>However, longer chains have other benefits, such as the improved read throughput that results from having multiple disk heads service the body of the log. Another reason for longer chains is that it allows capacity to be added to the physical log. This capacity can be used to either extend the size of the supported address space, or to lower garbage collection stress on the same address space. In practice, we find that chains of two to four drives provide a balance between write throughput, read throughput and capacity.</p><p>Multiple Chains: We expect multiple Gecko chains to be deployed on a single system; for example, a 32-core system with 24 disks might have four mirrored chains of length 3, each serving a set of 8 cores. A single metadata SSD can be shared by all the chains, since the metadata has a simple one-to-one mapping to the physical address space of the entire system. A single cache SSD can be partitioned across chains, with each chain using a 32GB cache.</p><p>On a large system with multiple chains, each chain can be extended or shortened on the fly by moving drives to and from other chains, as the occupancy (and consequently, GC demands) of the supported address space and the read/write ratio of the workload change over time. Read-intensive workloads require more disks to be dedicated to the body of the chain.</p><p>System Cost: The design described thus far requires: an SSD read cache for the tail, an SSD read cache for the body, a metadata SSD, and a few GB of RAM per chain. Consider an array of 30 512GB drives (15TB in total), organized into 5 mirrored chains of length 3. Based on our experience with Gecko, each such chain requires 2GB of RAM, 32GB of flash for the tail cache, 32GB of flash for the body cache, and 1.5GB of flash for metadata; the total for 5 chains is 10GB RAM and around 340GB of flash. At current RAM and flash prices, this amounts to less than $500, a reasonably small fraction of the total cost for such a system.</p><p>Mirroring: As described earlier, a Gecko chain can consist of mirrored drive pairs. Mirroring is very simple to implement; since the drives are paired deterministically and kept perfectly synchronized, none of the Gecko data structures need to be modified. Some benefits of mirroring are obvious, such as fault tolerance against drive failures and higher read throughput. A more subtle point is that Gecko facilitates power saving when used over mirrored drives. Since writes in chained logs only happen at the tail, drives in the body of the log can be powered down as long as one mirror stays awake to serve reads. In a chain consisting of three mirrored pairs, two drives (or a third of the array) can be powered down without affecting data availability. With longer chains, a larger fraction of the array can be powered down.</p><p>Additionally, Gecko can potentially perform decoupled GC on mirrors, allowing one drive to serve firstclass reads while cleaning the other drive. This complicates the metadata structures maintained by Gecko, both in RAM as well as the metadata SSD, since it needs to now maintain state for each drive separately. Due to the increased complexity of this option, we chose not to explore it further.</p><p>Striping: Gecko can also be easily combined with striping, simply by having each drive in the chain be a striped RAID-0 volume. This allows a single Gecko address space to scale to larger numbers of drives. One implication of striping is that the tail drive(s) now have much greater capacity and may require proportionally larger SSD caches to prevent reads from impacting them. Other RAID variants such as RAID-5 and RAID-6 can be layered in similar fashion under Gecko without any change to the system design.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Evaluation</head><p>We have implemented Gecko as a device driver in Linux that exposes a block device to applications. This device driver implements move-to-tail GC and a simplistic form of persistence involving checkpointing all metadata to an SSD every few minutes. In addition, we also implemented a user-space emulator to test the more involved aspects of Gecko, such as the metadata logging design for persistence described in Section 3.1, compactin-body GC, and different caching policies. All our experiments were conducted on a system with a 12-core Intel Xeon processor, 24GB RAM, 15 10K RPM drives of 600GB each, and a single 120GB SSD.   <ref type="figure">Figure 4</ref>: Gecko (Top) offers steady, high application throughput (60MB/s or 15K IOPS) for a random write workload during GC with a 50% trim pattern (Left) and a 0% trim pattern (Right). Log-structured RAID-0 (Bottom) suffers application throughput collapse to 10MB/s for 50% trims (Left) and provides 40MB/s for 0% trims.</p><p>Our main baseline for comparison is a conventional log layered over either RAID-0 or RAID-10 (which we call log-structured RAID-0 / RAID-10), comparable respectively to the non-mirrored and mirrored Gecko deployments. For instance, an array of six drives may be configured as a 3-drive Gecko chain, where each drive is mirrored; for this, the comparison point would be a log-structured RAID-10 volume with three stripes, each of which is mirrored. To implement this log-structured RAID design, we treat the entire array as a single RAID-0 or RAID-10 volume and then run a single-drive Gecko chain over it; this ensures that we use identical, optimized code bases for both Gecko and the baseline. When appropriate, we also report numbers on in-place (as opposed to log-structured) RAID-0, though most of our workloads have enough random I/O that in-place RAID-0 only offers a few MB/s and is not competitive.</p><p>Our evaluation focuses on three aspects of Gecko. First, we show that a Gecko chain implementing moveto-tail GC is capable at operating at high, stable write throughput even during periods of high GC activity under an adversarial workload, whereas the write throughput of log-structured RAID-0 drops drastically. This validates our claim that Gecko write throughput does not suffer from contention with GC reads. Second, we show that our RAM+SSD caching policies are capable of eliminating almost all first-class reads from the tail drive for a majority of tested workloads, while preserving the lifetime of the SSD cache. Thus, we show that Gecko write throughput does not suffer from contention between application reads. Finally, we play back real traces on a Gecko deployment and show that Gecko offers higher write throughput as well as higher read throughput compared to log-structured RAID-10.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">Write Throughput with GC</head><p>To show that Gecko can sustain high write throughput despite concurrent GC, we ran a synthetic workload of random writes from multiple processes over the block address space exposed by the Gecko in-kernel implementation. In this experiment, we used a 2-drive, nonmirrored Gecko chain and a conventional log layered over 2-drive RAID-0. Midway through the workload, we turned on GC for Gecko and measured the resulting drop in total and application throughput. For the logstructured RAID-0, we triggered GC for the same time period as Gecko. <ref type="figure">Figure 4</ref> (Top) shows Gecko throughput for different trim patterns in the body of the log; e.g., a trim pattern with 50% valid data has half the blocks in the body of the log marked as invalid, while the other half is valid and has to be moved by GC to the tail.</p><p>As shown in the figure, Gecko throughput remains high and steady during GC activity, while application throughput drops proportionally to accommodate GC writes. We trigger GC to clear a fixed amount of physical space in the log; as a result, the 50% trim pattern (Top Left) has a GC valley that is approximately half as wide as that of the 0% trim pattern (Top, Right), since it moves exactly half the amount of data. The two different trim patterns on the body of the log do not impact Gecko write throughput in any way, showing that the strategy of decoupling the tail of the log from its body succeeds in shielding write throughput from GC read activity.</p><p>In contrast, the log-structured RAID-0 in <ref type="figure">Figure 4</ref> (Bottom) performs very poorly when GC is turned on for <ref type="table">0  20  40  60  80  100  120  140  160  180</ref> No GC</p><p>MtT GC CiB GC App Throughput (MB/s) <ref type="figure">Figure 5</ref>: With compact-in-body GC (CiB), a log chain of length 2 achieves 120MB/s application throughput on random writes with concurrent GC on 50% trims. the 50% trim pattern; throughput collapses drastically to the 10MB/s mark. Counter-intuitively, it performs better for 0% trim pattern; even though more data has to be moved in this pattern, the GC reads to the drive are sequential, causing less disruption to the write throughput of the array. An important point is that Gecko cleans 2X to 3X the physical space compare to log-structured RAID-0 in the same time period: the top Gecko graphs show almost 4GB of log space being reclaimed while the bottom log-structured RAID-0 graphs show reclamation of approximately 1.5 GB of log space in a 40 second (Left) and 60 second (Right) period. One point to note is that Gecko does suffer from a drop in application throughput, or goodput, due to GC. In the worst case where all data is valid and has to be moved (shown in the top right <ref type="figure">figure)</ref>, application throughput can drop by exactly half. This represents a lower bound on application throughput, since in the worst case every new write requires a single GC write to clear up space in the physical log. Accordingly, Gecko application throughput is bounded between 60MB/s (half the sequential bandwidth of a single drive) and 120MB/s (the full sequential bandwidth of a drive), with the exact performance depending on the size of the supported logical address space, as well as the pattern of overwrites observed by it. Not shown in the figure is in-place RAID-0, which provided only a few MB/s under this random writes workload, as expected.</p><p>Next, we ran the Gecko emulator in compact-in-body mode as well as move-to-tail mode for a random write workload with a 50% trim pattern. <ref type="figure">Figure 5</ref> shows that compact-in-body GC allows application writes to proceed at the full sequential speed of the tail drive during GC activity. As discussed previously, this performance benefit comes at the cost of erase cycles on the metadata SSD; accordingly, we do not explore compact-in-body GC further.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Caching the tail</head><p>Having established that Gecko provides high write throughput in the presence of GC activity, we now fo-  <ref type="table">Table 1</ref>: Workload Combinations: from 9 raw traces, we can compose 8 8-trace combinations and 13 4-trace combinations that write at least 512GB of data.</p><p>cus on contention between first-class reads and writes. We show that Gecko can effectively cache data on the tail drive in order to prevent contention between firstclass reads and writes. In these experiments, we use block-level traces taken from the SNIA repository <ref type="bibr" target="#b0">[1]</ref>; specifically, we use the Microsoft Enterprise, Microsoft Production Server and MSR Cambridge trace sets. Running these traces directly over Gecko is unrealistic, since they were collected on non-virtualized systems. Instead, we run workload combinations by interleaving I/Os from sets of either 4 or 8 traces, to emulate a system running different workloads within separate virtual machines. We play each trace within its own virtual address space and concatenate each of these together to obtain a single logical address space.</p><p>To study the effectiveness of Gecko's tail caching, we ran multiple such workload combinations over our userspace Gecko emulator, starting with an empty tail drive. We then measured the hit rate of Gecko's hybrid cache consisting of 2GB of RAM and a 32GB SSD. Recall that new writes in Gecko go to the tail drive and are simultaneously cached in RAM, and subsequently evicted from RAM to the SSD. A cache hit is when data that resides on the tail drive is also found in either RAM or the SSD; conversely, a cache miss occurs when data that resides in the tail drive is not found in RAM or the SSD, necessitating a read from the tail drive. Note that any read to data that does not exist on the tail drive is ignored in this particular experiment, since it will be serviced by the body of the log without causing read-write contention.</p><p>To avoid overstating cache hit rates, we needed each workload combination to write at least 512GB (i.e., the size of the tail drive); as we show later, cache hit rates are very high as we start writing to the tail drive, but drop as it fills up. From the 21 SNIA traces, we found 8 8-trace combinations that lasted at least 512GB (which we number 0 to 7), and 13 4-trace combinations that lasted at least 512GB (which we number 8 to 20), for a total of 21 workload combinations of at least 512GB each. These workload combinations used 9 of the 21 raw SNIA traces, as shown in <ref type="table">Table 1</ref>; the remaining 12 raw traces did not have enough writes to be useful for this caching analysis. <ref type="figure">Figure 6</ref> shows cache hit rates -for just the 2GB RAM cache as well as for the combined 2GB+32GB RAM+SSD cache -for these 21 workload combinations, measured over the time that the 512GB tail drive is filled. The hit rate is over 86% for all tested combinations, over 90% for 13 of them, and over 95% for 6 of them. This graph validates a key assumption of Gecko: the tail drive of a chained log can be cached effectively, preventing application reads from disrupting the sequential write throughput of the log.</p><p>Next, we measured how the cache hit rate changes over time as the tail drive fills up. <ref type="figure">Figure 7</ref> shows the average hit rate across the 21 workload combinations for the RAM+SSD cache, in each consecutive 100GB interval on the tail drive (the error bars denote the min and the max across the workload combinations). The hit rate is extremely high for the first 100GB of data, as the total amount of data on the tail drive is not much bigger than the cache. As expected, the hit rate dips as more data is stored on the tail. Note that <ref type="figure">Figure 6</ref> previously showed the cumulative hit rate over 512GB of writes, whereas this figure shows the hit rate for each 100GB interval separately.</p><p>We claimed earlier that Gecko's two-tier RAM+SSD caching scheme could prolong the lifetime of the SSD compared to an SSD-only cache by coalescing overwrites in RAM. Following the methodology in <ref type="bibr" target="#b22">[23]</ref>, we calculate the lifetime of an SSD by assuming a one-toone ratio between page writes sent to the SSD and erase cycles used per page, and assuming that the SSD supports 10,000 block erase cycles. Under these assumptions, a constant 40MB/s workload will wear out a 32GB SSD in approximately 3 months; accordingly, this would be the lifetime of a conventional SSD-based write or read cache if the system were written to continuously at 40MB/s. By using a RAM+SSD read cache and coalescing overwrites in RAM, we decrease the number of writes going to the SSD by a factor of 2X to 8X for different workload combinations. In <ref type="figure" target="#fig_4">Figure 8</ref>, we plot the number of days the SSD lasts with write coalescing, under the assumptions previously stated. For some workload combinations, we are able to stretch out the SSD lifetime to over two years even at this high 40MB/s update rate; for all of them, we at least double the SSD lifetime. A simple linear relationship exists between these numbers and the average data rate of the system; at 20MB/s, for instance, the SSD will last twice as long. Alternatively, we can use larger capacity SSDs to extend the SSD replacement cycle: e.g. with a 64GB SSD, the cycle can double if one uses the first half until it wears out and then uses the other half.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.3">Gecko Performance for Real Workloads</head><p>To show that effective tail-caching results in better performance, we played two 8-trace combinations -specifically, the ones with the highest and lowest cache hit rates -over the Gecko implementation. In this experiment, we played each trace combination as fast possible, issuing the appropriate I/Os to either the SSD cache or disk. We used a single outstanding I/O queue of size 24 for each trace in the combination, shared by reads and writes.</p><p>For Gecko, we used a 3-drive mirrored chain with a 2GB RAM + 32GB SSD tail cache and a separate 32GB SSD cache for the body of the log. For comparison, we used a conventional log over a 6-drive RAID-10 volume with a single unified cache for the entire array, consisting of 2GB RAM and 64GB SSD.</p><p>In the experiment, we played the trace combination forward until 200GB of the tail was filled before taking measurements, to ensure that we obtained average caching performance on the tail. Reads on logical addresses that had not yet been written were directed to random locations on the body of the log. <ref type="figure" target="#fig_5">Figure 9</ref> shows the total read plus write throughput of the system as well as just write throughput over a 120 second period. On top we show the highly cacheable workload combination; on bottom we show the less cacheable one. On the left we show Gecko performance, while on the right we show the performance of logstructured RAID-10. No GC activity was triggered concurrently, in order to isolate the impact of first-class reads on performance.</p><p>At a basic level, it's clear that Gecko outperforms logstructured RAID-10 by 2X to 3X on both workloads. Gecko offers lower write performance than expected, since write throughput is not pegged at 120MB/s; this is an artefact of our trace playback process, since our fixedsize window of I/Os ends up clogged with the slower reads on the body of the log, preventing new writes from being issued. Surprisingly, Gecko offers much better read performance than log-structured RAID-10, again by a factor of 2X to 3X; in effect, separating reads and writes has a positive effect on reads, which do not have to contend with write traffic anymore. Especially, all fresh reads that are not cached from recent writes contend with writes in both cache and disks for log-structured RAID-10 and this significantly lowers the throughput for both reads and writes. An interesting point is that both workloads are highly cacheable for reads; our classification of these workloads as highly cacheable and less cacheable was based on the cacheability of the tail drive, which does not seem to correlate to the cacheability of the body.</p><p>To test the performance under GC, we triggered moveto-tail GC in the same setup as in <ref type="figure" target="#fig_5">Figure 9</ref> with 700GB of data pre-filled. Approximately 75% of data was trimmed for both workloads and the average total throughputs of Gecko dropped to 65MB/s and 62MB/s for highly and less cacheable workloads respectively due to contention between first-class reads and GC reads. However, Gecko still outperformed log-structured RAID-10 performing GC by over 2X to 3X. The average application throughputs of Gecko were 33MB/s and 27MB/s whereas those of log-structured RAID-10 were 13MB/s and 12MB/s for the respective workloads.</p><p>Finally, we plot the impact of chain length on throughput in <ref type="figure">Figure 10</ref>. We run the highly cacheable workload from the previous experiments on Gecko and logstructured RAID-0, measuring read and write throughput while increasing the number of drives used without GC. In Gecko, more drives in the array translates into more drives in the body of the chain, while for logstructured RAID-0 it provides more disks to stripe over. As the graph shows, a single Gecko chain outperforms log-structured RAID-0 for both reads and writes even on a 7-disk array. Essentially, two key principles in the Figure 10: A Gecko chain outperforms log-structured RAID-0 even on 7 drives: one uncontended disk for writes is better than many contention-prone disks.</p><p>Gecko design continue to hold even for long chains: a single uncontended disk arm is better for write performance than multiple contended disk arms; and segregating reads from writes enables better read performance.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Related Work</head><p>Log-structured storage has a long and interesting history, starting with the original LFS paper <ref type="bibr" target="#b17">[18]</ref>. Much of the work on LFS in the 90s focused on its shortcomings related to garbage collection <ref type="bibr" target="#b19">[20,</ref><ref type="bibr" target="#b12">13,</ref><ref type="bibr" target="#b20">21]</ref>. Other work, such as Zebra <ref type="bibr" target="#b10">[11]</ref>, extended LFS-like designs to distributed storage systems. Attempts to distribute logs focused entirely on striping logs over multiple drives, as opposed to the chained log design we present.</p><p>More recently, contention in data centers has received increasing attention. Lithium <ref type="bibr" target="#b9">[10]</ref> uses a single on-disk log structure to support multiple VMs, much as Gecko does, but layers this log conventionally over RAID and does not offer any new solutions to the problem of readwrite contention. The authors do make two relevant points: first, that replicated workloads are even more likely to be write-dominated, and second, that the inability of log-structured designs to efficiently service large, sequential reads is unlikely to matter in virtualized settings where such reads are rare due to cross-VM interference. Parallax <ref type="bibr" target="#b14">[15]</ref> supports large numbers of virtual disks over a shared block device, but focuses on features such as frequent snapshots rather than performance under contention. PARDA <ref type="bibr" target="#b6">[7]</ref> is a system that provides fair sharing of a storage array across multiple VMs, but does not focus as we do on improving aggregate throughput under contention.</p><p>Log-structured designs have made a strong comeback in recent years. One reason is the emergence of flash, which requires a log-structured design to minimize wearout. Not only do individual SSDs layer an address space over a log, but filesystems designed to run over SSDs are often log-structured to minimize the stress on the SSD's internal mapping mechanisms <ref type="bibr" target="#b1">[2]</ref>. New log-structured designs have emerged as flash becomes mainstream; for instance, <ref type="bibr" target="#b2">[3]</ref> uses an off-path sequencer to implement a distributed, shared log over a flash cluster. Another reason for the return of log-structured designs is the increased prevalence of geo-distributed systems, where the intrinsic ordering properties of logs provide consistencyrelated benefits <ref type="bibr" target="#b23">[24]</ref>.</p><p>Gecko is inspired heavily by a long line of blocklevel storage designs, starting with RAID <ref type="bibr" target="#b16">[17]</ref>. Such designs typically introduced a layer of indirection at the block level for higher reliability and better performance; for instance, the Logical Disk <ref type="bibr" target="#b5">[6]</ref> implemented a log-structured design at the block level for better performance. Log-structured arrays <ref type="bibr" target="#b13">[14]</ref> layered a log-structured design over a RAID-5 array. HP AutoRAID <ref type="bibr" target="#b24">[25]</ref> switched dynamically between RAID-1 and RAID-5 for hot and cold data, respectively. Petal <ref type="bibr" target="#b11">[12]</ref> extended this design to a distributed setting, maintaining an indirection map that could support arbitrary mappings between a logical address space and physical disks. Such systems typically used battery-backed RAM for persisting block-level metadata <ref type="bibr" target="#b18">[19,</ref><ref type="bibr" target="#b13">14]</ref>. While Gecko is similar to these systems in philosophy, it benefits from the ready availability of commodity flash for achieving persistence, but consequently has to work around the wearrelated limitations of flash. Finally, we explored this design previously in a workshop paper, without a working system or evaluation <ref type="bibr" target="#b21">[22]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Conclusion</head><p>A number of factors herald a second coming for logstructured storage designs: the emergence of cloud computing, the prevalence of many-core machines, and the availability of flash-based read caches. Log-structured designs have the potential to be a panacea for storage contention in the cloud; however, they continue to be plagued by the cleaning-related performance issues that held back widespread deployment in the 90s. Gecko attempts to solve this long-standing problem by separating the tail of the log from its body, thus isolating cleaning activity completely from application writes. A dedicated cache for the tail drive prevents first-class reads from interfering with writes. Using these mechanisms, Gecko offers the benefits of a log-structured design without its drawbacks, presenting system designers with a contention-oblivious storage option in the cloud.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: Throughput of 4-disk RAID-0 storage under N sequential writers + 1 random writer.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: Metadata persistence in Gecko: mapping from physical to logical addresses is stored on flash, with actively modified head and tail metadata buffered in RAM.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 6 :Figure 7 :</head><label>67</label><figDesc>Figure 6: Effectiveness of tail caching on different workload combinations with a 2GB RAM + 32GB SSD cache. The hit rate is over 86% for all 21 combinations, over 90% for 13, and over 95% for 6.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_4"><head>Figure 8 :</head><label>8</label><figDesc>Figure 8: Gecko's hybrid caching scheme for its tail drives increases the lifetime of the SSD read cache by at least 2X for all 21 workload combinations, and by more than 4X for 13 combinations.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_5"><head>Figure 9 :</head><label>9</label><figDesc>Figure 9: Gecko (Left) offers 2X to 3X higher throughput than log-structured RAID-10 (Right) on a highly cacheable (Top) and less cacheable (Bottom) workload combination for writes as well as reads.</figDesc></figure>
+
+			<note place="foot" n="292"> 11th USENIX Conference on File and Storage Technologies (FAST &apos;13) USENIX Association</note>
+
+			<note place="foot" n="294"> 11th USENIX Conference on File and Storage Technologies (FAST &apos;13) USENIX Association</note>
+
+			<note place="foot" n="296"> 11th USENIX Conference on File and Storage Technologies (FAST &apos;13) USENIX Association</note>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgements</head><p>This work was partially funded and supported by a NetApp Faculty Fellowship and IBM Faculty Award received by Hakim Weatherspoon, DARPA (D11AP00266) and NSF <ref type="bibr">(1053757,</ref><ref type="bibr">0424422,</ref><ref type="bibr">1040689,</ref><ref type="bibr">1151268,</ref><ref type="bibr">1047540)</ref>. We would like to thank our shepherd, Kiran-Kumar Muniswamy-Reddy, and the anonymous reviewers for their comments.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Snia Iotta Repository</surname></persName>
+		</author>
+		<ptr target="http://iotta.snia.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Design Tradeoffs for SSD Performance</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Agrawal</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Prabhakaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Wobber</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Davis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Manasse</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Panigrahy</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of USENIX Annual Technical Conference</title>
+		<meeting>USENIX Annual Technical Conference</meeting>
+		<imprint>
+			<date type="published" when="2008" />
+			<biblScope unit="page" from="57" to="70" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">CORFU: A Shared Log Design for Flash Clusters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Balakrishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Malkhi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Prabhakaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Wobber</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Wei</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Davis</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of USENIX Symposium on Networked Systems Design and Implementation</title>
+		<meeting>USENIX Symposium on Networked Systems Design and Implementation</meeting>
+		<imprint>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="1" to="14" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Windows Azure Storage: A Highly Available Cloud Storage Service with Strong Consistency</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Calder</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Ogus</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Nilakantan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Skjolsvold</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Mckelvie</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Srivas-Tav</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Wu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Simitci</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">T</forename><surname>Al</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of ACM Symposium on Operating Systems Principles</title>
+		<meeting>ACM Symposium on Operating Systems Principles</meeting>
+		<imprint>
+			<date type="published" when="2011" />
+			<biblScope unit="page" from="143" to="157" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+		<title level="m" type="main">Mime: A High Performance Parallel Storage Device with Strong Recovery Guarantees</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chao</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>English</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Jacobson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Stepanov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wilkes</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+		<idno>HPL-CSP-92-9</idno>
+		<imprint>
+			<date type="published" when="1992" />
+		</imprint>
+	</monogr>
+<note type="report_type">Tech. rep., HP Labs Technical Report</note>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">The Logical Disk: A New Approach to Improving File Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>De Jonge</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Kaashoek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hsieh</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM SIGOPS Operating Systems Review</title>
+		<imprint>
+			<biblScope unit="volume">27</biblScope>
+			<biblScope unit="page" from="15" to="28" />
+			<date type="published" when="1993" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">PARDA: Proportional Allocation of Resources for Distributed Storage Access</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gulati</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Ahmad</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Waldspurger</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proccedings of USENIX Conference on File and Storage Technologies</title>
+		<meeting>cedings of USENIX Conference on File and Storage Technologies</meeting>
+		<imprint>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="85" to="98" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Storage Workload Characterization and Consolidation in Virtualized Environments</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gulati</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Kumar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ahmad</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Workshop on Virtualization Performance: Analysis, Characterization, and Tools</title>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Online Storage Performance Management in Virtualized Datacenters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gulati</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Shanmuganathan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Ahmad</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Waldspurger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Uysal</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Pesto</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM Symposium on Cloud Computing</title>
+		<meeting>the ACM Symposium on Cloud Computing</meeting>
+		<imprint>
+			<date type="published" when="2011" />
+			<biblScope unit="page">19</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Lithium: Virtual Machine Storage for the Cloud</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hansen</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jul</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM Symposium on Cloud Computing</title>
+		<meeting>the ACM Symposium on Cloud Computing</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="15" to="26" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">The Zebra Striped Network File System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hartman</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ousterhout</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Computer Systems</title>
+		<imprint>
+			<biblScope unit="volume">13</biblScope>
+			<biblScope unit="page" from="274" to="310" />
+			<date type="published" when="1995" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Petal: Distributed Virtual Disks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lee</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thekkath</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM SIGOPS Operating Systems Review</title>
+		<imprint>
+			<biblScope unit="volume">30</biblScope>
+			<biblScope unit="page" from="84" to="92" />
+			<date type="published" when="1996" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Improving the Performance of Log-Structured File Systems with Adaptive Methods</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matthews</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Roselli</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Costello</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Anderson</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM Symposium on Operating System Principles</title>
+		<meeting>the ACM Symposium on Operating System Principles</meeting>
+		<imprint>
+			<date type="published" when="1997" />
+			<biblScope unit="page" from="238" to="251" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">A Performance Comparison of RAID-5 and Log-Structured Arrays</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Menon</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of IEEE International Symposium on High Performance Distributed Computing</title>
+		<meeting>IEEE International Symposium on High Performance Distributed Computing</meeting>
+		<imprint>
+			<date type="published" when="1995" />
+			<biblScope unit="page" from="167" to="178" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Virtual Disks for Virtual Machines</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Meyer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Aggarwal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Cully</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Lefebvre</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Feeley</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Hutchinson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Warfield</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Parallax</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of European Conference on Computer Systems</title>
+		<meeting>European Conference on Computer Systems</meeting>
+		<imprint>
+			<date type="published" when="2008" />
+			<biblScope unit="page" from="41" to="54" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Exposing New FTL Primitives to Applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nellans</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Zappe</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Axboe</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Flynn</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Annual Non-Volatile Memories Workshop</title>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+	<note>ptrim ()+ exists</note>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">A Case for Redundant Arrays of Inexpensive Disks (RAID)</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Patterson</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">A</forename><surname>Gibson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Katz</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">H</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM SIGMOD International Conference on Management of Data</title>
+		<meeting>the ACM SIGMOD International Conference on Management of Data</meeting>
+		<imprint>
+			<date type="published" when="1988" />
+			<biblScope unit="page" from="109" to="116" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">The Design and Implementation of a Log-Structured File System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rosenblum</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ousterhout</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">K</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transaction on Computer Systems</title>
+		<imprint>
+			<biblScope unit="volume">10</biblScope>
+			<biblScope unit="page" from="26" to="52" />
+			<date type="published" when="1992" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">AFRAID: A Frequently Redundant Array of Independent Disks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Savage</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wilkes</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of USENIX Annual Technical Conference</title>
+		<meeting>USENIX Annual Technical Conference</meeting>
+		<imprint>
+			<date type="published" when="1996" />
+			<biblScope unit="page" from="3" to="3" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">An Implementation of a Log-Structured File System for UNIX</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Seltzer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Bostic</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Mckusick</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Staelin</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Winter 1993 Conference</title>
+		<meeting>the USENIX Winter 1993 Conference</meeting>
+		<imprint>
+			<date type="published" when="1993" />
+			<biblScope unit="page" from="3" to="3" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">File System Logging Versus Clustering: A Performance Comparison</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Seltzer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Smith</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Balakrishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Chang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Mcmains</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Padmanabhan</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of USENIX Annual Technical Conference</title>
+		<meeting>USENIX Annual Technical Conference</meeting>
+		<imprint>
+			<date type="published" when="1995" />
+			<biblScope unit="page" from="21" to="21" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">A Contension-Oblivious Design for Cloud Storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shin</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J.-Y</forename><surname>Balakrishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Ganesh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Mar-Ian</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Weatherspoon</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Gecko</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX Workshop on Hot Topics in Storage and File Systems</title>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Extending SSD Lifetimes with Disk-Based Write Caches</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Soundararajan</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Prabhakaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Balakr-Ishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wobber</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of USENIX Conference on File and Storage Technologies</title>
+		<meeting>USENIX Conference on File and Storage Technologies</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="8" to="8" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Antiquity: Exploiting a Secure Log for Wide-Area Distributed Storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Weatherspoon</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Eaton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Chun</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>And Ku-Biatowicz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM SIGOPS Operating Systems Review</title>
+		<imprint>
+			<biblScope unit="volume">41</biblScope>
+			<biblScope unit="page" from="371" to="384" />
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">The HP AutoRAID hierarchical storage system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wilkes</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Golding</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Staelin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sulli-Van</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Computer Systems</title>
+		<imprint>
+			<biblScope unit="volume">14</biblScope>
+			<biblScope unit="page" from="108" to="136" />
+			<date type="published" when="1996" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

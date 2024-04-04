@@ -1,0 +1,781 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:57+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Jungle: Towards Dynamically Adjustable Key-Value Store by Combining LSM-Tree and Copy-On-Write B + -Tree</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jung-Sang</forename><forename type="middle">Ahn</forename><surname>Mohiuddin</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">eBay Inc</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Abdul</forename><surname>Qader</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">eBay Inc</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Woon-Hak</forename><surname>Kang</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">eBay Inc</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hieu</forename><surname>Nguyen</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">eBay Inc</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Guogen</forename><surname>Zhang</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">eBay Inc</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sami</forename><surname>Ben-Romdhane</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">eBay Inc</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Jungle: Towards Dynamically Adjustable Key-Value Store by Combining LSM-Tree and Copy-On-Write B + -Tree</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Designing key-value stores based on log-structured merge-tree (LSM-tree) encounters a well-known trade-off between the I/O cost of update and that of lookup as well as of space usage. It is generally believed that they cannot be improved at the same time; reducing update cost will increase lookup cost and space usage, and vice versa. Recent works have been addressing this issue, but they focus on probabilistic approaches or reducing amortized cost only, which may not be helpful for tail latency that is critical to server applications. This paper suggests a novel approach that transplants copy-on-write B +-tree into LSM-tree, aiming at reducing update cost without sacrificing lookup cost. In addition to that, our scheme provides a simple and practical way to adjust the index between update-optimized form and space-optimized form. The evaluation results show that it significantly reduces update cost with consistent lookup cost.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Lots of modern key-value stores use LSM-tree <ref type="bibr" target="#b16">[17]</ref> due to its high write throughput and acceptable read performance. It is commonly implemented as a leveled index structure, where each level consists of multiple sorted runs (a.k.a. sorted string tables -SSTables <ref type="bibr" target="#b6">[7]</ref>). Incoming updates are buffered in memory and then merged into sorted runs at the topmost level. There is a capacity limit of each level, and the limit increases exponentially over levels. Once a level becomes full, some sorted runs in that level are merged (or compacted) into the overlapping sorted runs in the next level. Since all disk I/Os during merge are fully sequential, LSM-tree has much better write performance than B + -tree.</p><p>However, the amount of actual writes for a single merge operation is huge compared to the size of actual data to be merged, as all affected sorted runs in the next level are rewritten in an out-of-place update manner. As merge keeps happening throughout the entire lifetime of LSM-tree, the cost of merge has a great impact on not only the amount of disk I/O but also CPU usage. One of recent optimizations for reducing merge overhead is tiering <ref type="bibr" target="#b9">[10,</ref><ref type="bibr" target="#b10">11,</ref><ref type="bibr" target="#b14">15,</ref><ref type="bibr" target="#b19">19]</ref>, which defers merging and instead maintains a stack of multiple sorted runs for the same key range in the same level. Since it does not rewrite existing sorted runs, we can reduce the overall update cost. Instead, the space occupied by the index will increase as much as deferred merges, since there will be duplicate sorted runs for the same key range. Moreover, lookup cost also increases due to visiting more sorted runs to find the given key. As a result, it introduces a three-dimensional relationship between update cost, lookup cost, and space cost <ref type="bibr" target="#b3">[4,</ref><ref type="bibr" target="#b4">5]</ref>.</p><p>To moderate update cost without degrading lookup cost, this paper suggests a new LSM-tree approach Jungle, which replaces each sorted run with copy-on-write (CoW) B + -tree <ref type="bibr" target="#b5">[6,</ref><ref type="bibr" target="#b7">8,</ref><ref type="bibr" target="#b8">9,</ref><ref type="bibr" target="#b12">13,</ref><ref type="bibr" target="#b20">20]</ref> that stores keys and values separately <ref type="bibr" target="#b1">[2,</ref><ref type="bibr" target="#b2">3,</ref><ref type="bibr" target="#b13">14]</ref>. When a new write batch of key-value pairs comes in, Jungle sorts it by the key, appends the values to the end of the B + -tree file, and then appends the updated nodes which store only the keys and references to their values. Separating keys and values is an important enabler for our target use cases, where values are much larger than keys.</p><p>Since multiple batches are accumulated in a chronological order, Jungle has many similarities to the stack of sorted runs in tiering. The biggest difference from existing tiering is the fact that the lookup cost of CoW B + -tree is not affected by the number of batches (i.e., sorted runs) appended to the tree; we do not need to visit multiple sorted runs for a single lookup. It makes tiering more flexible so that we can break free from the limit on the number of sorted runs in a stack.</p><p>Due to its append-only characteristics, CoW B + -tree requires periodic compaction task which merges all appended batches and then rewrites the entire B + -tree in a sorted order. By adjusting the frequency of this compaction, we can easily tune LSM-tree; if compaction happens less frequently, CoW B + -tree will have more batches so that overall update cost will decrease, but instead it will have increased space cost. More frequent compaction will reduce the space cost but the update cost will be close to that of the original LSM-tree. Note that lookup cost will remain almost the same regardless of the frequency. The experimental results show that Jungle can adjust update cost and space cost according to compaction frequency, without sacrificing the lookup cost.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Background 2.1 LSM-Tree Merge and Trade-Offs</head><p>The basic LSM-tree merge operation is commonly referred to as leveling, as described in <ref type="figure" target="#fig_0">Figure 1</ref>(a). Each box indicates a sorted run, and the number in the box denotes its key range. L0, L1, and L2 mean each level, and boxes in red and green background represent sorted runs to be merged and sorted runs as a result of merge, respectively. Once a level becomes full, it picks a victim sorted run in that level (i.e., 0-50 in L1), and then finds all sorted runs in the next level whose key range is overlapping (i.e., 0-27 and 28-52 in L2). After doing merge sort, new sorted runs are written in the next level and the previous sorted runs in each level are removed. There is a size limit of a single sorted run, and a sorted run that exceeds the size limit needs to be split. Hence, the next level may have more sorted runs after merge due to the increased number of keys. Since it rewrites all overlapping sorted runs in the next level, the ratio between the size of original data to be merged and the amount of data actually written, called write amplification, will be proportional to the size ratio between each level. If the size of level l + 1 is T times bigger than that of level l, the write amplification of a merge operation will be T , when keys are uniformly distributed. <ref type="figure" target="#fig_0">Figure 1</ref>(b) represents tiering merge. Outer box indicates a stack of sorted runs within the same key range. The upper run is newer than lower runs, and they can have duplicate keys. There is a limit of the number of runs in a stack, and maintained up to T runs. When a stack becomes full, T runs in the victim stack (i.e., 0-39 and 5-50) are merged, split, and then added to stacks in the next level (i.e., 0-26 and 30-50). Since it does not rewrite existing runs in the next level, the write amplification of a merge operation gets much smaller. Instead, the ratio between the space occupied by the entire index and the actual live data size, called space amplification, will be increased up to T times more than that of leveling, and lookup cost will be up to T times worse as well.</p><p>Modern LSM-trees improve lookup performance by maintaining a Bloom filter <ref type="bibr" target="#b14">[15,</ref><ref type="bibr" target="#b15">16]</ref> which is used to quickly reduce the set of sorted runs that need to be examined during a lookup.  Bloom filters can return false positives, so the tail latencies such as the 99-th or the 99.9-th percentiles are still influenced by the number of levels and stack sizes.</p><formula xml:id="formula_0">A' C' E' A B C D E F D E F B C A A B C D E F D E F B C A E' C' A</formula></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">Copy-On-Write B + -Tree</head><p>Copy-on-write (or append-only) B + -tree is a variant of B + -tree which handles incoming updates in an out-of-place update manner, as illustrated in <ref type="figure" target="#fig_1">Figure 2</ref>(a). Once a node E is updated, the modified new node E' is appended to the end of the file instead of overwriting E. Since the location of the node has been changed, the update should be cascaded from leaf to root. As a result, its parent nodes C and A are also updated to C' and A', respectively.</p><p>Since appending all nodes from leaf to root for every keyvalue update is too expensive, CoW B + -trees usually append updates in batch, which reduces write amplification a lot. A common optimization to decrease write amplification further is decoupling values from B + -tree leaf nodes <ref type="bibr" target="#b1">[2,</ref><ref type="bibr" target="#b2">3]</ref>: append the contents of values outside the B + -tree node first, and put the pairs of key and reference to its value (i.e., byte offset) into leaf node, as shown in <ref type="figure" target="#fig_1">Figure 2</ref>(b). If 1) each write batch contains enough number of key-value pairs and 2) the sizes of values are sufficiently bigger than keys, the additional cost of copying B + -tree nodes will be small compared to the cost of appending the entire write batch.</p><p>Once the space usage of data referred to by CoW B + -tree exceeds a certain threshold, it triggers a compaction task which iterates the tree in a key order, copies latest key-value 3 Jungle: Planting LSM-Tree and Copy-OnWrite B + -Tree Together</p><p>To address the goals outlined in the introduction, we propose Jungle, which is a hybrid LSM-tree approach where sorted runs are replaced by CoW B + -trees. Since a CoW B + -tree can contain multiple write batches in a chronological order, it shares a number of common features with a stack of sorted runs in tiering, if all write batches are locally sorted. Hence, Jungle can be treated as a variant of tiering merge as described in <ref type="figure" target="#fig_2">Figure 3</ref>. Each CoW B + -tree in Jungle is corresponding to the stack of sorted runs in tiering LSM-tree, where each sorted run in a stack matches up with each write batch in a CoW B + -tree. One big benefit of using CoW B + -tree is lookup cost. In tiering LSM-tree, the lookup cost is roughly proportional to the size of stack (i.e., the number of sorted runs in a stack) as it should search each sorted run until it finds the given key. Suppose that the maximum number of keys that a single sorted run can contain is R and there are T runs in a stack, the lookup cost per level is O(T log R). Even with bloom filter, the stack sizes directly affect the possibility of false positives, which is one of reasons why there is a limit on the maximum number of sorted runs in a stack: usually T .</p><p>However, the lookup cost of a CoW B + -tree is solely affected by the total number of unique keys in the tree, regardless of the number of write batches. If T different write batches in a tree have duplicate keys so that there are R unique keys, the lookup cost per level will be O(log R). If all keys in T write batches are unique, the lookup cost per level increases to O(log(T · R)) = O(log T + log R), which is still significantly smaller than that of tiering, as T is a very small constant number compared to R. Consequently, it enables us to have the flexible number of write batches while keeping nearly the same lookup cost as in leveling merge: O(log R) per level. This approach is orthogonal to Bloom filter, which we can still use to improve read performance.</p><p>Jungle has two types of merge operations: in-place merge and inter-level merge. In-place merge is the same as CoW B + -tree's compaction, while inter-level merge is identical to the tiering merge of LSM-tree. <ref type="figure" target="#fig_3">Figure 4</ref> depicts the examples of Jungle merge operations with the victim CoW B + -tree in L1, containing write batches 5-50 and 0-39 in <ref type="figure" target="#fig_2">Figure 3(b)</ref>. An advantage of CoW B + -tree over the original tiering is that we can easily get the total number of unique keys (i.e., the latest version of key-value pairs) and their space usage (i.e., the space occupied by those pairs) without causing extra I/O. If the space occupied by unique key-value pairs is smaller than the size limit of the level, the level is not full yet, so merging them into the next level is not necessary. In such case, we trigger an in-place merge so that the victim CoW B + -tree is compacted without affecting other trees, as presented in <ref type="figure" target="#fig_3">Figure 4</ref>(a). If the actual data size exceeds the limit of the level, then an inter-level merge will be invoked. It iterates the victim CoW B + -tree and appends new write batches into proper CoW B + -trees in the next level. <ref type="figure" target="#fig_3">Figure 4</ref>(b) describes the outcome of inter-level merge, where the overall shape is the same as the result of tiering merge in <ref type="figure" target="#fig_0">Figure 1(b)</ref>.</p><p>Merge Frequency The compaction threshold of CoW B + -tree C is defined as the ratio between the amount of space occupied by the tree including the stale data and the size of the live data. If C = 3, an in-place merge will be triggered when the space usage of a CoW B + -tree and its data becomes bigger than 3x of the size of its live key-value pairs. That is similar to triggering merge upon 3 sorted runs in tiering LSM-tree. Even before reaching the threshold, an inter-level merge may happen if the total size of the level exceeds the limit, which is C times bigger than the limit in leveling.</p><p>Having threshold in terms of size has much more benefits than that in terms of the number of sorted runs. In tiering, the number of sorted runs is strictly limited to T , and merge happens regardless of the actual size of sorted runs. If the average size of runs in a stack is smaller than its limit S, merge will happen earlier than that of Jungle with C = T , as Jungle will trigger merge upon the actual size limit, i.e., C · S. In Jungle's perspective, neither the size of individual write batch nor the total number of write batches in the tree matters; thus it can accommodate more write batches if their average size is smaller than S, as illustrated in <ref type="figure">Figure 5</ref>.</p><p>As a result, the total number of merges invoked in tiering will be the same as that in Jungle with C = T , only when all sorted runs are evenly sized to S. Otherwise, tiering will likely have more merges than Jungle, which will increases the </p><formula xml:id="formula_1">Leveling O(L · log R) O 񮽙 (1 + p · L) log R 񮽙 O(L) O(L · T ) O 񮽙 T T −1 񮽙 Tiering O(L · T · log R) O 񮽙 (1 + p · L · T ) log R 񮽙 O(L · T ) O(L) O 񮽙 T 2 T −1 񮽙 Jungle O 񮽙 L(logC + log R) 񮽙 O 񮽙 (1 + p · L)(logC + log R) 񮽙 O(L) O 񮽙 (L + 1 C )(1 + B w ) 񮽙 O 񮽙 C·T T −1 (1 + B s )</formula><p>񮽙 overall write amplification. The merge frequency gap between tiering and Jungle gets bigger with more skewed incoming data. Under non-uniform key distribution, there will be a number of cold stacks whose keys are updated rarely and sparsely. Most likely those stacks are filled up with small sorted runs and contribute to the increasing of write amplification.</p><p>Making matters worse, although we put uniform random data, the actual size distribution of sorted runs is not even in practice. It is influenced by various factors such as key range partitioning in a level, victim stack selection policy, or probabilistic problems like balls into bins <ref type="bibr" target="#b18">[18]</ref>.</p><p>Note that the reason why tiering cannot allow more than T runs to avoid such issues is because of lookup performance: more runs will make the lookup cost more expensive. In addition, tiering cannot reduce the size limit of a stack to be less than T either, due to the aforementioned small run issue. Suppose that the stack limit is M runs, where M &lt; T . Assuming the ideal case where the size of each run before merge is S, and given that the key range of a stack in level l is overlapping with T stacks in the next level l + 1, the merge will generate T runs whose size is M·S T each. Since M &lt; T , new runs become smaller than old runs, and accordingly it will make tiering invoke merge even more frequently. Hence, the number of sorted runs in a stack in tiering should be the same as the size ratio between adjacent levels, which is T .</p><p>In Jungle, the compaction threshold of CoW B + -tree C is easily adjustable, as it hardly influences the lookup performance. In other words, we can use it as a tunable knob between update cost and space cost. With smaller C, merge will happen more frequently so that the space cost will be reduced. If we increase the value of C, it makes merge less frequent and accordingly the overall update cost will decrease. There are multiple options for setting threshold: 1) a single global value, 2) vertically different values per level, and 3) horizontally different values per key range according to workload patterns and locality. In this paper, we only cover the first option, and will explore the potential improvements by the second and third options in the future. <ref type="table" target="#tab_1">Table 1</ref> summarizes the cost of each operation in leveling, tiering, and Jungle. R means the maximum number of keys that a single sorted run can contain, and L denotes the number of levels in LSM-tree. p indicates the false positive rate of Bloom filter: p = (1 − e − kn m ) k <ref type="bibr" target="#b15">[16]</ref>. m and n denote the number of bits in Bloom filter and the total number of keys, while k indicates the number of hash functions. With n m = 1 10 and k = 3, p is around 1.7%. We assume that the same values of n m and k are used for all levels. Since leveling and tiering have been analyzed well <ref type="bibr" target="#b9">[10]</ref><ref type="bibr" target="#b10">[11]</ref><ref type="bibr" target="#b11">[12]</ref><ref type="bibr" target="#b14">15]</ref>, we omit their derivation details here.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Cost Analysis</head><p>In Jungle, the point lookup cost is basically identical to that in leveling, except for the number of keys in each CoW B + -tree: up to C · R keys at worst. The range lookup cost will remain the same, as it is not affected by the height of B + -tree. Both write and space amplification are influenced by the compaction threshold C. If C = T , they become very close to those of tiering, except for B w and B s , which represent the extra write and space overhead of CoW B + -tree nodes.</p><p>Suppose that the average size of values is V and that of key and reference pairs in B + -tree node is K. For each write batch containing R key-value pairs, we first append a set of values which is R · V big, and then append a set of B + -tree nodes whose size is roughly R · K. Hence, the value of both B w and B s will be R·K R·V = K V . However, in the worst-case scenario that all keys in C batches are unique, the size of existing CoW B + -tree nodes before appending a new batch will be C · R · K. We may need to rewrite all those nodes for a single batch append, and accordingly the value of B w and B s will be increased to C·K V . With V =1 KB, K =16 bytes, and C = 10, they will be ranged between 0.016 and 0.16. Those values are usually smaller than 1 when keys are smaller than values, as mentioned in Section 2.2.</p><p>With smaller C, the space cost of Jungle becomes close to that of leveling. However, the write amplification still remains much smaller than leveling since Jungle just appends a new write batch to existing CoW B + -tree, except for in-place merge. Most likely in-place merge will happen at the last level, where all keys are eventually settled down. Write batches for the last level will probably contain keys that already exist, so that we may trigger in-place merge after appending C write batches. Hence, C mostly affects the frequency of in-place merge. This is one of benefits of Jungle as we can maintain the value of C smaller than T , which results in less space usage than tiering while keeping similar write amplification.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Evaluation</head><p>We evaluate Jungle to see if it efficiently adjusts write and space amplification according to its compaction threshold C, with minimum lookup performance degradation. Jungle is implemented as a stand-alone library embedded in eBay's home-grown distributed server platform, which is used for multiple difference services. There are internal options to run itself in pure LSM leveling or tiering mode, so that we compare the costs of each mode with Jungle. In this paper, we do not measure the overall performance against widely used key-value stores such as RocksDB <ref type="bibr" target="#b0">[1]</ref>, as they include a number of optimizations that are orthogonal to the improvement of Jungle over the original leveling and tiering schemes.</p><p>The evaluation was performed on Dell T7820, equipped with Samsung 860 QVO 1 TB SSD, formatted using the Ext4. We initialize each key-value store with 20 million random records, whose key and value size are 8 bytes and 1,024 bytes on average, so that the total space usage is expected to be ranged from 22 GB (leveling) to 222 GB (C=10 or tiering). To minimize the effect of OS page cache, we limit the available RAM size to 2.5 GB. Level size ratio T and the size of level-0 are set to 10 and 256 MB, respectively. The size limit of each sorted run is 64 MB, and the size of Bloom filter is set to 10 bits per key. CoW B + -tree node size is set to 4 KB. After initial load, we randomly issue more than 400 million update operations so that the entire records are updated at least 20 times. We believe the enough number of merge operations happen during the evaluation.</p><p>We first plot the write amplification of each scheme in <ref type="figure" target="#fig_4">Figure 6</ref>(a). The original leveling shows the highest write amplification, as it always rewrites all overlapping sorted runs during merge. By contrast, the write amplification of tiering is almost 4 times smaller than leveling. Jungle has similar write amplification to tiering, and it increases as C gets smaller. A notable fact is that the write amplification of Jungle is more than 3 times smaller than that of leveling, even with C=2. This is because C most likely affects the in-place merge frequency of the last level, as explained in Section 3. <ref type="figure" target="#fig_4">Figure 6</ref>(b) illustrates space amplification. Since space usage fluctuates over time, we measure the average number as well as the maximum and minimum numbers. Leveling has the smallest space usage which is close to 1.2 times of the original working set size. The space amplification of tiering is expected to be 11.1, but the actual measured number is much smaller than that: 3.24 on average. There are two reasons why it happens. Firstly, merge cannot happen on all stacks at the same time, so that some stacks are full while others are not. Thus the average stack size is always smaller than the maximum size. Secondly, the size of sorted runs in a stack is not even in practice, as we mentioned in Section 3. Eventually it cannot fully utilize the space capacity, and merge operations are triggered more often, thus we observe tiering shows bigger write amplification than that of even C=5.</p><p>On the other hand, Jungle's space amplification range is more predictable, even with the same merge timing and victim policy. That is because its compaction threshold is based on the actual data size ratio, not the total number of write batches in a CoW B + -tree.</p><p>Next, we randomly invoke point lookup on those aged indexes, and measure the throughput and latencies as shown in <ref type="figure" target="#fig_4">Figure 6</ref>(c) and <ref type="figure" target="#fig_4">Figure 6(d)</ref>, respectively. No write operation is performed during read, to get pure latency without any impact on sharing I/O bandwidth or lock contention. Even though there are up to 10 times more sorted runs to visit, the point lookup throughput of tiering is only 30% worse than that of leveling, by help of Bloom filter. On the contrary, Jungle shows even better performance than leveling. Since the capacity of each level in Jungle is bigger than that in leveling, more key-value pairs can be found in upper level and then returned earlier, and consequently it improves the read performance slightly.</p><p>Unlike throughput, Bloom filter can barely help reducing tail latencies; the 99-th percentile latency of tiering is 3 times higher than that of leveling. Jungle keeps showing comparable latencies regardless of the value of C, as CoW B + -tree provides nearly the same lookup performance no matter how many write batches are in the tree.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Conclusion</head><p>This paper presents Jungle, a hybrid approach by combining LSM-tree and CoW B + -tree. The main objective of Jungle is to cut off the relation between update cost and lookup cost, so as to make the index of key-value store more flexible for optimizing. Our evaluation results show that the write and space amplification of Jungle can be easily tuned by adjusting the compaction threshold of CoW B + -tree, with the minimum impact on lookup cost.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Discussion Topics</head><p>Chances of LSM-tree deformation Jungle shows the feasibility of breaking LSM-tree's limits, which have been strictly bounded by the relationship between lookup cost, update cost, and space cost. By eliminating the lookup cost from the trade-offs, it provides new chances of tackling existing design problems. For instance,</p><p>• The reason why LSM-tree implementations have been maintaining multiple levels, despite of the read performance degradation compared to B + -tree, is to keep the ratio between adjacent levels T constant. Fewer levels make T bigger, which results in higher write amplification.</p><p>• LSM-tree approaches have been passive about adopting different merge policies for hot/cold separation, under non-uniform workloads. Deferring merge for hot key range may incur augmented lookup cost of the same range.</p><p>We can re-think such fundamentals.</p><p>Limitations There are potential limitations we need to study more.</p><p>• Range lookup. If there are a number of tiny write batches in a CoW B + -tree, the access pattern will be more random which results in range lookup degradation. We believe less than T batches will be fine by help of readahead.</p><p>• Long keys. Longer keys make B w and B s values bigger. We may use variants of CoW B + -tree <ref type="bibr" target="#b1">[2]</ref> to moderate this overhead.</p><p>State-of-the-art approaches In Dostoevsky <ref type="bibr" target="#b10">[11]</ref> paper, Dayan et al. have suggested an approach about setting the size limit of stack in each level differently. Since the last level has a dominant impact on the cost of update and space, we can reduce the overall cost by setting the stack size of the last level smaller. They also have proposed a model to find optimal stack size of each level, which is similar to their precedent paper Monkey <ref type="bibr" target="#b9">[10]</ref> that explores the optimal ratio of Bloom filter size across each level. These schemes are orthogonal to Jungle as the stack size limit can be translated to compaction threshold in Jungle. We can use the same approach to reduce operation costs further. PebblesDB <ref type="bibr" target="#b19">[19]</ref> has been proposed for key-range partitioning policy of tiering merge, where it calls the boundary of stack key range as Guard. Jungle may adopt its approach for creating or splitting CoW B + -trees efficiently, to avoid key range skew that may cause superfluous merging.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: Examples of LSM-tree merge.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: Examples of copy-on-write B + -tree.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: Tiering LSM-tree and corresponding Jungle. pairs to new space, constructs a new B + -tree in a bottomup manner, and then finally removes the previous tree, as described in Figure 2(c).</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: Jungle merge operations.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_4"><head>Figure 6 :</head><label>6</label><figDesc>Figure 6: Evaluation results, C=x denotes Jungle with compaction threshold x. The throughput and latencies of point lookup are normalized to the throughput and the 50-th percentile latency of leveling, respectively.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="false"><head>'</head><label></label><figDesc></figDesc><table>Logical 
+
+Flattened 
+
+Live node 
+
+Stale node 
+
+(a) Updating node E. Instead of overwriting E, append the up-
+dated node E'. It requires the update of parent nodes C and A, 
+and appends C' and A' as well. 
+
+10 
+A 
+15 
+B 
+27 
+C 
+50 
+D 
+10 27 
+15 50 
+
+· · · · 
+
+15 
+E 
+27 
+F 
+32 
+G 
+10 27 
+15 32 
+
+· · · · 
+
+50 
+
+· 
+
+Write batch 
+
+B+tree node with 
+key x, y, and z 
+x 
+
+· 
+
+x 
+K K: value of key x 
+
+10 
+A 
+15 
+B 
+27 
+C 
+50 
+D 
+10 27 
+15 50 
+
+· · · · 
+
+Write batch 
+Write batch 
+
+y 
+
+· 
+
+z 
+
+· 
+
+Set {15, E}, {27, F}, and {32, G} 
+
+(b) Set key-value pairs {15,E}, {27,F}, and {32,G} in batch. Ap-
+pend the value part (i.e., E, F, and G) first, and then append the entire 
+B + -tree node with updated references. It involves copying existing, 
+but not updated keys in the same node: 10 and 50. 
+
+10 
+A 
+15 
+B 
+27 
+C 
+50 
+D 
+10 27 
+15 50 
+
+· · · · 
+
+15 
+E 
+27 
+F 
+32 
+G 
+10 27 
+15 32 
+
+· · · · 
+
+50 
+
+· 
+
+Write batch 
+Write batch 
+
+50 
+I 
+15 
+H 
+10 27 
+15 32 
+
+· · · · 
+
+50 
+
+· 
+
+Write batch 
+
+10 27 
+15 32 
+
+· · · · 
+
+50 
+
+· 
+
+10 
+A 
+15 
+H 
+27 
+F 
+32 
+G 
+50 
+I 
+
+(c) Compaction. All values as well as B + -tree nodes are 
+rewritten in a key order. 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_1" validated="false"><head>Table 1 : Cost comparison.</head><label>1</label><figDesc></figDesc><table>Point 
+(w/ Bloom filter) 
+Range 
+Write amplification Space amplification 
+
+</table></figure>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgments</head><p>We would like to thank our shepherd Peter Macko and the anonymous reviewers for their invaluable comments.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title level="m" type="main">RocksDB: A persistent key-value store for fast storage environments</title>
+		<ptr target="https://rocksdb.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Forestdb: A fast key-value storage system for variable-length string keys</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jung-Sang</forename><surname>Ahn</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chiyoung</forename><surname>Seo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ravi</forename><surname>Mayuram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rahim</forename><surname>Yaseen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jin-Soo</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Seungryoul</forename><surname>Maeng</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Transactions on Computers (TC)</title>
+		<imprint>
+			<biblScope unit="volume">65</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<biblScope unit="page" from="902" to="915" />
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title level="m" type="main">CouchDB: The Definitive Guide: Time to Relax</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chris</forename><surname>Anderson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jan</forename><surname>Lehnardt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Noah</forename><surname>Slater</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2010" />
+			<publisher>Reilly Media, Inc</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Design tradeoffs of data access methods</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Manos</forename><surname>Athanassoulis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stratos</forename><surname>Idreos</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2016 International Conference on Management of Data (SIG-MOD)</title>
+		<meeting>the 2016 International Conference on Management of Data (SIG-MOD)</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="2195" to="2200" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Designing access methods: The rum conjecture</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Manos</forename><surname>Athanassoulis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Michael</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lukas</forename><forename type="middle">M</forename><surname>Kester</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Radu</forename><surname>Maas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stratos</forename><surname>Stoica</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Anastasia</forename><surname>Idreos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mark</forename><surname>Ailamaki</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Callaghan</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">EDBT</title>
+		<imprint>
+			<date type="published" when="2016" />
+			<biblScope unit="volume">2016</biblScope>
+			<biblScope unit="page" from="461" to="466" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title level="m" type="main">The zettabyte file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeff</forename><surname>Bonwick</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matt</forename><surname>Ahrens</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Val</forename><surname>Henson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mark</forename><surname>Maybee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mark</forename><surname>Shellenbaum</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2003" />
+		</imprint>
+	</monogr>
+<note type="report_type">Technical report</note>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Bigtable: A distributed storage system for structured data</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fay</forename><surname>Chang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeffrey</forename><surname>Dean</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanjay</forename><surname>Ghemawat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Wilson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Deborah</forename><forename type="middle">A</forename><surname>Hsieh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mike</forename><surname>Wallach</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tushar</forename><surname>Burrows</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrew</forename><surname>Chandra</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><forename type="middle">E</forename><surname>Fikes</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Gruber</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Computer Systems (TOCS)</title>
+		<imprint>
+			<biblScope unit="volume">26</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page">4</biblScope>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Persistent b+-trees in nonvolatile main memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shimin</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Qin</forename><surname>Jin</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the VLDB Endowment</title>
+		<meeting>the VLDB Endowment</meeting>
+		<imprint>
+			<date type="published" when="2015" />
+			<biblScope unit="volume">8</biblScope>
+			<biblScope unit="page" from="786" to="797" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<monogr>
+		<title level="m" type="main">Sidebotham, and Transarc Corporation. The episode file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sailesh</forename><surname>Chutani</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Owen</forename><forename type="middle">T</forename><surname>Anderson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><forename type="middle">L</forename><surname>Kazar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bruce</forename><forename type="middle">W</forename><surname>Leverett</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">Anthony</forename><surname>Mason</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Robert</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1992" />
+			<biblScope unit="page" from="43" to="60" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Monkey: Optimal navigable key-value store</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Niv</forename><surname>Dayan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Manos</forename><surname>Athanassoulis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stratos</forename><surname>Idreos</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2017 ACM International Conference on Management of Data (SIGMOD)</title>
+		<meeting>the 2017 ACM International Conference on Management of Data (SIGMOD)</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="79" to="94" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Dostoevsky: Better spacetime trade-offs for lsm-tree based key-value stores via adaptive removal of superfluous merging</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Niv</forename><surname>Dayan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stratos</forename><surname>Idreos</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2018 International Conference on Management of Data (SIGMOD)</title>
+		<meeting>the 2018 International Conference on Management of Data (SIGMOD)</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="505" to="520" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Design continuums and the path toward self-designing key-value stores that know and learn</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stratos</forename><surname>Idreos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Niv</forename><surname>Dayan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wilson</forename><surname>Qin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mali</forename><surname>Akmanalp</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sophie</forename><surname>Hilgard</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrew</forename><surname>Ross</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">James</forename><surname>Lennon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Varun</forename><surname>Jain</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Harshita</forename><surname>Gupta</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Li</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Biennial Conference on Innovative Data Systems Research (CIDR)</title>
+		<imprint>
+			<date type="published" when="2019" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Resolving journaling of journal anomaly in android i/o: multi-version b-tree with lazy split</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wook-Hee</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Beomseo</forename><surname>Nam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dongil</forename><surname>Park</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Youji</forename><surname>Won</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 12th USENIX Conference on File and Storage Technologies (FAST)</title>
+		<meeting>the 12th USENIX Conference on File and Storage Technologies (FAST)</meeting>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="273" to="285" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Wisckey: separating keys from values in ssd-conscious storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lanyue</forename><surname>Lu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thanumalayan</forename><surname>Sankaranarayana Pillai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi H Arpaci-Dusseau</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 14th USENIX Conference on File and Storage Technologies (FAST)</title>
+		<meeting>the 14th USENIX Conference on File and Storage Technologies (FAST)</meeting>
+		<imprint>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="133" to="148" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<monogr>
+		<title level="m" type="main">Lsm-based storage techniques: A survey</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chen</forename><surname>Luo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><forename type="middle">J</forename><surname>Carey</surname></persName>
+		</author>
+		<idno>abs/1812.07527</idno>
+		<imprint>
+			<date type="published" when="2018" />
+			<publisher>CoRR</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<monogr>
+		<title level="m" type="main">Probability and computing: Randomized algorithms and probabilistic analysis</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Mitzenmacher</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eli</forename><surname>Upfal</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2005" />
+			<publisher>Cambridge university press</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<monogr>
+		<title level="m" type="main">The log-structured merge-tree (lsm-tree)</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O&amp;apos;</forename><surname>Patrick</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Edward</forename><surname>Neil</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dieter</forename><surname>Cheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Elizabeth O&amp;apos;</forename><surname>Gawlick</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Neil</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title/>
+	</analytic>
+	<monogr>
+		<title level="j">Acta Informatica</title>
+		<imprint>
+			<biblScope unit="volume">33</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="351" to="385" />
+			<date type="published" when="1996" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Balls into bins-a simple and tight analysis</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Martin</forename><surname>Raab</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Angelika</forename><surname>Steger</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">International Workshop on Randomization and Approximation Techniques in Computer Science</title>
+		<imprint>
+			<publisher>Springer</publisher>
+			<date type="published" when="1998" />
+			<biblScope unit="page" from="159" to="170" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Pebblesdb: Building key-value stores using fragmented log-structured merge trees</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pandian</forename><surname>Raju</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rohan</forename><surname>Kadekodi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vijay</forename><surname>Chidambaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ittai</forename><surname>Abraham</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 26th Symposium on Operating Systems Principles (SOSP)</title>
+		<meeting>the 26th Symposium on Operating Systems Principles (SOSP)</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="497" to="514" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Btrfs: The linux b-tree filesystem</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ohad</forename><surname>Rodeh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Josef</forename><surname>Bacik</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chris</forename><surname>Mason</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Storage (TOS)</title>
+		<imprint>
+			<biblScope unit="volume">9</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<biblScope unit="page">9</biblScope>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

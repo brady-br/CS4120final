@@ -1,0 +1,1747 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:51+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Disaggregation and the Application</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sebastian</forename><surname>Angel</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">University of Pennsylvania</orgName>
+								<orgName type="institution" key="instit2">Microsoft Research</orgName>
+								<orgName type="institution" key="instit3">Microsoft Research</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mihir</forename><surname>Nanavati</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">University of Pennsylvania</orgName>
+								<orgName type="institution" key="instit2">Microsoft Research</orgName>
+								<orgName type="institution" key="instit3">Microsoft Research</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Siddhartha</forename><surname>Sen</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">University of Pennsylvania</orgName>
+								<orgName type="institution" key="instit2">Microsoft Research</orgName>
+								<orgName type="institution" key="instit3">Microsoft Research</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Disaggregation and the Application</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>This paper examines disaggregated data center architectures from the perspective of the applications that would run on these data centers, and challenges the abstractions that have been proposed to date. In particular, we argue that operating systems for disaggregated data centers should not abstract disaggregated hardware resources, such as memory, compute, and storage away from applications, but should instead give them information about, and control over, these resources. To this end, we propose augmenting OSes for disaggregation so as to benefit data transfer in data parallel frameworks and speed up failure recovery in replicated, fault-tolerant applications, as well as discussing some of the implementation challenges.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Disaggregation splits existing monolithic servers into a number of consolidated single-resource pools that communicate over a fast interconnect <ref type="bibr" target="#b4">[5,</ref><ref type="bibr" target="#b28">29,</ref><ref type="bibr" target="#b30">31,</ref><ref type="bibr" target="#b33">34,</ref><ref type="bibr" target="#b45">46,</ref><ref type="bibr" target="#b46">47,</ref><ref type="bibr" target="#b61">62]</ref>. This model decouples individual hardware resources, including tightly bound ones such as processors and memory, and enables the creation of "logical servers" with atypical hardware configurations. Disaggregation has long been the norm for disk-based storage <ref type="bibr" target="#b29">[30]</ref> because it allows individual resources to scale, evolve, and be managed independently of one another. In this paper, we target the new trend of memory disaggregation.</p><p>Existing works on disaggregated data centers (DDCs) have focused primarily on the operational benefits of disaggregation-it allows resources to be packed more densely and improves utilization by eliminating the bin-packing problem. As a result, these works strive to preserve existing abstractions and interfaces and propose runtimes and OSes that make the unique characteristics of DDCs transparent to applications <ref type="bibr" target="#b10">[11,</ref><ref type="bibr" target="#b61">62]</ref>. The implicit underlying assumption in these works is that from the perspective of the OS, the distributed nature of processors and memory is an inconvenient truth of the underlying hardware, much like paging or interrupts, that should be abstracted away from applications.</p><p>Our position is that disaggregation is not just a hardware trend to be tolerated and abstracted away to support legacy applications, but rather one that should be exposed to applications and exploited for their benefit. We draw inspiration from decades-old distributed shared memory systems (which closely resemble disaggregation) where early attempts at full transparency quickly gave way to weaker consistency and more restrictive programming models for performance reasons <ref type="bibr" target="#b12">[13,</ref><ref type="bibr" target="#b31">32,</ref><ref type="bibr" target="#b32">33,</ref><ref type="bibr" target="#b41">42,</ref><ref type="bibr" target="#b53">54,</ref><ref type="bibr" target="#b57">58]</ref>. While the rationale for externalizing memory has changed, along with the hardware and target applications, we believe that co-designing applications and disaggregated OSes remains an attractive proposition.</p><p>Two properties of disaggregated hardware with potential to benefit applications are the ability to reassign memory by dynamically reconfiguring the mapping between processors and memory, and the failure independence of different hardware components (i.e., the fact that processors may fail without the associated memory failing or vice versa). Memory reassignment can be leveraged by applications performing bulk data transfers across the network to achieve zero-copy operations by remapping memory from the source to the destination, or during processor failures to find orphaned memory a new home. Failure independence also allows processors to be useful despite memory failures by acting as fast and reliable failure informers <ref type="bibr" target="#b2">[3]</ref> and triggering recovery protocols.</p><p>We target data center applications that are logically cohesive, but physically distributed across multiple co-operating instances-examples of these include most microservicebased applications, data parallel frameworks, serverless computing, distributed data stores, and fault-tolerant locking and metadata services-and propose extending existing OSes for disaggregated systems, such as LegoOS <ref type="bibr" target="#b61">[62]</ref>, with primitives for memory reassignment and failure notification. Below we discuss the proposed primitive operations and the challenges in implementing them, all of which are exacerbated by the fact that the exact nature of disaggregation and the functionality of each component is in flux ( §2).</p><p>• Memory grant. This is a voluntary memory reassignment called by a source application instance to yield its memory pages and move them to a destination application instance. This reassignment requires flexibility from the interconnect or the OS, which must be able to handle modifying memory mappings quickly and at fine granularities.</p><p>• Memory steal. This is an involuntary reassignment of memory from one application instance to another. While similar to a memory grant from the perspective of the interconnect, a key difference is that the source application instance may not have any prior warning. Since volatile state can now transcend an application instance, the programming model needs to guarantee crash consistency to ensure that state is semantically coherent at all times.</p><p>• Failure notification. An application instance can opt to receive notifications for memory failures or it can register other instances to automatically be notified in such cases. This requires making failure information visible to applications, as well as retaining group membership at the processor so other instances can be notified if the local instance cannot handle or mask the memory failure. Data parallel frameworks, such as MapReduce and Dryad, can use these primitives to eliminate unnecessary data transfer during shuffles or between nodes in the data flow graph, while Chubby <ref type="bibr" target="#b8">[9]</ref> and other applications based on Paxos <ref type="bibr" target="#b35">[36]</ref> can recover and reassign the committed state machine from a failed replica. In addition, early detection of memory failures can trigger recovery mechanisms without waiting for conservative end-to-end timeouts. While this paper focuses on these two applications, we believe that the interfaces are broad enough to benefit other applications. For example, scalable data stores, such as Redis or memcached, could use memory grants to delegate part of their key space to new instances sans copying, while microservice-based applications can use grants and steals to achieve performance comparable to monolithic services and still retain some modularity.</p><p>This paper is largely speculative and leaves many open questions. Our hope is to foster a discussion around disaggregation, not from the perspective of operators, but as an opportunity, and a challenge, for systems designers.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">DDC architecture and resource allocation</head><p>In the absence of existing disaggregated data centers, a number of different architectures have been proposed <ref type="bibr" target="#b17">[18,</ref><ref type="bibr" target="#b30">31,</ref><ref type="bibr" target="#b45">46,</ref><ref type="bibr" target="#b46">47,</ref><ref type="bibr" target="#b54">55,</ref><ref type="bibr" target="#b61">62]</ref>. While these architectures differ in some of the details, the general strokes are similar. We assume the architecture given in <ref type="figure" target="#fig_0">Figure 1</ref>, which has three core components: individual blades with compute elements and memory elements, connected over a low-latency programmable resource interconnect. While we have chosen to explore these ideas in the context of a single architecture for simplicity, we believe that they are broadly applicable to other disaggregation models.</p><p>Compute and memory elements. The basic compute elements in our rack are commodity processors which retain the existing memory hierarchy with private core and shared socket caches. Memory elements, which are conventional DRAM or NVRAM chips, are made available to the compute elements across an interconnect using a low-power local processing element such as a mobile processor or an ASIC. This local processing element interacts with memory through a standard Memory Management Unit (MMU) and interposes on compute element requests to provide addressing, virtualization, and access control; we discuss the trade-offs in offloading more functionality for near data processing in Section 7. In line with the majority of proposed architectures, we assume that compute elements have a small amount of locally-attached memory, which is used for the OS and as a small cache to improve performance <ref type="bibr" target="#b20">[21,</ref><ref type="bibr" target="#b61">62]</ref>.</p><p>Resource interconnect. The resource interconnect allows processor and memory elements to communicate and can be based on RDMA over InfiniBand or Ethernet, Omnipath <ref type="bibr" target="#b7">[8]</ref>, Gen-Z <ref type="bibr" target="#b21">[22]</ref>, or a switched PCIe fabric <ref type="bibr" target="#b9">[10,</ref><ref type="bibr" target="#b18">19]</ref>. Our design is agnostic to the physical layer, but we assume a degree of programmability and on-the-fly reconfiguration within the interconnect, which we call the Rack MMU (one can think of it as analogous to an SDN controller and switches). The Rack MMU allows compute and memory elements to be dynamically connected and disconnected in arbitrary configurations. Shoal <ref type="bibr" target="#b62">[63]</ref> proposes and implements one such network fabric; although the proposed architecture lacks a programmable switch, it emulates its functionality through a Clos network of switches and a coordination-free scheduling protocol.</p><p>Resource partitioning and allocation. We assume that the unit for disaggregation is a single rack (i.e., compute and memory elements reside in the same rack), with resources being partitioned into the desired compute abstractions, such as virtual machines, containers, or processes, and presented to applications (we generically refer to these compute abstractions as processes). The Rack MMU acts as a resource manager for the rack and is responsible for resource partitioning and assigning compute and memory elements to processes.</p><p>The Rack MMU has a similar policy for sharing hardware resources as LegoOS <ref type="bibr" target="#b61">[62]</ref>: processes may share the same memory element but not the same memory regions (i.e., there is no shared memory). Similarly, compute elements can host multiple processes, but all the threads of a process are restricted to a single compute element. This simplifies caching, as otherwise shared memory would require coherence across the entire rack. Memory is allocated at a page-sized granularity based on the architecture of the compute and memory elements. The Rack MMU is responsible for placement decisions for processes and picks compute and memory elements on the basis of some bin-packing policy, while fine-grained sharing and isolation across co-hosted processes are managed by the local OS.</p><p>Addressing and access control. Processes expect to see a continguous private virtual address space, regardless of the physical layout of the underlying memory. To preserve this illusion, the Rack MMU stores a virtual-to-physical (V2P) mapping for each process, which resembles a traditional page table. Compute elements look up these mappings (and may cache them locally) to route accesses to the correct memory element. While we expect the V2P table to be relatively coarsegrained to preserve Rack MMU memory, it needs to support mapping individual pages for memory reassignment.</p><p>The Rack MMU is also responsible for configuring access control to memory. When memory is allocated, the Rack MMU ensures that the topology of the interconnect allows for the existence of a path between the corresponding compute and memory elements. It also configures the page tables at the memory elements with the process identifier (effectively the CR3), the virtual address, and the appropriate permissions, enabling local enforcement at the memory elements.</p><p>Scaling out. Not all applications want to live within a single rack: to span racks, traditional Ethernet-based networking is available through a commodity top-of-rack (ToR) switch that connects to the rest of the data center network. Distributed applications comprising multiple processes have to choose the appropriate deployment: intra-rack deployments enjoy lower latencies, while cross-rack deployments have greater failure independence. This decision is analogous to the one faced by developers when selecting the appropriate placement group <ref type="bibr" target="#b3">[4]</ref> or availability set <ref type="bibr" target="#b51">[52]</ref> in cloud deployments today.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Exposing disaggregation</head><p>In traditional architectures, the OS is responsible for managing hardware resources, allocating them to processes, and enforcing isolation of shared resources. In a disaggregated environment, this is no longer true and resource allocation is now within the bailiwick of the Rack MMU; the local OS at compute elements continues to be responsible for managing the underlying hardware, providing local scheduling and isolation, and presenting a standard programming interface to applications. Additionally, the OS is responsible for transparently synchronizing application state between local and remote memory and, if any state is locally cached, managing the contents and coherence of this cache <ref type="bibr" target="#b24">[25,</ref><ref type="bibr" target="#b61">62]</ref>. Prior OSes for DDCs <ref type="bibr" target="#b10">[11,</ref><ref type="bibr" target="#b61">62]</ref> have chosen to implement a standard POSIX API and abstract away the disaggregated nature of DDCs from applications. While this allows existing unmodified applications to run on DDCs, we argue-based on our case studies ( §5 and §4)-that these applications could achieve better performance if they had more visibility and control. Accordingly, we advocate for the design and implementation of the following operations as OS interfaces.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Memory reassignment</head><p>Memory is reassigned at page granularity by moving it from the V2P mapping of one process to another at the Rack MMU and invalidating any cached V2P mappings at compute elements. Following this, the Rack MMU revokes access to those pages by modifying the page table entries at the source memory element; the detached memory can then be attached to an existing process similar to newly allocated memory. Memory reassignment may be voluntary in the form of memory grants or may occur involuntarily through memory stealing.</p><p>Grants are inspired by L4's grant <ref type="bibr" target="#b44">[45]</ref>, except that they occur in a distributed context; mechanistically, we envision that the source initiates the transfer through a syscall similar to vmsplice() with the SPLICE_F_GIFT flag in Linux, thereby "gifting" the memory to the kernel and promising to never access it again. After the reassignment at the Rack MMU and memory elements is complete, the source's OS notifies the recipient's OS of the changed page mappings via message passing, which then notifies the destination process via signals.</p><p>While grants are the most natural flavor of memory reassignment, they are not particularly useful in the case of compute element failures. An alternative is for other processes to be able to steal a crashed process' memory. This is similar to how servers in Frangipani <ref type="bibr" target="#b63">[64]</ref> keep their logs remotely, and can request the logs of servers that have crashed to resume their operations. We propose to expose memory stealing via a syscall that requires the id of the source process and a capability; memory allocated using brk or mmap can disallow reallocation with the appropriate flags.</p><p>One questions that arises in both of these cases is who is allowed to trigger memory reassignments and when is it acceptable to do so? While it is clear in the context of grants that a process should have the authority to give away its own memory, the policy around stealing memory is less obvious. One possibility is to group trusted processes together and allow any group member to initiate reassignment; another is to require that a group of processes reach consensus. In such cases, a shared group secret (perhaps based on a threshold secret sharing scheme <ref type="bibr" target="#b60">[61]</ref>) may act as the capability to steal memory. We do not enforce a specific policy around reassignment and instead leave it up to the application to determine what is appropriate: while this means that a buggy application can mistakenly steal its own memory and crash, this is not morally different from threads stomping on each other's memory in buggy shared memory applications. We envision memory stealing as primarily an aid to recovery mechanisms when a process has crashed (or is suspected of having crashed), but there might also be cases where stealing memory from a running process is actually profitable.</p><p>Maintaining pointer semantics. As reassigned memory pages may contain data structures with internal references, these pages must be attached to the same virtual address to prevent dangling pointers. To avoid a situation in which the receiving process has already used the provided virtual addresses (which would create ambiguity), we propose reserving a fixed number of bits of the virtual address to act as an identifier for the process that allocated the memory pages. As reassigned pages continue to use the same virtual address space, the sender OS marks the virtual address as being "in use" and prevents further allocations or mappings to it.</p><p>Crash consistency. Most applications are written with the assumption that application state does not outlive a specific instance and that computation resumes from a clean state after crashes; consequently, they do not maintain their invariants at every point in the middle of large operations and have temporary windows of inconsistency. In contrast, memory stealing allows memory to be forcibly acquired at any time or recovered after a crash-as neither of these scenarios provide the source an opportunity to gracefully make state consistent, remote memory must always be kept crash consistent. Storage systems have historically faced similar challenges and crash consistency for non-volatile memory (NVRAM) is an active area of research <ref type="bibr" target="#b13">[14,</ref><ref type="bibr" target="#b50">51,</ref><ref type="bibr" target="#b59">60,</ref><ref type="bibr" target="#b64">[65]</ref><ref type="bibr" target="#b65">[66]</ref><ref type="bibr" target="#b66">[67]</ref><ref type="bibr" target="#b67">[68]</ref>. Applications can adopt any of these mechanisms, which rely on a combination of techniques such as journaling, soft updates <ref type="bibr" target="#b19">[20]</ref>, shadow copies <ref type="bibr" target="#b14">[15]</ref>, and undo logs <ref type="bibr" target="#b13">[14]</ref> to remain crash consistent when updating structures in remote memory. Additionally, to verify data integrity after reassignment, applications can use page checksums (or other techniques from persistent storage); the calculation and verification of these checksums can be deferred to memory elements to reduce performance overhead.</p><p>Programming models. Crash consistency is necessary, but not sufficient to allow other instances to start operating on objects in stolen or recovered memory: even if consistent, the metadata required to locate the objects may not be available as it is in processor registers, caches, or on the stack. Applications typically rely on the compiler to keep track of internal objects, so when memory is reassigned to a new process, finding the necessary objects from raw memory pages would be a momentous task, akin to searching for a lost treasure.</p><p>One possibility is for applications to use an asynchronous, event-based model <ref type="bibr" target="#b1">[2]</ref> or a Function-as-a-Service one that forces them to package all critical state into an object which persists across invocations. Metadata for these objects (this could be as minimal as the root of a tree) can be stored and distributed in a file system like namespace <ref type="bibr" target="#b16">[17]</ref> that acts as a "map" to help locate critical state.</p><p>Another challenge is that application developers need to explicitly reason about memory ownership and transfer. While this is a significant departure from existing programming models, there is encouraging precedent: the Rust programming language successfully introduced similar ownership with move semantics into the language itself to guarantee memory safety.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Failure notification</head><p>Compute elements should be notified of memory failures either asynchronously using liveness information from a reliable interconnect or explicitly in response to accesses on unreliable interconnects. In the latter case, compute elements can receive messages from the controller of the memory element (when specific elements have failed), or rely on timeouts (when the entire memory element is unreachable). Error notifications are propagated back to the application through OS signals (SIGBUS); applications that want to manage faults can register for these signals and trigger a failure-recovery protocol, while legacy applications may safely ignore them.</p><p>As memory failures may result in the loss of application state, it is unclear how an application should leverage failure notifications. One possibility is for the application to preregister a group of processes with the OS that will be informed in case of failures (these processes essentially serve as "emer- Cross-rack (Cloud) 45</p><p>Intra-rack (eRPC <ref type="bibr" target="#b27">[28]</ref>) 2</p><p>Future intra-rack (Mellanox ConnectX-6 <ref type="bibr" target="#b0">[1]</ref>) 1 FIGURE 2-Comparison of the intra and cross-rack latency between VMs. Cross-rack numbers are the experimentally determined mean round-trip time (RTT) between two VMs, guaranteed to be on different racks <ref type="bibr" target="#b3">[4,</ref><ref type="bibr" target="#b51">52]</ref>, in a public cloud. As rack co-location is not guaranteed, intra-rack numbers are from the referenced publications.</p><p>gency contacts"). This group is stored in a per-process forwarding table within the OS; as the OS is local to the compute element, memory failures do not affect the forwarding table. This allows other processes to learn of the failure, making the compute element a local failure informer <ref type="bibr" target="#b2">[3,</ref><ref type="bibr" target="#b40">41]</ref>.</p><p>Failures of compute elements can be detected with a racklevel monitor that periodically verifies the health of compute elements using heartbeats and triggers the appropriate action when failures are detected (e.g., notify emergency contacts of the failure). While the monitor can also fail, it is an optimization, and not a replacement, to failure detection based on end-to-end timeouts. The monitor can set more aggressive timeouts than the application (especially when the application spans multiple racks) because the latency difference between intra-rack and cross-rack is significant, as shown in <ref type="figure">Figure 2</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Case study: Paxos</head><p>Applications use Paxos <ref type="bibr" target="#b35">[36]</ref> to tolerate failures by replicating their state <ref type="bibr" target="#b34">[35,</ref><ref type="bibr" target="#b55">56,</ref><ref type="bibr" target="#b58">59]</ref>: Paxos ensures that replicas transition through the same sequence of states. If a replica fails, a client can reissue its requests to other replicas. Failures lead to reconfiguration, in which failed replicas are removed and new replicas are introduced to prevent failures from accumulating over time <ref type="bibr" target="#b11">[12,</ref><ref type="bibr" target="#b36">37,</ref><ref type="bibr" target="#b37">38]</ref>. Reconfiguration brings new replicas up to date by fetching the latest state from other replicas or persistent storage <ref type="bibr" target="#b11">[12]</ref>, and prevents replicas that have been excluded from the current configuration (presumably because they have failed) from participating if they come back.</p><p>Detecting failures. Paxos typically relies on heartbeats with conservative timeouts to ascertain the state of processes. Recent reliable failure detectors <ref type="bibr" target="#b38">[39]</ref><ref type="bibr" target="#b39">[40]</ref><ref type="bibr" target="#b40">[41]</ref> can quickly initiate recovery mechanisms using local monitors and lethal force. In cases where failures are suspected but cannot be confirmed, these detectors kill the replicas-the intuition is that unnecessary failures are preferable to uncertainty.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">Paxos reconfiguration in DDCs</head><p>The failure independence of DDCs enables new ways to detect and recover from failures in fault-tolerant applications using Paxos. We assume that replicas run in different racks within the same data center-a reasonable assumption for applications that want greater single-zone failure independence. Within this deployment, we explore two scenarios: a compute element that loses some or all of its memory elements, and a faulty compute element with functional memory elements.</p><p>Dead compute with live memory. When a replica dies, one could reassign its memory, assuming it is in a consistent state, to another compute element and the system could continue operating unimpeded. Such reassignment reincarnates the old node, from the perspective of Paxos, allowing the consensus group to return to full health faster (no need to fetch the state from a checkpoint or other replicas).</p><p>Should the failure of the compute element be detected faster than the end-to-end timeout of the Paxos group-a likely scenario due to the difference between intra-and cross-rack latencies-reincarnation can be transparent to the rest of the system. In such cases, clients and other replicas only observe a connection termination and will attempt to reconnect. Replicas can register "standbys" with the rack monitor to be contacted when the replica dies and which can take ownership of the dead replica's memory using memory stealing.</p><p>In response to the steal operation, the Rack MMU revokes and reassigns access to the region of memory. Revocation is needed because failures are not always fail-stop and the system must prevent a temporarily unavailable compute element from returning and corrupting state. The ToR switch can redirect cross-rack traffic to the new compute element using OpenFlow rules; further, it can also use these rules to fence the old compute element off from the rest of the network <ref type="bibr" target="#b39">[40]</ref>.</p><p>Dead memory with live compute. When a compute element writes to a remote memory element, it is possible for this operation to fail if the memory element is down. Instead of terminating the application right away, as we discuss in Section 3.2, the OS propagates a signal up the stack or forwards the signal to other replicas. This mechanism allows other replicas to detect memory failures and initiate reconfigurations more quickly than relying on end-to-end timeouts.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Case study: Data parallel computations</head><p>In-memory data parallel frameworks such as data flow and graph processing systems <ref type="bibr" target="#b15">[16,</ref><ref type="bibr" target="#b23">24,</ref><ref type="bibr" target="#b25">26,</ref><ref type="bibr" target="#b47">48,</ref><ref type="bibr" target="#b52">53,</ref><ref type="bibr" target="#b68">69]</ref> express computations as a series of nodes, where each node performs an operation on its inputs. In these systems, it is often necessary to move data between nodes so that the output of a node may be used as the input to the next node. For example, in MapReduce <ref type="bibr" target="#b15">[16]</ref>, the output of mappers is shuffled and sent to reducers that operate on a chunk of related data. We believe that executing these systems transparently on a DDC is unwise, and argue that the operators described in Section 3 can cut down on data movement and improve straggler mitigation.</p><p>Faster data movement. Deploying a data parallel framework on a transparent DDC results in unnecessary data movement between compute nodes; for example, a single transfer data between two application workers forces 3 network and memory RTTs. First, the source fetches data from its remote memory over the memory interconnect, and then sends it over the network to the destination, who then forwards it to remote memory over the memory interconnect.</p><p>Data transfer is often a major bottleneck <ref type="bibr" target="#b49">[50]</ref>: Timely Dataflow <ref type="bibr" target="#b48">[49]</ref> achieves up to 3× higher throughput when provided with a faster network. Memory grants convert data transfer into a single RTT over the memory interconnect and a control message over the ToR. The source would grant the memory pages storing the data that it plans to send to the recipient; the Rack MMU would adjust the necessary page permissions and then notify the source that the grant was successful. The source would then notify the destination that the data pages are ready to be mapped into its local address space.</p><p>Once a memory grant is initiated, the contents of memory should not be modified until completed. As discussed in Section 3.1, this immutability is not enforced and it is the application's responsibility to ensure that all its threads have completed before initiating the grant. As data parallel frameworks already have explicit computation and communication phases, we believe this is reasonable; further, any violations are effectively data races and only affect the application itself, but do not impact the broader operation of the system.</p><p>Dealing with stragglers. Straggler tasks are often caused by factors local to a particular compute node such as an overloaded processor or insufficient cache capacity or network bandwidth <ref type="bibr" target="#b69">[70]</ref>. In such cases, the node can have its memory forcibly reassigned to another node (or set of nodes) by having the job orchestrator steal the appropriate memory pages. The recipient node can resume and complete the half-completed computation, rather than starting from scratch. In case of failures, as in Paxos ( §4.1), the rack monitor can inform the job orchestrator, allowing it to relaunch the task more quickly; if only the compute elements have failed, the relaunched task can resume computation from where it had stalled.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Conclusion</head><p>Disaggregation represents a fundamental change in how hardware resources are built, provisioned, and presented to applications for consumption. Early research initiatives have focused largely on building transparent solutions that benefit operators and are application-neutral; for example, LegoOS <ref type="bibr" target="#b61">[62]</ref> uses RAID-style <ref type="bibr" target="#b56">[57]</ref> memory replication while Carbonari and Beschastnikh propose replication and switchbased failover <ref type="bibr" target="#b10">[11]</ref> to preserve existing failure semantics for applications. Carbonari and Beschastnikh also observe that applications could benefit from information about failures but do not go further; we build on that observation and look at how applications that eschew transparency could use this information. More specifically, we borrow ideas from systems for zero-copy IPC <ref type="bibr" target="#b5">[6,</ref><ref type="bibr" target="#b6">7,</ref><ref type="bibr" target="#b42">[43]</ref><ref type="bibr" target="#b43">[44]</ref><ref type="bibr" target="#b44">[45]</ref> and RPC <ref type="bibr" target="#b26">[27,</ref><ref type="bibr" target="#b27">28]</ref>, distributed shared memory <ref type="bibr" target="#b12">[13,</ref><ref type="bibr" target="#b31">32,</ref><ref type="bibr" target="#b32">33,</ref><ref type="bibr" target="#b41">42,</ref><ref type="bibr" target="#b53">54,</ref><ref type="bibr" target="#b57">58]</ref>, and from reliable failure informers <ref type="bibr" target="#b2">[3,</ref><ref type="bibr" target="#b38">[39]</ref><ref type="bibr" target="#b39">[40]</ref><ref type="bibr" target="#b40">[41]</ref> for faster recovery.</p><p>We believe disaggregation has merits (and plenty of challenges) and wish to discuss three key areas: firstly, whether the assumptions for our model of disaggregation are reasonable. Secondly, we would like to discuss the role of compute at memory elements and whether there are opportunities to leverage near-data processing (NDP), or if relying on such compute is tantamount to admitting the inadequacy of memory disaggregation. Finally, we would like to discuss feasibility and implementation strategies for the Rack MMU.</p><p>Disaggregation model. We assume that the unit of disaggregation will be the rack because it strikes the right balance between increasing provider flexibility around bin-packing resources and the cost and overhead of the (still hypothetical) interconnect. Are there merits to more aggressively disaggregating resources across multiple racks? Further, the interfaces we propose require applications to actively participate in reasoning about disaggregation to benefit-legacy applications, while supported, do not transparently benefit in any way. Is this a reasonable burden for application developers to bear?</p><p>Offloading operations to memory. Just as storage systems have moved back and forth between completely disaggregated, disaggregated with offload, and hyperconverged solutions, disaggregated memory systems will need to decide just how powerful and programmable the compute at the memory elements should be. At one extreme, purely disaggregated systems may directly expose memory across the fabric without support for compute-except perhaps very simple functions via processing-in-memory <ref type="bibr" target="#b22">[23]</ref>. At the other end, they might be fronted by fully programmable processors running arbitrary code which could adversely affect memory access latencies. In practice, we believe that this is likely to take some form of domain specific language on top of dedicated hardware, or a declarative policy engine on top of a commodity OS and hardware, but with soft realtime guarantees. We believe that this is an interesting area of discussion.</p><p>Implementing the Rack MMU. The Rack MMU is assumed to be able to route requests between any compute and memory elements within the rack at very low latency, and to support racks of high density. It is also assumed to have enough space to store address mappings for each process, so that accesses from compute elements are transparently routed to the correct memory element; further, it supports dynamic reconfiguration of routes and mappings without requiring any downtime. In practice, neither of those are completely realistic today: for context, while programmable switches such as the Barefoot Tofino and Cavium XPliant do offer low-latency routing and on-the-fly reconfiguration, they still are limited in their port counts and memory, which restricts their scale. A single switch is unlikely to accommodate the above constraints, so an SDNlike architecture with a slow control plane and a fast data plane could be the sweet spot.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>FIGURE 1 -</head><label>1</label><figDesc>FIGURE 1-Proposed architecture for a DDC. Racks consist of blades housing compute elements (with some local memory) or memory elements (with locally-attached compute to mediate accesses) connected via the Rack MMU. Compute elements within and across racks communicate through a standard Top-of-Rack Ethernet switch.</figDesc></figure>
+		</body>
+		<back>
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title level="m" type="main">Connectx-6 single/dual-port adapter supporting 200Gb/s with VPI</title>
+		<ptr target="https://www.mellanox.com/page/products_dyn?product_family=265&amp;mtag=connectx_6_vpi_card" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Cooperative Task Management Without Manual Stack Management</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Adya</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Howell</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Theimer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">J</forename><surname>Bolosky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">R</forename><surname>Douceur</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Annual Technical Conference (ATC)</title>
+		<meeting>the USENIX Annual Technical Conference (ATC)</meeting>
+		<imprint>
+			<date type="published" when="2002" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">No time for asynchrony</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">K</forename><surname>Aguilera</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Walfish</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Workshop on Hot Topics in Operating Systems (HotOS)</title>
+		<meeting>the Workshop on Hot Topics in Operating Systems (HotOS)</meeting>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title/>
+		<ptr target="https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/placement-groups.html" />
+	</analytic>
+	<monogr>
+		<title level="j">Amazon. Placement Groups</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">FireBox: A Hardware Building Block for 2020 Warehouse-Scale Computers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Asanovi´casanovi´c</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Conference on File and Storage Technologies (FAST)</title>
+		<meeting>the USENIX Conference on File and Storage Technologies (FAST)</meeting>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Lightweight Remote Procedure Call</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Bershad</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Anderson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Lazowska</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Levy</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM Symposium on Operating Systems Principles (SOSP)</title>
+		<meeting>the ACM Symposium on Operating Systems Principles (SOSP)</meeting>
+		<imprint>
+			<date type="published" when="1989" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">User-level Interprocess Communication for Shared Memory Multiprocessors</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">N</forename><surname>Bershad</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">E</forename><surname>Anderson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">D</forename><surname>Lazowska</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">M</forename><surname>Levy</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Computer Systems (TOCS)</title>
+		<imprint>
+			<biblScope unit="volume">9</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<date type="published" when="1991" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Intel Omni-path Architecture: Enabling Scalable, High Performance Fabrics</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">S</forename><surname>Birrittella</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Debbage</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Huggahalli</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Kunz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Lovett</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Rimmer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><forename type="middle">D</forename><surname>Underwood</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">C</forename><surname>Zak</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2015 IEEE 23rd Annual Symposium on High-Performance Interconnects (HOTI)</title>
+		<meeting>the 2015 IEEE 23rd Annual Symposium on High-Performance Interconnects (HOTI)</meeting>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">The Chubby lock service for loosely-coupled distributed systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Burrows</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</title>
+		<meeting>the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</meeting>
+		<imprint>
+			<date type="published" when="2006" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Liqid Fulfils the Promise of Rack-Scale Composable Infrastructure with General Availability</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Businesswire</surname></persName>
+		</author>
+		<ptr target="https://www.businesswire.com/news/home/20171114006064/en/" />
+	</analytic>
+	<monogr>
+		<title level="m">Liqid-Fulfils-Promise-RackScale-Composable-Infrastructure-General</title>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Tolerating Faults in Disaggregated Datacenters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Carbonari</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Beschastnikh</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM Workshop on Hot Topics in Networks (HotNets</title>
+		<meeting>the ACM Workshop on Hot Topics in Networks (HotNets</meeting>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Paxos Made Live-An Engineering Perspective</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Chandra</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Griesemer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Redstone</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Symposium on Principles of Distributed Computing (PODC)</title>
+		<meeting>the Symposium on Principles of Distributed Computing (PODC)</meeting>
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Sharing and Protection in a Single-address-space Operating System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">S</forename><surname>Chase</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">M</forename><surname>Levy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">J</forename><surname>Feeley</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">D</forename><surname>Lazowska</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Computer Systems (TOCS)</title>
+		<imprint>
+			<biblScope unit="volume">12</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<date type="published" when="1994" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">NV-Heaps: Making Persistent Objects Fast and Safe with Next-generation, Non-volatile Memories</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Coburn</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">M</forename><surname>Caulfield</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Akel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">M</forename><surname>Grupp</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">K</forename><surname>Gupta</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Jhala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Swanson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS)</title>
+		<meeting>the International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS)</meeting>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Better I/O Through Byte-addressable, Persistent Memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Condit</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">B</forename><surname>Nightingale</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Frost</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Ipek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Burger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Coetzee</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM Symposium on Operating Systems Principles (SOSP)</title>
+		<meeting>the ACM Symposium on Operating Systems Principles (SOSP)</meeting>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">MapReduce: Simplified Data Processing on Large Clusters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Dean</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Ghemawat</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</title>
+		<meeting>the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</meeting>
+		<imprint>
+			<date type="published" when="2004" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">System Software for Persistent Memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">R</forename><surname>Dulloor</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Kumar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Keshavamurthy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Lantz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Reddy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Sankaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Jackson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM European Conference on Computer Systems (EuroSys)</title>
+		<meeting>the ACM European Conference on Computer Systems (EuroSys)</meeting>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Beyond processor-centric operating systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Faraboschi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Keeton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Marsland</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Milojicic</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Workshop on Hot Topics in Operating Systems (HotOS)</title>
+		<meeting>the Workshop on Hot Topics in Operating Systems (HotOS)</meeting>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<monogr>
+		<title level="m" type="main">Liqid Takes Composable Infrastructure to a New Level</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Foskett</surname></persName>
+		</author>
+		<ptr target="https://gestaltit.com/exclusive/stephen/liqid-takes-composable-infrastructure-to-a-new-level/" />
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Soft Updates: A Solution to the Metadata Update Problem in File Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">R</forename><surname>Ganger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">K</forename><surname>Mckusick</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">A N</forename><surname>Soules</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><forename type="middle">N</forename><surname>Patt</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Computer Systems (TOCS)</title>
+		<imprint>
+			<biblScope unit="volume">18</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<date type="published" when="2000" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Network Requirements for Resource Disaggregation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">X</forename><surname>Gao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Narayan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Karandikar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Carreira</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Han</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Agarwal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Ratnasamy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Shenker</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</title>
+		<meeting>the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</meeting>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<monogr>
+		<title level="m" type="main">Gen-z core specification, revision 1</title>
+		<ptr target="https://www.genzconsortium.com" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Processing-in-memory: A workload-drive perspective</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Ghose</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Borumand</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">S</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Gómez-Luna</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O</forename><surname>Mutlu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IBM Journal of Research &amp; Development</title>
+		<imprint>
+			<biblScope unit="volume">63</biblScope>
+			<biblScope unit="issue">6</biblScope>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">PowerGraph: Distributed graph-parallel computation on natural graphs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">E</forename><surname>Gonzalez</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Low</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Gu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Bickson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Guestrin</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</title>
+		<meeting>the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</meeting>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">Efficient Memory Disaggregation with INFINISWAP</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Gu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Chowdhury</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><forename type="middle">G</forename><surname>Shin</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Symposium on Networked Systems Design and Implementation (NSDI</title>
+		<meeting>the USENIX Symposium on Networked Systems Design and Implementation (NSDI</meeting>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">Dryad: Distributed data-parallel programs from sequential building blocks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Isard</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Budiu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Yu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Birrel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Fetterly</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM European Conference on Computer Systems (EuroSys)</title>
+		<meeting>the ACM European Conference on Computer Systems (EuroSys)</meeting>
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">FaSST: Fast, Scalable and Simple Distributed Transactions with Two-sided (RDMA) Datagram RPCs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Kalia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Kaminsky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">G</forename><surname>Andersen</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</title>
+		<meeting>the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</meeting>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<analytic>
+		<title level="a" type="main">Datacenter RPCs can be General and Fast</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Kalia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Kaminsky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">G</forename><surname>Andersen</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Symposium on Networked Systems Design and Implementation (NSDI)</title>
+		<meeting>the USENIX Symposium on Networked Systems Design and Implementation (NSDI)</meeting>
+		<imprint>
+			<date type="published" when="2019" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Rack-scale Disaggregated Cloud Data Centers: The dReDBox Project Vision</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Katrinis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Syrivelis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Pnevmatikatos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Zervas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Theodoropoulos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Koutsopoulos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Hasharoni</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Raho</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Pinto</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Espina</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>López-Buedo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Q</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Nemirovsky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Roca</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Klos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Berends</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Design, Automation Test in Europe Conference Exhibition (DATE)</title>
+		<meeting>the Design, Automation Test in Europe Conference Exhibition (DATE)</meeting>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<monogr>
+		<title level="m" type="main">High Performance Network and Channel-Based Storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">H</forename><surname>Katz</surname></persName>
+		</author>
+		<idno>UCB/CSD-91-650</idno>
+		<imprint>
+			<date type="published" when="1991-09" />
+		</imprint>
+		<respStmt>
+			<orgName>EECS Department, University of California, Berkeley</orgName>
+		</respStmt>
+	</monogr>
+<note type="report_type">Technical Report</note>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">The Machine: An Architecture for Memory-centric Computing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Keeton</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Workshop on Runtime and Operating Systems for Supercomputers (ROSS)</title>
+		<meeting>the Workshop on Runtime and Operating Systems for Supercomputers (ROSS)</meeting>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<analytic>
+		<title level="a" type="main">TreadMarks: Distributed Shared Memory on Standard Workstations and Operating Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Keleher</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">L</forename><surname>Cox</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Dwarkadas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Zwaenepoel</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Winter Technical Conference, WTEC&apos;94</title>
+		<meeting>the USENIX Winter Technical Conference, WTEC&apos;94</meeting>
+		<imprint>
+			<date type="published" when="1994" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">Shared Memory Computing on Clusters with Symmetric Multiprocessors and System Area Networks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Kontothanassis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Stets</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Hunt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">U</forename><surname>Rencuzogullari</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Altekar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Dwarkadas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">L</forename><surname>Scott</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Computer Systems (TOCS)</title>
+		<imprint>
+			<biblScope unit="volume">23</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<date type="published" when="2005" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<monogr>
+		<title level="m" type="main">Intel Rack Scale Architecture Overview</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Kyathsandra</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Dahlen</surname></persName>
+		</author>
+		<ptr target="http://presentations.interop.com/events/las-vegas/2013/free-sessions---keynote-presentations/download/463" />
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<analytic>
+		<title level="a" type="main">Time, Clocks, and the Ordering of Events in a Distributed System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Lamport</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Communications of the ACM</title>
+		<imprint>
+			<biblScope unit="volume">21</biblScope>
+			<biblScope unit="issue">7</biblScope>
+			<date type="published" when="1978" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<analytic>
+		<title level="a" type="main">The Part-Time Parliament</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Lamport</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Computer Systems (TOCS)</title>
+		<imprint>
+			<biblScope unit="volume">16</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<date type="published" when="1998" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b36">
+	<analytic>
+		<title level="a" type="main">Vertical Paxos and Primary-Backup Replication</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Lamport</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Malkhi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Zhou</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Symposium on Principles of Distributed Computing (PODC)</title>
+		<meeting>the Symposium on Principles of Distributed Computing (PODC)</meeting>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b37">
+	<analytic>
+		<title level="a" type="main">Reconfiguring a state machine</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Lamport</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Malkhi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Zhou</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM SIGACT News</title>
+		<imprint>
+			<biblScope unit="volume">41</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b38">
+	<analytic>
+		<title level="a" type="main">Improving Availability in Distributed Systems with Failure Informers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">B</forename><surname>Leners</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Gupta</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">K</forename><surname>Aguilera</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Walfish</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Symposium on Networked Systems Design and Implementation (NSDI)</title>
+		<meeting>the USENIX Symposium on Networked Systems Design and Implementation (NSDI)</meeting>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b39">
+	<analytic>
+		<title level="a" type="main">Taming uncertainty in distributed systems with help from the network</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">B</forename><surname>Leners</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Gupta</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">K</forename><surname>Aguilera</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Walfish</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM European Conference on Computer Systems (EuroSys)</title>
+		<meeting>the ACM European Conference on Computer Systems (EuroSys)</meeting>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b40">
+	<analytic>
+		<title level="a" type="main">Detecting failures in distributed systems with the FALCON spy network</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">B</forename><surname>Leners</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Wu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W.-L</forename><surname>Hung</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">K</forename><surname>Aguilera</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Walfish</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM Symposium on Operating Systems Principles (SOSP)</title>
+		<meeting>the ACM Symposium on Operating Systems Principles (SOSP)</meeting>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b41">
+	<analytic>
+		<title level="a" type="main">Memory Coherence in Shared Virtual Memory Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Hudak</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Computer Systems (TOCS)</title>
+		<imprint>
+			<biblScope unit="volume">7</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<date type="published" when="1989" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b42">
+	<analytic>
+		<title level="a" type="main">Improving IPC by Kernel Design</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Liedtke</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM Symposium on Operating Systems Principles (SOSP)</title>
+		<meeting>the ACM Symposium on Operating Systems Principles (SOSP)</meeting>
+		<imprint>
+			<date type="published" when="1993" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b43">
+	<analytic>
+		<title level="a" type="main">On Micro-kernel Construction</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Liedtke</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM Symposium on Operating Systems Principles (SOSP)</title>
+		<meeting>the ACM Symposium on Operating Systems Principles (SOSP)</meeting>
+		<imprint>
+			<date type="published" when="1995" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b44">
+	<analytic>
+		<title level="a" type="main">Toward Real Microkernels</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Liedtke</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Communications of the ACM</title>
+		<imprint>
+			<biblScope unit="volume">39</biblScope>
+			<biblScope unit="issue">9</biblScope>
+			<date type="published" when="1996" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b45">
+	<analytic>
+		<title level="a" type="main">Disaggregated Memory for Expansion and Sharing in Blade Servers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Lim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Chang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Mudge</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Ranganathan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">K</forename><surname>Reinhardt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">F</forename><surname>Wenisch</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the International Symposium on Computer Architecture (ISCA)</title>
+		<meeting>the International Symposium on Computer Architecture (ISCA)</meeting>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b46">
+	<monogr>
+		<title level="m" type="main">Disaggregated Memory Benefits for Server Consolidation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Lim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Turnet</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Chang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">Renato</forename><surname>Santos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Ranganathan</surname></persName>
+		</author>
+		<idno>HPL-2011-31</idno>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+		<respStmt>
+			<orgName>HP Laboratories</orgName>
+		</respStmt>
+	</monogr>
+<note type="report_type">Technical Report</note>
+</biblStruct>
+
+<biblStruct xml:id="b47">
+	<analytic>
+		<title level="a" type="main">Pregel: A system for large-scale graph processing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Malewicz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">H</forename><surname>Austern</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">J C</forename><surname>Bik</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">C</forename><surname>Dehnert</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Horn</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Leiser</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Czajkowski</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM SIGMOD Conference</title>
+		<meeting>the ACM SIGMOD Conference</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b48">
+	<monogr>
+		<title level="m" type="main">Timely dataflow</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Mcsherry</surname></persName>
+		</author>
+		<ptr target="https://github.com/TimelyDataflow/timely-dataflow" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b49">
+	<monogr>
+		<title level="m" type="main">The impact of fast networks on graph analytics</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Mcsherry</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Schwarzkopf</surname></persName>
+		</author>
+		<ptr target="http://www.frankmcsherry.org/pagerank/distributed/performance/2015/07/08/pagerank.html" />
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b50">
+	<analytic>
+		<title level="a" type="main">Atomic In-place Updates for Non-volatile Main Memories with Kamino-Tx</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Memaripour</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Badam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Phanishayee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Alagappan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Strauss</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Swanson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM European Conference on Computer Systems (EuroSys)</title>
+		<meeting>the ACM European Conference on Computer Systems (EuroSys)</meeting>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b51">
+	<monogr>
+		<title level="m" type="main">Regions and availability for virtual machines in Azure</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Microsoft</surname></persName>
+		</author>
+		<ptr target="https://docs.microsoft.com/en-us/azure/virtual-machines/windows/regions-and-availability" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b52">
+	<analytic>
+		<title level="a" type="main">Naiad: A Timely Dataflow System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Murray</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Mcsherry</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Isaacs</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Isard</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Barham</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Abadi</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM Symposium on Operating Systems Principles (SOSP)</title>
+		<meeting>the ACM Symposium on Operating Systems Principles (SOSP)</meeting>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b53">
+	<analytic>
+		<title level="a" type="main">Latency-Tolerant Software Distributed Shared Memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Nelson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Holt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Myers</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Briggs</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Ceze</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Kahan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Oskin</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Annual Technical Conference (ATC)</title>
+		<meeting>the USENIX Annual Technical Conference (ATC)</meeting>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b54">
+	<analytic>
+		<title level="a" type="main">Scale-out NUMA</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Novakovi´cnovakovi´c</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Daglis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Bugnion</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Falsafi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Grot</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS)</title>
+		<meeting>the International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS)</meeting>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b55">
+	<analytic>
+		<title level="a" type="main">Viewstamped Replication: A New Primary Copy Method to Support Highly-Available Distributed Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">M</forename><surname>Oki</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">H</forename><surname>Liskov</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Symposium on Principles of Distributed Computing (PODC)</title>
+		<meeting>the Symposium on Principles of Distributed Computing (PODC)</meeting>
+		<imprint>
+			<date type="published" when="1988" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b56">
+	<analytic>
+		<title level="a" type="main">A Case for Redundant Arrays of Inexpensive Disks (RAID)</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">A</forename><surname>Patterson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Gibson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">H</forename><surname>Katz</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM SIGMOD Conference</title>
+		<meeting>the ACM SIGMOD Conference</meeting>
+		<imprint>
+			<date type="published" when="1988" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b57">
+	<analytic>
+		<title level="a" type="main">Piccolo: Building Fast, Distributed Programs with Partitioned Tables</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Russell</forename><surname>Power</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jinyang</forename><surname>Li</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</title>
+		<meeting>the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b58">
+	<analytic>
+		<title level="a" type="main">Implementing fault-tolerant services using the state machine approach: a tutorial</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><forename type="middle">B</forename><surname>Schneider</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Computing Surveys (CSUR)</title>
+		<imprint>
+			<biblScope unit="volume">22</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<date type="published" when="1990" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b59">
+	<analytic>
+		<title level="a" type="main">RECIPE: Converting Concurrent DRAM Indexes to Persistent-Memory Indexes</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jayashree</forename><surname>Se Kwon Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanidhya</forename><surname>Mohan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Taesoo</forename><surname>Kashyap</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vijay</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Chidambaram</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM Symposium on Operating Systems Principles (SOSP)</title>
+		<meeting>the ACM Symposium on Operating Systems Principles (SOSP)</meeting>
+		<imprint>
+			<date type="published" when="2019" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b60">
+	<analytic>
+		<title level="a" type="main">How to share a secret</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Shamir</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Communications of the ACM</title>
+		<imprint>
+			<biblScope unit="volume">22</biblScope>
+			<biblScope unit="issue">11</biblScope>
+			<date type="published" when="1979" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b61">
+	<analytic>
+		<title level="a" type="main">LegoOS: A Disseminated, Distributed OS for Hardware Resource Disaggregation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Shan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Huang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</title>
+		<meeting>the USENIX Symposium on Operating Systems Design and Implementation (OSDI)</meeting>
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b62">
+	<analytic>
+		<title level="a" type="main">Shoal: A Network Architecture for Disaggregated Racks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Shrivastav</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Valadarsky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Ballani</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Costa</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><forename type="middle">S</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Agarwal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Weatherspoon</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Symposium on Networked Systems Design and Implementation (NSDI)</title>
+		<meeting>the USENIX Symposium on Networked Systems Design and Implementation (NSDI)</meeting>
+		<imprint>
+			<date type="published" when="2019" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b63">
+	<analytic>
+		<title level="a" type="main">Frangipani: a scalable distributed file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">A</forename><surname>Thekkath</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Mann</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">K</forename><surname>Lee</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM Symposium on Operating Systems Principles (SOSP)</title>
+		<meeting>the ACM Symposium on Operating Systems Principles (SOSP)</meeting>
+		<imprint>
+			<date type="published" when="1997" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b64">
+	<analytic>
+		<title level="a" type="main">Consistent and Durable Data Structures for Non-volatile Byte-addressable Memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Venkataraman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Tolia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Ranganathan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">H</forename><surname>Campbell</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Conference on File and Storage Technologies (FAST)</title>
+		<meeting>the USENIX Conference on File and Storage Technologies (FAST)</meeting>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b65">
+	<analytic>
+		<title level="a" type="main">Mnemosyne: Lightweight Persistent Memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Volos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">J</forename><surname>Tack</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">M</forename><surname>Swift</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS)</title>
+		<meeting>the International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS)</meeting>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b66">
+	<analytic>
+		<title level="a" type="main">eNVy: A Non-Volatile, Main Memory Storage System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Wu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Zwaenepoel</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS)</title>
+		<meeting>the International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS)</meeting>
+		<imprint>
+			<date type="published" when="1994" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b67">
+	<analytic>
+		<title level="a" type="main">NOVA: A log-structured file system for hybrid volatile/non-volatile main memories</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Swanson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Conference on File and Storage Technologies (FAST)</title>
+		<meeting>the USENIX Conference on File and Storage Technologies (FAST)</meeting>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b68">
+	<analytic>
+		<title level="a" type="main">Resilient distributed datasets: A fault-tolerant abstraction for in-memory cluster computing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Zaharia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Chowdhury</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Das</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Dave</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Ma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Mccauley</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">J</forename><surname>Franklin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Shenker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Stoica</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Symposium on Networked Systems Design and Implementation (NSDI)</title>
+		<meeting>the USENIX Symposium on Networked Systems Design and Implementation (NSDI)</meeting>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b69">
+	<analytic>
+		<title level="a" type="main">Hound: Causal Learning for Datacenter-scale Straggler Diagnosis</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Zheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">C</forename><surname>Lee</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM SIGMETRICS Conference</title>
+		<meeting>the ACM SIGMETRICS Conference</meeting>
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

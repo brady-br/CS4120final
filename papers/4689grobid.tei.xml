@@ -1,0 +1,1805 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T04:28+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">SoK: Make JIT-Spray Great Again</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><surname>Gawlik</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">Ruhr-Universität Bochum</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thorsten</forename><surname>Holz</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">Ruhr-Universität Bochum</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">SoK: Make JIT-Spray Great Again</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Since the end of the 20th century, it has become clear that web browsers will play a crucial role in accessing Internet resources such as the World Wide Web. They evolved into complex software suites that are able to process a multitude of data formats. Just-In-Time (JIT) compilation was incorporated to speed up the execution of script code, but is also used besides web browsers for performance reasons. Attackers happily welcomed JIT in their own way, and until today, JIT compilers are an important target of various attacks. This includes for example JIT-Spray, JIT-based code-reuse attacks and JIT-specific flaws to circumvent mitigation techniques in order to simplify the exploitation of memory-corruption vulnerabilities. Furthermore , JIT compilers are complex and provide a large attack surface, which is visible in the steady stream of critical bugs appearing in them. In this paper, we survey and systematize the jungle of JIT compilers of major (client-side) programs, and provide a categorization of offensive techniques for abusing JIT compilation. Thereby, we present techniques used in academic as well as in non-academic works which try to break various defenses against memory-corruption vul-nerabilities. Additionally, we discuss what mitigations arouse to harden JIT compilers to impede exploitation by skilled attackers wanting to abuse Just-In-Time compilers.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Since it became clear that memory bugs, especially stackbased buffer overflows, can be used to execute arbitrary attacker-controlled code <ref type="bibr" target="#b50">[51]</ref>, a plentitude of attacks and defenses were proposed over the years <ref type="bibr" target="#b75">[77]</ref>. Comparable to an arms race, new defenses popped up and were broken shortly afterwards with novel attacks that led to new defenses again. Especially web browsers became an attractive target for attacks given their practical importance and wide-spread use, in addition to their complexity.</p><p>Attacks against client-side programs such as browsers were at first tackled with a non-executable stack to prevent execution of data on the stack and also with a nonexecutable heap to stop heap sprays of data being later executed as code. This defense became widely known as W ⊕ X (Writable xor eXecutable) or Data Execution Prevention (DEP) to make any data region non-executable in 2003 <ref type="bibr" target="#b44">[45,</ref><ref type="bibr">54]</ref>. To counter DEP, attackers started to perform code reuse such as Return-Oriented Programming (ROP) and many variants <ref type="bibr" target="#b9">[10,</ref><ref type="bibr" target="#b10">11,</ref><ref type="bibr" target="#b31">32,</ref><ref type="bibr" target="#b66">68]</ref>. In general, if an adversary knows the location of static code in the address space of the vulnerable target, she can prepare a fake stack with addresses of these gadgets. As soon as control of the instruction pointer is gained, these gadgets execute in a chained manner and perform the desired actions. To prevent code-reuse and similar types of attacks, Address Space Layout Randomization (ASLR) was proposed in 2003 <ref type="bibr" target="#b53">[55]</ref>. It randomizes the address layout making it difficult to find code snippets to reuse <ref type="bibr" target="#b64">[66,</ref><ref type="bibr" target="#b76">78]</ref>.</p><p>JIT-Spray came in handy here: If expressions with constant values of a high-level language are Just-In-Time (JIT) compiled into native code, they can be abused to embed malicious code bytes at run time. This bypasses DEP because data is (indirectly) injected as code. Additionally, if the adversary manages to create many regions of this code, their locations become predictable. Hence, by spraying many code regions, she can predict the address of one region to bypass ASLR. Finally, only control over the instruction pointer is needed to redirect the control flow to the injected code. Thereby, a use-after-free, type confusion or heap-buffer overflow vulnerability is sufficient. We provide an overview of JIT compilers in Section 2, and an in-depth look at JIT-Spray in Section 3.</p><p>JIT-Spray enabled the creation of complete selfsustained payloads such as arbitrary shellcode that executes continuously. Moreover, there are techniques to spray small snippets (so called JIT gadgets) which have to be chained together in an exploit. If their addresses are predictable, we still count it as JIT-Spray. However, if a memory disclosure vulnerability is necessary to locate them, we do not count it as JIT-Spray, but as JIT-based code-reuse attack. The main reason for this distinction is that memory disclosures are usually more difficult to achieve than control over the instruction pointer only. Hence, the adversary needs more control and has to invest more resources than with JIT-Spray alone. An overview of JIT-based code-reuse attacks is provided in Section 4.</p><p>Note that JIT-Spray and JIT-based code reuse have in common that injected code is unintended and is usually in the middle of an instruction stream the JIT compiler intentionally emitted. A defense which does not only prevent execution of unintended JIT code but also unintended static code such as ROP gadgets is ControlFlow Integrity (CFI) <ref type="bibr">[1]</ref>. It assures that only predefined code entries are valid targets for branches in static as well as JIT code. A prominent implementation of CFI is Microsoft's Control-Flow Guard (MS-CFG) which also protects JIT-code regions in Microsoft Edge <ref type="bibr" target="#b40">[41]</ref>. More recently, LLVM-CFI appeared in Google Chrome as an effective CFI solution <ref type="bibr" target="#b26">[27,</ref><ref type="bibr" target="#b78">80]</ref>.</p><p>Another general mitigation against code injection attacks is Arbitrary Code Guard (ACG) <ref type="bibr" target="#b42">[43]</ref>. If enabled, it prevents making code pages writable and writable pages executable. This poses a challenge for JIT compilers as they need to write code first and change the permissions to executable afterwards. Hence, Microsoft Edge uses an out-of-process JIT server which maps dynamic code into a memory region shared with the browser process. In Section 5, we describe additional security problems which may arise from JIT compilers.</p><p>There are also specific mitigations against JIT-Spray and JIT-related flaws. We shortly introduce some of them needed to provide a basic understanding for the rest of the paper. In Section 6, we provide a more in depth and complete picture of mitigations against attacks abusing JIT compilers. One mitigation is a convenient compiler optimization named constant folding: if the (JIT) compiler is able to calculate operations at compile time before generating native code, then only the remaining operations/results will end up in native code. Hence, constants do not appear in which an attacker would have been able to embed malicious code bytes. A more specific defense against embedding code in constants is constant blinding. For that, an immediate value is xored with a random key value before the JIT compiler emits it into the native instruction. As soon as it is used it is "unxored", but the immediate value does not appear in native code. Hence, it directly hinders code injection through JIT-Spray. We explain JIT-related defenses in more detail in Section 6.</p><p>Overall, we make the following contributions:</p><p>• We provide an overview and survey of JIT-Spray on the x86 and ARM architecture including academic work as well as non-academic attacks, and describe the offensive techniques in detail. The most recent JIT-Spray technique appeared in ASM.JS in Mozilla Firefox, which we illustrate in more detail.</p><p>• We distinguish JIT-Spray from JIT-based code-reuse attacks and explain the landscape of JIT-compiler based code-reuse attacks.</p><p>• We summarize mitigation bypasses that were possible with the help of JIT compilers and exhibit defenses which emerged over the years to protect against various JIT-related flaws.</p><p>The remaining sections of the paper are categorized in <ref type="table" target="#tab_0">Table 1</ref>. It provides JIT-Spray and JIT-based code reuse attacks based on the achieved exploit goal in the affected targets. Various defenses were proposed as hardening mechanisms.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Just-In-Time Compilation</head><p>As noted before, the most popular client-side programs for everyday users are undoubtly web browsers. Major browsers such as Mozilla Firefox, Internet Explorer, Microsoft Edge, Google Chrome and Apple Safari contain a JavaScript run-time environment. JavaScript is a dynamic scripting language and allows convenient manipulation of web content, a crucial aspect of the modern Web. While JavaScript engines run as interpreters, they embed Just-In-Time (JIT) compilers as well. The benefits of JIT compilation compared to the interpretation of JavaScript (bytecode) are huge performance gains: instead of executing JavaScript code in a virtual-machine-like manner, native code is emitted by the JIT compilers for the CPU the browser runs on. If a function runs hot, i. e. is executed frequently, Just-In-Time compilation kicks in and transforms the function into machine code for the architecture the browser runs on. There exist several Just-In-Time compilers and optimization layers. Broadly speaking, JavaScript in web browsers share the same design <ref type="bibr" target="#b16">[17]</ref>. There is an interpreter and one or more Just-In-Time compilers with different optimization levels. JavaScriptCore (JSC) of WebKit, for example, which is the base for Apple Safari, uses a four-tier JavaScript optimization strategy of which three tiers are JIT optimizations (LLint, Baseline, DFG, FTL) <ref type="bibr" target="#b55">[57]</ref>. While the first tier interprets JavaScript bytecode, the second to fourth JIT stages kick in on an increasing number of executions of functions and statements. Thereby, the optimizations become more and more aggressive to improve the performance of native code emitted by the second to fourth tier optimization.</p><p>Similarly, ChakraCore, the JavaScript engine of Microsoft Edge, has multiple tiers. It contains an interpreter and a two-tier JIT compiler <ref type="bibr" target="#b39">[40]</ref>. If hardware resources  <ref type="bibr" target="#b41">[42]</ref> JSC <ref type="bibr" target="#b32">[33]</ref> ARM W⊕X, ASLR JIT allocation randomization V8 <ref type="bibr" target="#b33">[34]</ref> JIT-based code reuse (see § 4)</p><p>Code execution of JIT gadgets</p><formula xml:id="formula_0">SpiderMonkey [6] x86</formula><p>Gadget-free static code Constant blinding Internet Explorer (Chakra) <ref type="bibr" target="#b5">[6]</ref> x64</p><formula xml:id="formula_1">SpiderMonkey [37] x64</formula><p>Execute-only memory</p><p>Remove implicit constants from native code</p><p>Internet Explorer (Chakra) <ref type="bibr" target="#b36">[37]</ref> x86 Google Chrome (V8) <ref type="bibr" target="#b36">[37]</ref> x86/x64</p><p>are available, JIT compilation may be split into parallel background threads. Mozilla Firefox currently uses IonMonkey as Just-In-Time compiler, which is designed in a cross-architectural manner to simplify run-time compilation to various CPUs such as x86 and ARM <ref type="bibr" target="#b3">[4]</ref>. TurboFan is the JIT compiler of V8, the JavaScript engine of Google Chrome, and implements its own set of aggressive optimizations, while reducing complexity of previous JIT compilers <ref type="bibr" target="#b25">[26,</ref><ref type="bibr" target="#b28">29]</ref>. Besides browsers, also the Java Virtual Machine (JVM) uses an interpreter and JIT compiler (Oracle HotSpot). This way, Java compiled binaries remain portable featuring a universal bytecode, which is interpreted and JITcompiled to the underlying architecture on which the program has to be executed <ref type="bibr" target="#b34">[35]</ref>. For the sake of completeness, we mention that Microsoft's dotNet framework features a JIT compiler (RyuJIT) <ref type="bibr" target="#b19">[20]</ref> as well, and even the Linux kernel uses JIT compilation for extended Berkeley Packet Filters (eBPF) <ref type="bibr" target="#b20">[21]</ref>. For the popular server-side language PHP, a JIT compiler named HHVM exists and the language Lua uses LuaJIT for dynamic native code generation <ref type="bibr" target="#b51">[52,</ref><ref type="bibr" target="#b71">73]</ref>. Interestingly, as we explain in the next section, the most prominent attack against a JIT compiler was JIT-Spray <ref type="bibr" target="#b8">[9]</ref>, which targeted the ActionScript Virtual Machine (AVM) of Adobe Flash <ref type="bibr" target="#b2">[3]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">JIT-Spray</head><p>JIT-Spray is an elegant exploitation technique to bypass both DEP and ASLR. While it is not as generic as ROPbecause a JIT compiler is necessary-it significantly simplifies the exploitation of memory bugs.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">JIT-Spray on x86</head><p>The instruction length of the x86 architecture is variable. Hence, within a code bytestream, every byteoffset is a potential beginning of an instruction given that the bytes at every offset are decodable by x86. From an exploiter's perspective, this can be abused to inject code: if an adversary has enough control over a JIT compiler, she can force it to emit instructions containing immediate values, while these contain valid instruction bytes themselves. In 2010, Blazakis found that ActionScript of Adobe Flash directly emits script-level constants into native machine code <ref type="bibr" target="#b8">[9]</ref>. Consider a long XOR expression in ActionScript as shown in Listing 1. Listing 1: ActionScript statement containing a long XOR sequence.</p><p>The ActionScript JIT compiler generates native machine code containing the instructions shown in Listing 2. While these instructions represent the high-level calculation, different instructions are executed if execution starts at the first offset (see Listing 3). It shows in a school-book manner how a nop-sled can be created by injecting NOP (0x90) instructions. As the ActionScript constants are fully controllable by the attacker, arbitrary payload instructions less or equal than three bytes in size can be injected. The fourth byte (0x3C) serves the purpose to mask the legitimate operation represented by the opcode 0x35 (⊕), and results in a semantic nop-like instruction (cmp al, 0x35). It also prevents instruction resynchronization. The adversary then forces the JIT compiler to generate enough copies of native machine code such that their addresses in memory become predictable (on 32-bit systems). Then she can redirect the control flow to a predicted address and execute the injected code. The chance is 80% that the nop-sled will be hit. In one of five cases (20%), the legitimate instruction stream will be hit and the exploit fails.  This was the birth of JIT-Spray and further attacks were not long to be coming. In 2010, Sintsov showed how to automate and write shellcode for JIT-Spray attacks <ref type="bibr" target="#b68">[70]</ref>. Instructions larger than three bytes in size are a problem, but most of them can be transformed into semantically equivalent instructions less or equal than three bytes. For example, "MOV EAX, 0x41424344" results in a five-byte instruction. However, it can be split into three instructions performing the same operation: "MOV EAX, 0x41424yyzz" is emitted by controlling three bytes and letting the JIT compiler mangle two bytes (yyzz). These are set separately with two instructions both two bytes in size: "MOV AH, 0x43" and "MOV AL, 0x44". Another nifty trick was to use 0x6A instead of 0x3C as a masking byte. This way, instead of creating a semantic nop which tampers with CPU flags (3C35 cmp al, 0x35), a push instruction emerged (6A35 push 0x35). This allowed adversaries to use conditional jumps (i. e., JNZ) afterwards. JIT-Spray was also possible in the Windows version of JavaScript of Apple Safari in 2010 <ref type="bibr" target="#b67">[69]</ref>. As the JIT compiler emitted much code between the controlled JavaScript constants, the author used two bytes from the constant as payload bytes, and the two other bytes as an unconditional jump to the next constant. Consider the constant 0x14EB9090 in a JavaScript operation. Apple Safari's JavaScriptCore baseline-JIT compiler generated code which could be abused in the following way (see Listing 4): Listing 4: Abusing JavaScript constants to connect two payload bytes with short jumps.</p><p>While only two bytes are usable effectively for malicious purposes, Sintsov showed that arbitrary operations are still possible. This included writing a malicious payload to a writable and executable JIT page, and then jumping to it.</p><p>In 2010 and 2011, an in-depth investigation was performed on especially JIT compilers of LLVM and Mozilla Firefox <ref type="bibr" target="#b62">[64,</ref><ref type="bibr" target="#b63">65]</ref>. The authors demonstrated that former Mozilla Firefox JIT engines such as JaegerMonkey and TraceMonkey <ref type="bibr" target="#b23">[24]</ref> were prone to JIT-Spray. In addition, they showed that floating point values such as -6.828527034422786e-229 are usable for JIT-Spray, as the value's hexadecimal representation of eight 0x90 bytes was directly emitted into executable code regions. For TraceMonkey and LLVM, they were able to force the JIT compiler to emit little code snippets usable for code-reuse attacks which they named gaJITs. Additionally, the authors researched the mitigations in various JIT engines and found that most of them did not apply enough protections against JIT-Spray (see also Section 6).</p><p>In a code-reuse manner, Serna showed in 2013 that it was still possible to let the JIT compiler of Flash ActionScript emit small code snippets to predicable addresses <ref type="bibr" target="#b65">[67]</ref>. While a full payload was not possible due to the mitigations Adobe incorporated at that time (i.e., random nops, see Section 6), these small JIT snippets were used to leak return addresses from the stack.</p><p>JIT-Spray affected the JVM as well: In 2013, it was shown that constants in XOR operations in Java were emitted into executable code. Similar to Listing 3, three bytes were usable to inject code <ref type="bibr" target="#b13">[14]</ref>. Generating multiple classes and functions containing the operations triggered code generation to predictable addresses. Hence, DEP and ASLR were bypassed by controlling the instruction pointer with a memory corruption vulnerability.</p><p>One of the more recent JIT-Spray attacks affecting JIT compilers was published in 2016: WebGL shaders were usable inside JavaScript of Internet Explorer and Microsoft Edge <ref type="bibr" target="#b74">[76]</ref>. The WARP JIT compiler produced native code not protected by MS-CFG. Thus, the authors were able to inject code to predictable addresses with the Windows Advanced Rasterization Platform (WARP) Shader JIT compiler <ref type="bibr" target="#b41">[42]</ref>. JIT-Spray is also possible in the Linux kernel if extended Berkeley Packet Filters (eBPF) are available (which are switched off by default). However, this technique bypasses defenses which forbid the kernel to execute code provided by userspace such as SMEP and KERNEXEC <ref type="bibr" target="#b38">[39,</ref><ref type="bibr" target="#b58">60]</ref>. It has been shown that building a BPF program and creating many sockets with attached (BPF) filters leads to a JIT-Spray inside the kernel. This way, an attacker-controlled payload can be executed such as spawning a root shell when the control flow is hijacked.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Case Study: ASM.JS</head><p>We published a new JIT-Spray attack in 2017. What makes a difference is that it does not target a JIT compiler but an Ahead-Of-Time (AOT) compiler in Mozilla Firefox 32-bit on Windows <ref type="bibr" target="#b24">[25]</ref>. Technically speaking, AOT compilers do not generate and optimize code if and after certain high-level code was already executed several times, but before it is executed the first time. ASM.JS is an AOT compiler using a subset of JavaScript <ref type="bibr" target="#b45">[46]</ref>. It obeys a certain syntax and appeared in 2013 in Mozilla Firefox <ref type="bibr" target="#b79">[81]</ref>. A simple ASM.JS module which is compiled ahead of time without having been executed is shown in Listing 5. Loading the web page containing the code is sufficient to trigger AOT. This module was requested many times and we found that several native code copies were emitted to predictable addresses (see Listing 6). As the constants were not blinded, they appeared as immediate values in native code operations and were usable as the perfect target to hide attacker-controlled payload bytes. Listing 7 shows the native code which the AOT compiler generated and demonstrates that the constant 0xc1c2c3c4 appears directly in executable code regions. Additionally, these regions are located several times at predictable addresses turning ASLR ineffective. Armed with that possibility, arbitrary code injection was possible. ****0023: b8c4c3c2c1 mov eax , 0 xc1c2c3c4 ****0028: 6690 xchg ax , ax ****002 a : 83 c404 add esp ,4 ****002 d : c3 ret Listing 7: Four-byte constant within native code of a simple ASM.JS code copy, of which many are emitted to predictable addresses.</p><p>We were able to abuse several operations to spray malicous code to predictable addresses. An overview is presented in <ref type="figure" target="#fig_8">Figure 1</ref>.   of memory corruption vulnerabilities drastically. As adversaries can refrain from memory disclosures and code-reuse, only control of the instruction pointer is needed. We also developed a tool to transform payloads into its ASM.JS form, which then at run time is emitted to native code by the AOT compiler. While only two or three bytes from a high-level constant are used as payload bytes, it is still possible to execute arbitrary code. E. g., a stage0 code will resolve and call the Windows API function VirtualAlloc(), then copy a bigger payload to it (stage1) and execute it.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">JIT-Spray on ARM</head><p>A fundamental property making JIT-Spray possible on x86 is not available on the ARM architecture: native instructions have a fixed size of either 32-bit and are aligned to four-byte addresses (ARM mode), or have a size of 16-bit and are aligned to two-byte boundaries (Thumb mode). Additionally, the Thumb-2 mode added new 32-bit instructions to Thumb and allowed mixing 16-bit and 32-bit instructions <ref type="bibr" target="#b32">[33]</ref>. Hence, it is much more difficult to inject arbitrary code compared to x86. However, the first type of JIT-Spray on ARM we are aware of was using float constants in ActionScript <ref type="bibr" target="#b7">[8]</ref>. The tested ActionScript JIT engine generated code with PC-relative references to the constants. Additionally, the float values resided in the same page as code and were continuous in memory. This allowed for continuous shellcode without other disrupting opcodes. Lian et al. investigated the idea of JIT-Spray on ARMv7-A in more depth <ref type="bibr" target="#b32">[33]</ref>. The JavaScriptCore JIT compiler (of WebKit) generated under certain circumstances attacker-influenced gadgets to predictable addresses. A JavaScript snippet getting compiled down into code containing a gadget is shown in Listing 9. The DFG JIT generated useful instructions (see Listing 10). Note that most of the gadget's instructions were intended instructions, only the first instruction was unintended: instead of executing the intended 32-bit instruction aligned to a fourbyte boundary, the execution started with a branch to the second half of it. Then, the execution resynchronized with the intended instruction stream. Listing 11 shows the gadget instructions for the readGadget function. Execution starts in the middle of an instruction at offset 0x38 and resynchronizes at offset 0x3a. Nonetheless, the gadget provides the adversary with the capability to read memory and return content as 32-bit integers into JavaScript. More details can be found in the original paper <ref type="bibr" target="#b32">[33]</ref>. This and similar gadgets were called by high-level JavaScript code to perform chained operations. This way, the authors achieved to write shellcode to a writable code page and execute it by having control over the program counter only. Listing 11: Unintended instruction stream for readGadget JavaScript code, able to read memory pointed to by the R2 register.</p><p>In follow-up work, Lian et al. targeted Mozilla Firefox' IonMonkey JIT compiler of its SpiderMonkey JavaScript engine on ARM <ref type="bibr" target="#b33">[34]</ref>. They were able to build a complete self-sustaining JIT payload at predictable adresses without relying on gadgets. They forced emitting 32-bit ARM AND instructions while having 20 bits of control over each from the JavaScript context. They managed to get this instruction interpreted as two 16-bit Thumb-2 instructions. Armed with that possibility, the first instruction is used to perform useful operations for the attacker. The second instruction is used as an unconditional PC-relative forward branch to the next to-be-executed unintended instruction. Additionally, it prevents switching back to the compiler-intended instruction stream. Overall, this full JIT-Spray on ARM was the first of its kind, and the authors disproved the belief that JIT-Spray is not feasible on RISC architectures with fixed instruction lengths and fixed instruction boundaries.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">JIT-Based Code Reuse</head><p>The first (academic) work which used run time compiled gadgets from a JIT compiler arouse from the need to bypass code-reuse protections in 2015 <ref type="bibr" target="#b5">[6]</ref>. If static code of a program is gadget-free, then code-reuse is usually not an option <ref type="bibr" target="#b49">[50]</ref>. However, if gadgets are produced by the JIT compiler, code-reuse becomes feasible again. Athanasakis et al. targeted IonMonkey on 32-bit Linux and Chakra of 64-bit Internet Explorer 9 on Windows <ref type="bibr" target="#b5">[6]</ref>. In general, they provoked the JIT compiler to emit gadgets containing only a few instructions and were using two-byte JavaScript constants. This bypassed constant blinding in Internet Explorer and various other JIT-related defenses which were incorporated at that time. However, note that the authors needed memory disclosures to locate the gadgets in memory. Hence, we do not count it as JIT-Spray, because JIT-Spray does not require info leaks but only control over the instruction pointer to redirect control flow to a predetermined address containing the JIT-compiled attacker code.</p><p>In 2015, other flaws in the Chakra JavaScript engine of Internet Explorer related to JIT-code reuse were found. While Chakra applies constant blinding, divison expressions in JavaScript with 32-bit integers resulted in nonblinded four-byte constants containing injected code <ref type="bibr" target="#b82">[84]</ref>. Additionally, the authors showed that two 16-bit constants were emitted directly into one x86 instructions when the first was used as array index, and the second as array element. To be able to jump to this injected code, they used a "JMP ECX" instruction of the JavaScript engine itself which was not protected by MS-CFG. However, both the injected code and the jump instruction were only locatable with memory disclosures. Hence, we do not count it as JIT-Spray, but JIT-code reuse.</p><p>We also want to distinguish the term JIT-ROP to the offensive techniques presented in this paper. It is not related to JIT compilers <ref type="bibr" target="#b69">[71]</ref>. It merely describes the technique to repeatedly locate, read and disassembly static code with e. g. memory disclosures in JavaScript. Then, a code-reuse payload can be build just-in-time. This is necessary if fine-grained code randomization is applied to the target binaries, as it hides not only the base addresses of modules in the address space, but also function entries, basic blocks, and addresses of instructions. Figure 2: JavaScript code and corresponding emitted JIT code missing to blind four-byte constants in Google Chrome (found by Dachshund <ref type="bibr" target="#b37">[38]</ref>).</p><p>Nonetheless, defenses against JIT-ROP were weakened with JIT-compiled gadgets: Execute-Only memory is one of such defenses <ref type="bibr" target="#b6">[7]</ref>. It forbits the reading of code, but the addresses of JIT-gadgets can still be found via subsequently leaking readable data object until pointers to the gadgets are discovered. Maisuradze et al. <ref type="bibr" target="#b36">[37]</ref> were able to force the JIT compilers of Internet Explorer, Google Chrome and Mozilla Firefox to hide code within branches. Their carefully constructed JavaScript code resulted in control flow instructions such as conditional jumps and direct calls. Their target addresses and offsets had code bytes hidden themselves, and thus, were usable as gadgets for code-reuse attacks. As a defense, constant folding or blinding is not an option, as the implicit constants are within (relative) calls/jumps. Hence, they proposed to eliminate all implicit constants by replacing them with indirect control flow instructions.</p><p>As we mentioned in the introduction and described in mitigations (see Section 6), long JIT-Spray payloads and gadgets are prevented with constant blinding. However, Maisuradze et al. were also digging for unblinded four-byte constants despite four-byte constant blinding in modern web browsers <ref type="bibr" target="#b37">[38]</ref>. They utilized fuzzing to generate JavaScript code containing constants and searched the target's memory for bytes representing the constants. Overall, the succeeded in finding several JavaScript operations with constants the JIT compiler encodes into memory in Google Chrome and Microsoft Edge. <ref type="figure">Figure 2</ref> presents their findings in Google Chrome.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Abusing JIT-Compiler Flaws</head><p>The offensive techniques discussed in the previous two sections relied on the inner workings of JIT compilers and went into the direction of exploit-mitigation bypasses. In the following, we present attacks which can be considered to be based on flaws and bugs of JIT compilers, but please note that the distinction can sometimes be fuzzy.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1">More Mitigation Bypasses</head><p>A very popular mitigation is DEP. While JIT-Spray bypasses DEP, there was also the possiblity to overwrite emitted code as long as the permissions of the code pages are writable. Nowadays, neither static code nor JIT-compiled code should be executable and writable simultaneously. Currently, this does not hold for Google Chrome <ref type="bibr" target="#b57">[59]</ref>. Nonetheless, even if W ⊕ X is enabled for JIT regions, they have to be written first and be executable afterwards. In 2015, Song et al. abused this small time window to overwrite code caches in multi-threaded code using web workers <ref type="bibr" target="#b70">[72]</ref>. Hence, they achieved to inject code despite W ⊕ X in dynamic code regions.</p><p>In 2016, Chakra of Internet Explorer was attacked in a similar way. The authors proceeded in three steps <ref type="bibr" target="#b77">[79]</ref>: First, they triggered the JIT compiler to encode a large code region. This created a time window in which a background thread was working on a temporary writable code buffer. In the second step, this buffer was located with memory disclosures and overwritten with malicious code in the third step. With this attack, they were able to bypass both DEP and MS-CFG.</p><p>In 2017, Frassetto et al. demonstrated a data-only attack on the intermediate represention (IR) of Chakra in Microsoft Edge <ref type="bibr" target="#b21">[22]</ref>. Instead of creating/modifying code or code pointers, they crafted malicious C++ object representing IR statements with the prerequisite of a read/write primitive from within JavaScript. As the JIT compiler uses these object to generate native code, the authors were able to create and execute their code of choice.</p><p>Fratric researched Microsoft Edge's JIT compiler in depth in 2018 <ref type="bibr" target="#b22">[23]</ref>. Amongst other flaws, he was able to inject his code of choice to bypass ACG by abusing the JIT server architecture. Microsoft Edge uses a separate JIT server to generate dynamic code for the browser (content) process. This process shares a memory region with the browser process and maps dynamic code into that shared region. The JIT server accesses the region with write permissions, while the browser process has an executable view of the region. This way, the browser process obeys to ACG: it cannot modify or create code pages by itself, it can only execute them. The author found that the JIT server can be tricked into making attackercontrolled memory in the browser process executable: if the browser process is compromised, the executable view of the shared region can be unmapped. Next, the attacker allocates writable memory on the same address and writes a payload to it. The JIT process will happily use this address next and will mark it as executable without changing the payload. This way, ACG was bypassed without directly tampering with content of code pages. A security update fixed the issue.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2">JIT-Compiler Vulnerabilities</head><p>JIT compilers are complex software systems as other compilers are as well. Hence, it is natural that they contain security-critical bugs. While there are vulnerabilities found constantly, we want to briefly summarize prominent ones at the time of writing in an exemplary manner. Apple Safari's DFG JIT fell victim to optimization bugs during the Pwn2Own contests in 2017 and 2018 <ref type="bibr" target="#b14">[15,</ref><ref type="bibr" target="#b15">16,</ref><ref type="bibr" target="#b73">75]</ref>. In both years, these were stepping stones for the contestants to further increase their privilege level with additional exploitation methods.</p><p>One interesting JIT-optimization bug in Google Chrome's V8 gave the attacker very powerful primitives such as leaking arbitrary memory and creating arbitrary JavaScript objects. Code execution was achieved by writing code into a JIT page. For more details, the reader is refered to the original research <ref type="bibr" target="#b56">[58,</ref><ref type="bibr" target="#b57">59]</ref>.</p><p>The JIT compiler in Chakra is also prone to vulnerabilities. For example, CVE-2018-0953 allowed to create a type confusion by setting an array element with a magic value <ref type="bibr" target="#b35">[36]</ref>. This was possible because the JIT compiler missed to emit a check into the dynamic code.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Mitigations</head><p>Before diving into more general mitigations against JITSpray and other JIT-related defenses, we take a look at the fixes against ASM.JS JIT-Spray from Section 3.2. Mozilla assigned <ref type="bibr">CVE-2017-5375 and</ref><ref type="bibr">CVE-2017-5400</ref> to that mitigation bypass technique <ref type="bibr" target="#b46">[47,</ref><ref type="bibr" target="#b47">48]</ref>. There were two CVEs assigned because the first patch was insufficient: randomization for code allocations was increased, but under certain circumstances, the old unpatched code responsible to emit ASM.JS regions to predictable addresses might still trigger. The follow-up patch redesigned the allocation scheme: At startup, when the address space is nearly empty, a random address range is reserved for ASM.JS code allocations. Hence, the location of that range is difficult to predict for an attacker. Later at run time, as soon as the ASM.JS modules are requested, regions from this set of pages are comitted and released upon need. As the source code is shared between ASM.JS and WebAssembly, this defense scheme (also known as allocation randomization) is also used for WebAssembly code allocations in Mozilla Firefox. The inital address range is additionally constrained to a certain number of pages to prevent address-space exhaustion during spraying (also known as allocation restriction <ref type="bibr" target="#b1">[2,</ref><ref type="bibr" target="#b63">65]</ref>).</p><p>We already explained constant folding in the introduction. Adobe incorporated constant folding into the Flash ActionScript JIT compiler to counter against the original JIT-Spray attacks <ref type="bibr" target="#b65">[67]</ref>. This prevented immediate attacker-controlled constants in JIT code. Nonetheless, it was shortly bypassed by using the ActionScript IN operator <ref type="bibr" target="#b52">[53]</ref>. It was sufficient to use one IN operation in an operation otherwise containing ORs to trick the JIT compiler and get attacker-controlled immediate values again. The ActionScript code "0x3c909090 IN 0x3c909090 | 0x3c909090 | ..." yielded a native nop-sled again, when executed from an unindented offset.</p><p>With constant blinding, a defense was developed and incorporated which prevents attacker-controlled immediate values in JIT code. Therefore, the compiler xors the immediate value at compile time with a random key unknown to the attacker. Before the value is used in an operation in native code, it is xored with that key at run time. This way, all operations in native code remain valid, but are not easily predictable by adversaries, and hence, hiding code bytes is not possible. As the performance is impacted when blinding constants, usually only four-byte or larger constants are blinded. The impact is too drastic for two byte or smaller constants. As a result, this leads to the ability to hide code and let the JIT compiler create gadgets again <ref type="bibr" target="#b5">[6]</ref>.</p><p>Another possiblity to make hidden code in immediates less predictable are random nops. Various nop-like instructions with various sizes such as "LEA ESP, <ref type="bibr">[ESP]</ref>," "XCHG EDX, EDX" or "MOV ECX, ECX" can intermingle intended JIT-compiled operations. If these are unknown to the attacker, jumping to a nop sled by controlling the instruction pointer may fail as the random nops may get hit. Adobe incorporated this technique in 2011 into the JIT compiler of ActionScript, but the emission frequency of random nops was too low to break small JIT gadgets <ref type="bibr" target="#b65">[67]</ref>. However, it prevented complete self-sustained JIT payloads. Similarly, shifting the intended JIT code with a random base offset in code regions adds unpredictability to the location of injected code bytes.</p><p>While not directly defending JIT-Spray or JIT-based code-reuse attacks, secure permissions or guard pages harden against JIT-related flaws. JIT-code pages missing the write flag cannot be overwritten and guard pages prevent e. g. heap-buffer overflows to reach JIT-code pages (in case they are writable and adjacent to heap objects) <ref type="bibr" target="#b63">[65]</ref>. For example, JIT-code regions in Mozilla Firefox are not writable anymore since the end of 2015 <ref type="bibr" target="#b18">[19]</ref>. In 2011, JitDefender already employed mechanisms to retrofit W ⊕ X into JIT code of ActionScript and JavaScript <ref type="bibr" target="#b11">[12]</ref>. The approach kept JIT-code regions not executable and switched to executable-only if a legitimate call to JIT regions was made. This prevented illegitimate executions of JIT-sprayed payloads, as jumps to it landed in code which was not executable.</p><p>Librando, a JIT-hardening framework, can apply some of these protections to COTS JIT compilers in a black box manner. Thereby, the operating system allocation functions are intercepted to analyze, diversify and rewrite the to-be just-in-time compiled code. Allocation randomization, constant blinding, random nop insertion, and various optimizations are applied to the JIT code <ref type="bibr" target="#b29">[30]</ref>. The authors were able to harden Java and V8 with a slowdown of 1.15 to 3.5 times. RIM, JITSafe and INSeRT use obfuscation, diversification and randomization in a similar way to break hidden code in immediate values and hinder JIT-Spray <ref type="bibr" target="#b12">[13,</ref><ref type="bibr" target="#b80">82,</ref><ref type="bibr" target="#b81">83]</ref>.</p><p>While control-flow integrity became very popular for static code <ref type="bibr">[1,</ref><ref type="bibr" target="#b43">44,</ref><ref type="bibr" target="#b54">56,</ref><ref type="bibr" target="#b78">80,</ref><ref type="bibr" target="#b84">86,</ref><ref type="bibr" target="#b85">87]</ref> there is little CFI for dynamic code. RockJIT is one system aiming at providing control-flow integrity for native code dynamically <ref type="bibr" target="#b48">[49]</ref>. It enforces policies on the JIT code and the JIT compiler itself. Amongst other techniques, after an analysis pass on source code, checks are used to allow only valid code entries to be targets of indirect branches. This thwarts JIT-Spray because unindented code bytes in the middle of an intended instruction are invalid code targets. The authors applied RockJIT to V8 with an performance hit of 14.6%. Native Client (NaCl), the formally native code engine in Google Chrome, is similar to RockJIT. It applies software fault isolation (SFI) in the browser context <ref type="bibr" target="#b4">[5]</ref>. Code is aligned to 32-byte chunks, and indirect branches are only allowed to jump to the chunk-beginnings. This is accomplished by checking for address masks before an indirect branch is issued.</p><p>Follow-up work tried to improve CFI for JIT code <ref type="bibr" target="#b83">[85]</ref>. JITScope works with the LLVM infrastructure and is able to not only harden JIT code and the JIT compiler, but also the application as a whole with CFI. The authors applied JITScope to TraceMonkey with a performance impact of less than 10%. Nowadays, CFI is enabled for JIT code in Microsoft Edge with MS-CFG and LLVM-CFI is incorporated in Google Chrome. Grsecurity features RAP <ref type="bibr" target="#b27">[28]</ref>, a forward and backward-edge CFI solution for Linux preventing execution of unintended instructions <ref type="bibr" target="#b72">[74]</ref>.</p><p>Similar to the out-of process JIT separation in Microsoft Edge, Lobotomy proposed a two process model in 2014 <ref type="bibr" target="#b30">[31]</ref>. The browser process has an executable view of a shared memory region, while a JIT process has a writable view to that region. This way, only the JIT process can create and manipulate JIT code and vulnerabilities in the browser process cannot tamper with or overwrite JIT regions.</p><p>Several other defenses against JIT-related flaws such as JITSec <ref type="bibr" target="#b17">[18]</ref> were proposed. JITSec applies a monitor to JIT code to forbit system calls. This helps to break selfsustained JIT-Spray payloads which issue system calls, when the authors assumption holds that intended JIT code does not execute system calls. Another sophisticated defense called JITGuard uses the Intel SGX architecture and various other hardening techniques to protect against codeinjection, code-reuse and data-only attacks <ref type="bibr" target="#b21">[22]</ref>. Critical parts of the JIT compiler are isolated into SGX enclaves, a randomization layer is added for JIT code, and memory disclosures are tackled with a layer of indirection (i.e., trampolines).</p><p>A major change which can be seen as an implicit mitigation is the shift from 32-bit to 64-bit architectures. All major web browsers except Internet Explorer run as native 64-bit x86 applications nowadays. Similary, the ARM platform has a 64-bit architecture named AArch64 which supports the 64-bit address space. As the 64-bit address space is larger than 32-bit, JIT-Spray seems to be impossible, as spraying many code regions to hit a predictable address is infeasible. Nonetheless, JIT-code reuse may still be valuable if memory disclosures can be conducted in 64-bit targets. <ref type="table" target="#tab_2">Table 2</ref> summarizes the impact of (security) features on JIT-Spray and JIT-code reuse. If emission of unintended code bytes (code injection), spraying to predictable locations, and execution of unintended code is perfectly prevented, then JIT-Spray is infeasible. Having a combination of constant blinding, a 64-bit address space, highentropy ASLR, and CFI achieves this goal if everything is correctly implemented.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Conclusion</head><p>JIT-Spray is an offensive technique that conveniently simplified the exploitation of memory corruption vulnerabilities as it bypasses both DEP and ASLR. At a time when exploit mitigations began to rise, hijacking the control flow was still enough to get arbitrary (remote) code execution. Since 2010, the year JIT-Spray appeared first, many JIT compilers were vulnerable to it. In this paper, we reviewed this technique in depth and showed what methods are used to hide code bytes within constants of high-level languages. Moreover, we surveyed the affected targets on the x86 and ARM architecture and established a connection to code-reuse attacks which abuse JIT compilers. While we provided on overview of additional flaws which may arise in JIT engines in an exemplary manner, we took a closer look at the latest JIT-Spray flaw which affected the AOT compiler ASM.JS in 2017 in Firefox.</p><p>JIT-compiler based attacks and defenses is still an ongoing and lively field of research, as the multitude of (academic) mitigations shows. The shift of browsers to 64-bit and an address space layout randomization with high entropy seems to make traditional JIT-Spray infeasible. However, in the light of memory disclosures, an imperfect CFI implementation, and incomplete (i.e., twobyte) constant blinding, JIT-code reuse is still a valuable asset for attackers. Moreover, flaws in JIT compilers (e.g., vulnerabilities) remain attractive targets. While the landscape of exploit mitigations increases and exploiting memory corruption vulnerabilities is becoming harder and harder, we do not want to exclude the possibility of JIT-Spray appearing again in future targets. Of course, defenses are getting more sophisticated, but so do attackers.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head></head><label></label><figDesc>Listing 2: Intended native code emitted by the ActionScript JIT compiler.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Listing 3 :</head><label>3</label><figDesc>Injected code not intended by the ActionScript JIT compiler.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_5"><head></head><label></label><figDesc>Listing 5: Simple ASM.JS module with a function returning a 32-bit integer.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_6"><head></head><label></label><figDesc>Listing 6: Requesting a ASM.JS module several times to spray many code copies to predictable addresses.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_8"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: ASM.JS operation and corresponding emitted native code embedding attacker controlled code bytes in immediate values.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_9"><head></head><label></label><figDesc>Listing 9: JavaScript function used in JavaScriptCore on ARMv7-A [33].</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_10"><head></head><label></label><figDesc>Listing 10: Native code emitted for readGadget JavaScript code.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="true"><head>Table 1 : Defenses bypassed by JIT-Spray and JIT-based code reuse attacks and proposed mitigations.</head><label>1</label><figDesc></figDesc><table>Attack Flavor 
+Exploit Goal 
+Targets (see  § 2) 
+Target Architecture 
+Bypassed Mitigations 
+Proposed Defenses (see  § 6) 
+
+JIT-Spray 
+(see  § 3) 
+
+Code execution 
+of continuous 
+payload 
+
+ActionScript JIT [9] 
+
+x86 
+W⊕X, ASLR 
+
+Constant folding, 
+Constant blinding, 
+Random nop insertion, 
+JIT allocation restriction 
+
+Apple Safari (JSC) [69] 
+JVM [14] 
+{Jaeger|Trace}Monkey [64, 65] 
+Mozilla Firefox (ASM.JS) [25] 
+
+Linux kernel (eBPF) [39, 60] 
+x86 
+SMEP, KERNEXEC 
+CFI (RAP) 
+
+ActionScript JIT [8] 
+ARM 
+W⊕X, ASLR 
+Constant blinding 
+JSC [34] 
+SpiderMonkey [34] 
+
+Code execution 
+of JIT gadgets 
+
+ActionScript JIT [67] 
+x86 
+W⊕X, ASLR, Random nops 
+Constant blinding 
+
+{Jaeger|Trace}Monkey [64, 65] 
+LLVM JIT [65] 
+x86 
+W⊕X, ASLR 
+Constant blinding 
+
+Internet Explorer (WARP JIT) [42] 
+x86 
+x64 
+W⊕X, ASLR, MS-CFG 
+Enforce MS-CFG 
+for WARP JIT code 
+Microsoft Edge (WARP JIT) </table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_2" validated="true"><head>Table 2 : Features and their impact on JIT-Spray (and JIT-code reuse) in modern web browsers in 2018.</head><label>2</label><figDesc></figDesc><table>Feature 
+Impact on 
+Mozilla Firefox Google Chrome Microsoft Edge Internet Explorer 
+
+64-bit 
+Predictable location 
+
+
+
+/  *  
+address space 
+of injected code 
+
+ASLR 
+Predictable location 
+
+
+
+
+of injected code 
+
+CFI 
+Execution of 
+
+• 
+ † 
+ † ‡ 
+injected code 
+
+Random nop 
+Predictable location 
+
+
+
+
+insertion 
+of injected code 
+
+Constant folding 
+Code injection 
+
+
+
+
+
+Constant blinding of 
+Code injection 
+
+
+
+
+constants four bytes 
+
+W ⊕ X JIT regions 
+JIT-region overwrite 
+
+
+
+
+
+JIT-base offset 
+Predictable location 
+
+
+
+
+and/or randomization 
+of injected code 
+
+JIT allocation 
+Predictable location 
+
+
+
+
+restriction 
+of injected code 
+
+Guard pages 
+JIT-region overwrite 
+# 
+
+# 
+# 
+
+ *  the default is 32-bit, switching to 64-bit requires a change in the registry (non-default) 
+• enforced by LLVM-CFI 
+ † enforced by MS-CFG 
+ ‡ partial implementation of MS-CFG 
+# not necessary for executable JIT regions 
+
+</table></figure>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgements</head><p>We would like to thank Matt Miller for shepherding this paper and his fruitful suggestions and comfortable cooperation. Moreover, we thank our anonymous reviewers for the constructive feedback which helped us to improve the paper. This work was supported by the European Commission through project H2020 DS-07-2017 "REACT" under Grant Agreement No. 786669.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">Control-Flow Integrity</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jay</forename><surname>Ligatti</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM Conference on Computer and Communications Security (CCS)</title>
+		<imprint>
+			<date type="published" when="2005" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Accuvant</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Browser Security Comparison</surname></persName>
+		</author>
+		<ptr target="https://accuvantstorage.blob.core.windows.net/web/files/AccuvantBrowserSecComparFINAL.pdf" />
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title level="m" type="main">ActionScript Virtual Machine</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Adobe</surname></persName>
+		</author>
+		<ptr target="https://github.com/adobe-flash/avmplus" />
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+		<title level="m" type="main">IonMonkey in Firefox 18</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Anderson</surname></persName>
+		</author>
+		<ptr target="https://developer.mozilla.org/en-US/docs/Mozilla/Projects/SpiderMonkey/Internals" />
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Languageindependent Sandboxing of Just-In-Time Compilation and Self-modifying Code</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jason</forename><surname>Ansel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Petr</forename><surname>Marchenko</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Elijah</forename><surname>Ulfar Erlingsson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Brad</forename><surname>Taylor</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Derek</forename><forename type="middle">L</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Schuff</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cliff</forename><forename type="middle">L</forename><surname>Sehr</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bennet</forename><surname>Biffle</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Yee</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM SIGPLAN Conference on Programming Language Design and Implementation (PLDI)</title>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Michalis Polychronakis, Georgios Portokalidis, and Sotiris Ioannidis. The Devil is in the Constants: Bypassing Defenses in Browser JIT Engines</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michalis</forename><surname>Athanasakis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Elias</forename><surname>Athanasopoulos</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Symposium on Network and Distributed System Security (NDSS)</title>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">You Can Run but You Can&apos;t Read: Preventing Disclosure Exploits in Executable Code</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Backes</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thorsten</forename><surname>Holz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Benjamin</forename><surname>Kollenda</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Philipp</forename><surname>Koppe</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stefan</forename><surname>Nürnberger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jannik</forename><surname>Pewny</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM Conference on Computer and Communications Security (CCS)</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pete</forename><surname>Beck</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">JIT Spraying on ARM</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Interpreter Exploitation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dionysus</forename><surname>Blazakis</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX Workshop on Offensive Technologies (WOOT)</title>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Jump-Oriented Programming: A New Class of Code-Reuse Attack</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tyler</forename><surname>Bletsch</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xuxian</forename><surname>Jiang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vince</forename><forename type="middle">W</forename><surname>Freeh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhenkai</forename><surname>Liang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM Symposium on Information, Computer and Communications Security (ASIACCS)</title>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Return-Oriented Programming without Returns</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stephen</forename><surname>Checkoway</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lucas</forename><surname>Davi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alexandra</forename><surname>Dmitrienko</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ahmad-Reza</forename><surname>Sadeghi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hovav</forename><surname>Shacham</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Marcel</forename><surname>Winandy</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM Conference on Computer and Communications Security (CCS)</title>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">JITDefender: A Defense Against JIT Spraying Attacks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ping</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yi</forename><surname>Fang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bing</forename><surname>Mao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Li</forename><surname>Xie</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">IFIP Information Security Conference and Privacy Conference</title>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ping</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rui</forename><surname>Wu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bing</forename><surname>Mao</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">JITSafe: A Framework Against Just-In-Time Spraying Attacks. IET Information Security</title>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yuki</forename><surname>Chen</surname></persName>
+		</author>
+		<ptr target="https://bit.ly/2KZlSr5" />
+		<title level="m">Exploit Your Java Native Vulnerabilities on Win7/JRE7 in One Minute</title>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<monogr>
+		<title level="m" type="main">The Results -Pwn2Own 2017 Day One</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dustin</forename><surname>Childs</surname></persName>
+		</author>
+		<ptr target="https://blog.trendmicro.com/results-pwn2own-2017-day-one/" />
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<monogr>
+		<title level="m" type="main">Pwn2Own 2018: Results from Day One</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dustin</forename><surname>Childs</surname></persName>
+		</author>
+		<ptr target="https://www.thezdi.com/blog/2018/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lin</forename><surname>Clark</surname></persName>
+		</author>
+		<ptr target="https://hacks.mozilla.org/2017/02/a-crash-course-in-just-in-time-jit-compilers/" />
+	</analytic>
+	<monogr>
+		<title level="j">A Crash Course In Just-In-Time (JIT) Compilers</title>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">JITSec: Just-In-Time Security for Code Injection Attacks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Willem</forename><surname>De Groef</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nick</forename><surname>Nikiforakis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yves</forename><surname>Younan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Frank</forename><surname>Piessens</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Benelux Workshop on Information and System Security</title>
+		<meeting><address><addrLine>WisSec</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<monogr>
+		<title level="m" type="main">WˆX JIT-Code Enabled in Firefox</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jan</forename><surname>De</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mooij</forename></persName>
+		</author>
+		<ptr target="https://jandemooij.nl/blog/2015/12/29/wx-jit-code-enabled-in-firefox/" />
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Ryujit -Overview</surname></persName>
+		</author>
+		<ptr target="https://github.com/dotnet/coreclr/blob/master/Documentation/botr/ryujit-overview.md" />
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ferris</forename><surname>Ellis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Ebpf</surname></persName>
+		</author>
+		<ptr target="https://ferrisellis.com/posts/ebpfpastpresentfuture" />
+		<title level="m">Part 1: Past, Present, and Future</title>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tommaso</forename><surname>Frassetto</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Gens</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Christopher</forename><surname>Liebchen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ahmad-Reza</forename><surname>Sadeghi</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM Conference on Computer and Communications Security (CCS)</title>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<monogr>
+		<title level="m" type="main">Bypassing Mitigations by Attacking JIT Server in Microsoft Edge</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ivan</forename><surname>Fratric</surname></persName>
+		</author>
+		<ptr target="https://googleprojectzero.blogspot.de/2018/05/bypassing-mitigations-by-attacking-jit.html" />
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Trace-based Just-In-Time Type Specialization for Dynamic Languages</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andreas</forename><surname>Gal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Brendan</forename><surname>Eich</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mike</forename><surname>Shaver</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Anderson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Mandelin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mohammad</forename><forename type="middle">R</forename><surname>Haghighat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Blake</forename><surname>Kaplan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Graydon</forename><surname>Hoare</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Boris</forename><surname>Zbarsky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jason</forename><surname>Orendorff</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jesse</forename><surname>Ruderman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Edwin</forename><surname>Smith</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rick</forename><surname>Reitmaier</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Bebenita</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mason</forename><surname>Chang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Franz</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM SIG-PLAN Conference on Programming Language Design and Implementation (PLDI)</title>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><surname>Gawlik</surname></persName>
+		</author>
+		<ptr target="https://github.com/rh0dev/slides/blob/master/OffensiveCon2018FromAssemblytoJavaScriptandback.pdf" />
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Google</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Turbofan</surname></persName>
+		</author>
+		<ptr target="https://github.com/v8/v8/wiki/TurboFan" />
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Google</surname></persName>
+		</author>
+		<ptr target="https://www.chromium.org/developers/testing/control-flow-integrity" />
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<analytic>
+		<title/>
+		<ptr target="https://grsecurity.net/rapfaq.php" />
+	</analytic>
+	<monogr>
+		<title level="j">Grsecurity. Frequently Asked Questions About RAP</title>
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<monogr>
+		<title level="m" type="main">Digging into the TurboFan JIT</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Hablich</surname></persName>
+		</author>
+		<ptr target="https://v8project.blogspot.de/2015/07/digging-into-turbofan-jit.html" />
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<analytic>
+		<title level="a" type="main">Librando: Transparent Code Randomization for Just-In-Time Compilers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrei</forename><surname>Homescu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stefan</forename><surname>Brunthaler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Per</forename><surname>Larsen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Franz</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM Conference on Computer and Communications Security (CCS)</title>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">Lobotomy: An Architecture for JIT Spraying Mitigation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Martin</forename><surname>Jauernig</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matthias</forename><surname>Neugschwandtner</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Christian</forename><surname>Platzer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Paolo</forename><forename type="middle">Milani</forename><surname>Comparetti</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Availability, Reliability and Security</title>
+		<imprint>
+			<publisher>ARES</publisher>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<monogr>
+		<title level="m" type="main">Buffer Overflow Exploits and the Borrowed Code Chunks Exploitation Technique</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sebastian</forename><surname>Krahmer</surname></persName>
+		</author>
+		<ptr target="http://users.suse.com/∼krahmer/no-nx.pdf" />
+		<imprint>
+			<date type="published" when="2005" />
+			<biblScope unit="page" from="86" to="64" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">Too LeJIT to Quit: Extending JIT Spraying to ARM</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wilson</forename><surname>Lian</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hovav</forename><surname>Shacham</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stefan</forename><surname>Savage</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Symposium on Network and Distributed System Security (NDSS)</title>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<analytic>
+		<title level="a" type="main">A Call to ARMs: Understanding the Costs and Benefits of JIT Spraying Mitigations</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wilson</forename><surname>Lian</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hovav</forename><surname>Shacham</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stefan</forename><surname>Savage</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Symposium on Network and Distributed System Security (NDSS)</title>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<monogr>
+		<title level="m" type="main">The Java Virtual Machine Specification</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tim</forename><surname>Lindholm</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Frank</forename><surname>Yellin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gilad</forename><surname>Bracha</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alex</forename><surname>Buckley</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2014" />
+			<publisher>Pearson Education</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<monogr>
+		<title level="m" type="main">Chakra: JIT: Magic Value Can Cause Type Confusion</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="middle">Microsoft</forename><surname>Lokihardt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Edge</surname></persName>
+		</author>
+		<ptr target="https://bugs.chromium.org/p/project-zero/issues/detail?id=1531" />
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b36">
+	<analytic>
+		<title level="a" type="main">What Cannot Be Read, Cannot Be Leveraged? Revisiting Assumptions of JIT-ROP Defenses</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Giorgi</forename><surname>Maisuradze</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Backes</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Christian</forename><surname>Rossow</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX Security Symposium</title>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b37">
+	<analytic>
+		<title level="a" type="main">Dachshund: Digging for and Securing Against (Non-) Blinded Constants in JIT Code</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Giorgi</forename><surname>Maisuradze</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Backes</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Christian</forename><surname>Rossow</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Symposium on Network and Distributed System Security (NDSS</title>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b38">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Keegan</forename><surname>Mcallister</surname></persName>
+		</author>
+		<ptr target="http://mainisusuallyafunction.blogspot.de/2012/11/attacking-hardened-linux-systems-with.html" />
+		<title level="m">Attacking Hardened Linux Systems with Kernel JIT Spraying</title>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b39">
+	<monogr>
+		<title level="m" type="main">ChakraCore -Architecture Overview</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Microsoft</surname></persName>
+		</author>
+		<ptr target="https://github.com/Microsoft/ChakraCore/wiki/Architecture-Overview" />
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b40">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Microsoft</surname></persName>
+		</author>
+		<ptr target="https://msdn.microsoft.com/en-us/library/windows/desktop/mt637065(v=vs.85).aspx" />
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b41">
+	<monogr>
+		<title level="m" type="main">Windows Advanced Rasterization Platform (WARP) Guide</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Microsoft</surname></persName>
+		</author>
+		<ptr target="https://sites.google.com/site/bingsunsec/WARPJIT" />
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b42">
+	<monogr>
+		<title level="m" type="main">Mitigating Arbitrary Native Code Execution in Microsoft Edge</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matt</forename><surname>Miller</surname></persName>
+		</author>
+		<ptr target="https://blogs.windows.com/msedgedev/2017/02/23/mitigating-arbitrary-native-code-execution/" />
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b43">
+	<analytic>
+		<title level="a" type="main">Opaque Control-Flow Integrity</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vishwath</forename><surname>Mohan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Per</forename><surname>Larsen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stefan</forename><surname>Brunthaler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kevin</forename><forename type="middle">W</forename><surname>Hamlen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Franz</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Symposium on Network and Distributed System Security (NDSS)</title>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b44">
+	<analytic>
+		<title level="a" type="main">Exec Shield</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ingo</forename><surname>Molnar</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">New Linux Security Feature. News-Forge</title>
+		<imprint>
+			<date type="published" when="2003-05" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b45">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="middle">Asm</forename><surname>Mozilla</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Js Working</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Draft</surname></persName>
+		</author>
+		<ptr target="http://asmjs.org/spec/latest/" />
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b46">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Mozilla</surname></persName>
+		</author>
+		<ptr target="https://www.mozilla.org/en-US/security/advisories/mfsa2017-01/#CVE-2017-5375" />
+		<title level="m">Excessive JIT code allocation allows bypass of ASLR and DEP</title>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b47">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Mozilla</surname></persName>
+		</author>
+		<idno>CVE-2017-5400: ASM.JS</idno>
+		<ptr target="https://www.mozilla.org/en-US/security/advisories/mfsa2017-05/#CVE-2017-5400" />
+		<title level="m">JIT-Spray Bypass of ASLR and DEP</title>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b48">
+	<analytic>
+		<title level="a" type="main">RockJIT: Securing JustIn-Time Compilation Using Modular Control-Flow Integrity</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ben</forename><surname>Niu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gang</forename><surname>Tan</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM Conference on Computer and Communications Security (CCS)</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b49">
+	<analytic>
+		<title level="a" type="main">Defeating Return-Oriented Programming through Gadget-less Binaries</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kaan</forename><surname>Onarlioglu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Leyla</forename><surname>Bilge</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><surname>Lanzi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Davide</forename><surname>Balzarotti</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Engin</forename><surname>Kirda</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>G-Free</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Annual Computer Security Applications Conference (ACSAC)</title>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b50">
+	<monogr>
+		<title level="m" type="main">Smashing the Stack for Fun and Profit. Phrack Magazine</title>
+		<imprint>
+			<date type="published" when="1996" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b51">
+	<monogr>
+		<title level="m" type="main">The LuaJIT Project</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Pall</surname></persName>
+		</author>
+		<ptr target="https://luajit.org/" />
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b52">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sung-Ting</forename><surname>Ming-Chieh Pan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Tsai</surname></persName>
+		</author>
+		<ptr target="http://media.blackhat.com/bh-us-11/Tsai/BHUS11" />
+		<title level="m">TsaiPan Weapons Targeted Attack Slides.pdf</title>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+	<note>Weapons of Targeted Attack</note>
+</biblStruct>
+
+<biblStruct xml:id="b53">
+	<monogr>
+		<title level="m" type="main">Documentation for the PaX Project</title>
+		<ptr target="https://https://pax.grsecurity.net/docs/index.html" />
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b54">
+	<analytic>
+		<title level="a" type="main">Control-Flow Restrictor: Compiler-Based CFI for iOS</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jannik</forename><surname>Pewny</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thorsten</forename><surname>Holz</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Annual Computer Security Applications Conference (ACSAC)</title>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b55">
+	<monogr>
+		<title level="m" type="main">Introducing the WebKit FTL JIT</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Filip</forename><surname>Pizlo</surname></persName>
+		</author>
+		<ptr target="https://webkit.org/blog/3362/introducing-the-webkit-ftl-jit/" />
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b56">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jordan</forename><surname>Rabet</surname></persName>
+		</author>
+		<ptr target="https://bugs.chromium.org/p/chromium/issues/detail?id=765433" />
+		<title level="m">V8 JIT Escape Analysis Bug</title>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b57">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jordan</forename><surname>Rabet</surname></persName>
+		</author>
+		<ptr target="http://www.bluehatil.com/files/browser%20security%20beyond%20sandboxing.pdf" />
+		<title level="m">Browser Security Beyond Sandboxing</title>
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b58">
+	<monogr>
+		<title level="m" type="main">Randomization can&apos;t Stop BPF JIT Spray</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Elena</forename><surname>Reshetova</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Filippo</forename><surname>Bonazzi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Asokan</surname></persName>
+		</author>
+		<ptr target="https://www.blackhat.com/docs/eu-16/materials/eu-16-Reshetova-Randomization-Can&apos;t-Stop-BPF-JIT-Spray-wp.pdf" />
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b59">
+	<monogr>
+				<ptr target="https://www.exploit-db.com/exploits/42327" />
+		<title level="m">Rh0. Firefox 50.0.1 -ASM.JS JIT-Spray Remote Code Execution</title>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b60">
+	<monogr>
+		<title level="m" type="main">Firefox 44.0.2 -ASM.JS JIT-Spray Remote Code Execution</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Rh0</surname></persName>
+		</author>
+		<ptr target="https://www.exploit-db.com/exploits/44294/" />
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b61">
+	<monogr>
+				<ptr target="https://www.exploit-db.com/exploits/44293/" />
+		<title level="m">Rh0. Firefox 46.0.1 -ASM.JS JIT-Spray Remote Code Execution</title>
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b62">
+	<monogr>
+		<title level="m" type="main">It&apos;s 2010 and Your Browser Has an Assembler</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chris</forename><surname>Rohlf</surname></persName>
+		</author>
+		<ptr target="http://em386.blogspot.com/2010/06/its-2010-and-your-browser-has-assembler.html" />
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b63">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chris</forename><surname>Rohlf</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yan</forename><surname>Ivnitskiy</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Attacking Clientside JIT Compilers. BlackHat USA</title>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b64">
+	<monogr>
+		<title level="m" type="main">Windows Internals, Part 2</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mark</forename><surname>Russinovich</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Solomon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alex</forename><surname>Ionescu</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2012" />
+			<publisher>Microsoft Press</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b65">
+	<monogr>
+		<title level="m" type="main">Flash JIT-Spraying for Info Leak Gadgets</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Fermín</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Serna</surname></persName>
+		</author>
+		<ptr target="http://zhodiac.hispahack.com/my-stuff/security/FlashJitInfoLeakGadgets.pdf" />
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b66">
+	<analytic>
+		<title level="a" type="main">The Geometry of Innocent Flesh on the Bone: Return-into-Libc without Function Calls (On the x86)</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hovav</forename><surname>Shacham</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM Conference on Computer and Communications Security (CCS)</title>
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b67">
+	<monogr>
+		<title level="m" type="main">JIT-Spray Attacks &amp; Advanced Shellcode</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alexey</forename><surname>Sintsov</surname></persName>
+		</author>
+		<ptr target="https://bit.ly/2rMAR0p" />
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b68">
+	<monogr>
+		<title level="m" type="main">Writing JIT-Spray Shellcode for Fun and Profit</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alexey</forename><surname>Sintsov</surname></persName>
+		</author>
+		<ptr target="https://dl.packetstormsecurity.net/papers/shellcode/Writing-JIT-Spray-Shellcode.pdf" />
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b69">
+	<analytic>
+		<title level="a" type="main">Just-In-Time Code Reuse: On the Effectiveness of Fine-Grained Address Space Layout Randomization</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kevin</forename><forename type="middle">Z</forename><surname>Snow</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fabian</forename><surname>Monrose</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lucas</forename><surname>Davi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alexandra</forename><surname>Dmitrienko</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Christopher</forename><surname>Liebchen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ahmad-Reza</forename><surname>Sadeghi</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">IEEE Symposium on Security and Privacy (SP)</title>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b70">
+	<analytic>
+		<title level="a" type="main">Exploiting and Protecting Dynamic Code Generation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chengyu</forename><surname>Song</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chao</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tielei</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wenke</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Melski</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Symposium on Network and Distributed System Security (NDSS)</title>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b71">
+	<monogr>
+		<title level="m" type="main">Moving Fast with High Performance Hack and PHP</title>
+		<ptr target="https://hhvm.com/" />
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+	<note>Facebook Open Source</note>
+</biblStruct>
+
+<biblStruct xml:id="b72">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Brad</forename><surname>Spengler</surname></persName>
+		</author>
+		<ptr target="https://forums.grsecurity.net/viewtopic.php?f=7&amp;t=4463" />
+		<title level="m">Linux Kernel BPF JIT Spraying</title>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b73">
+	<monogr>
+		<title level="m" type="main">Deconstructing a Winning WebKit Pwn2Own Entry</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jason</forename><surname>Spielman</surname></persName>
+		</author>
+		<ptr target="https://www.thezdi.com/blog/2017/8/24/deconstructing-a-winning-webkit-pwn2own-entry" />
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b74">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bing</forename><surname>Sun</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chong</forename><surname>Xu</surname></persName>
+		</author>
+		<ptr target="https://sites.google.com/site/bingsunsec/WARPJIT" />
+	</analytic>
+	<monogr>
+		<title level="j">JIT Spraying Never Dies -Bypass CFG By Leveraging WARP Shader JIT Spraying</title>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b75">
+	<analytic>
+		<title level="a" type="main">SoK: Eternal War in Memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">László</forename><surname>Szekeres</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mathias</forename><surname>Payer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tao</forename><surname>Wei</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dawn</forename><surname>Song</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">IEEE Symposium on Security and Privacy (SP)</title>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b76">
+	<monogr>
+		<title level="m" type="main">Address Space Layout Randomization</title>
+		<ptr target="https://pax.grsecurity.net/docs/aslr.txt" />
+		<imprint>
+			<date type="published" when="2001" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b77">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Theori</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Chakra</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Bypass</surname></persName>
+		</author>
+		<ptr target="https://theori.io/research/chakra-jit-cfg-bypass" />
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b78">
+	<analytic>
+		<title level="a" type="main">Enforcing Forward-Edge ControlFlow Integrity in GCC &amp; LLVM</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Caroline</forename><surname>Tice</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tom</forename><surname>Roeder</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Peter</forename><surname>Collingbourne</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stephen</forename><surname>Checkoway</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Luis</forename><surname>Ulfar Erlingsson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Geoff</forename><surname>Lozano</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Pike</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX Security Symposium</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b79">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Luke</forename><surname>Wagner</surname></persName>
+		</author>
+		<title level="m">ASM.JS in Firefox Nightly</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b80">
+	<analytic>
+		<title level="a" type="main">INSeRT: Protect Dynamic Code Generation Against Spraying</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tao</forename><surname>Wei</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tielei</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lei</forename><surname>Duan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jing</forename><surname>Luo</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2011 International Conference on Information Science and Technology (ICIST)</title>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b81">
+	<analytic>
+		<title level="a" type="main">Rim: A Method to Defend from JIT Spraying Sttack</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rui</forename><surname>Wu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ping</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bing</forename><surname>Mao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Li</forename><surname>Xie</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Availability, Reliability and Security (ARES)</title>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b82">
+	<monogr>
+		<title level="m" type="main">Bypass DEP and CFG Using JIT Compiler in Chakra Engine</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yang</forename><surname>Yu</surname></persName>
+		</author>
+		<ptr target="https://xlab.tencent.com/en/2015/12/09/bypass-dep-and-cfg-using-jit-compiler-in-chakra-engine/" />
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b83">
+	<analytic>
+		<title level="a" type="main">JITScope: Protecting Web Users from Control-Flow Hijacking Attacks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chao</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mehrdad</forename><surname>Niknami</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kevin</forename><forename type="middle">Zhijie</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chengyu</forename><surname>Song</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhaofeng</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dawn</forename><surname>Song</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">IEEE Conference on Computer Communications (INFOCOM)</title>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b84">
+	<analytic>
+		<title level="a" type="main">Practical Control-Flow Integrity and Randomization for Binary Executables</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chao</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tao</forename><surname>Wei</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhaofeng</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lei</forename><surname>Duan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">László</forename><surname>Szekeres</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stephen</forename><surname>Mccamant</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dawn</forename><surname>Song</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wei</forename><surname>Zou</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">IEEE Symposium on Security and Privacy (SP)</title>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b85">
+	<analytic>
+		<title level="a" type="main">Control-Flow Integrity for COTS Binaries</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mingwei</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Sekar</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX Security Symposium</title>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

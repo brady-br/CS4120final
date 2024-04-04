@@ -1,0 +1,1070 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T04:27+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Run-DMA</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Rushanan</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">Johns Hopkins University</orgName>
+								<orgName type="institution" key="instit2">University of Illinois at Chicago</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stephen</forename><surname>Checkoway</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">Johns Hopkins University</orgName>
+								<orgName type="institution" key="instit2">University of Illinois at Chicago</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Run-DMA</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Copying data from devices into main memory is a computationally-trivial, yet time-intensive, task. In order to free the CPU to perform more interesting work, computers use direct memory access (DMA) engines-a special-purpose piece of hardware-to transfer data into and out of main memory. We show that the ability to chain together such memory transfers, as provided by commodity hardware, is sufficient to perform arbitrary computation. Further, when hardware peripherals can be accessed via memory-mapped I/O, they are accessible to &quot;DMA programs.&quot; To demonstrate malicious behavior, we build a proof-of-concept DMA rootkit that modifies kernel objects in memory to perform privilege escalation for target processes.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Modern computers contain a variety of special purpose, "auxiliary" processors designed to offload specific tasks from the CPU, freeing the CPU to perform other work. Conceptually, the CPU copies data from main memory to the auxiliary processor and requests that it perform its function. When the auxiliary processor has completed its task, it signals the CPU that it is finished. In reality, if the CPU were responsible for copying the data, it would spend most of its time performing data transfers, for example, copying memory to the GPU or network controller. Instead, computers have specialized hardware called direct memory access (DMA) engines that perform the copying to and from the auxiliary processors. The DMA engines perform the data transfers in parallel with the computation performed by the various processors by utilizing otherwise-free memory-bus cycles. In this paper, we show that DMA engines, despite their limited functionality, are nevertheless capable of performing Turing-complete computation.</p><p>At the same time that computer systems have been gaining additional processors, computer security researchers and practitioners have begun to recognize that the once bright-line separation of code and data is perhaps not so bright. For example, the threat of software exploitation has undergone a paradigm shift from a malicious code model (i.e., attacker-delivered payloads), to a malicious computation model where the attacker crafts data inputs to induce arbitrary computation on a target system <ref type="bibr" target="#b41">[38]</ref>. This style of data-only attack goes by various names including return-oriented programming (ROP) <ref type="bibr">[6, 13-15, 20, 23, 27, 30, 35, 37]</ref> and weird machines <ref type="bibr" target="#b3">[4,</ref><ref type="bibr" target="#b9">10,</ref><ref type="bibr" target="#b41">38,</ref><ref type="bibr" target="#b50">47]</ref>.</p><p>The ability to induce arbitrary computation from nothing more than copying bytes from one address to another may be surprising to those who are not steeped in the arcana of weird machines. 1 And indeed, it is a surprisingly strong statement: Any function that can be computed by a Turing machine can be computed using DMA. <ref type="bibr" target="#b1">2</ref> The induced computation of ROP or weird machines generally takes the form of a sequence of "gadgets" which the attacker strings together to perform the desired computation. Each gadget typically performs some discrete action such as "add two numbers together" or "store a value to memory." Once a Turing-complete set of gadgets has been constructed, any desired behavior can be "programmed" in terms of the gadgets.</p><p>Turing-complete behavior in unexpected places is not sufficient to write programs that are interesting from a security (as opposed to a computability) perspective. To be useful, a programming language needs to be what Atkinson et al. <ref type="bibr" target="#b2">[3]</ref> call "resource complete." That is, the language needs to "be[] able to access all resources of the system <ref type="bibr">[…]</ref> from within the language" <ref type="bibr" target="#b2">[3]</ref>. By design, DMA has direct access to (some) hardware peripherals and RAM, including kernel memory and memorymapped I/O registers. <ref type="bibr" target="#b2">3</ref> Thus, a Turing-complete set of DMA gadgets should also be resource-complete.</p><p>In order to build DMA gadgets, we require several capabilities of the DMA engine. In particular, the DMA engine (1) must be capable of performing memoryto-memory copies; (2) can be programmed by loading the address of DMA control blocks or descriptors into memory-mapped registers; and (3) supports a scatter/gather mode where DMA transfers can be chained together, typically by providing the address of the next control block or descriptor.</p><p>Some DMA engines lack capability 1; for example, the Intel Platform Controller Hub EG20T DMA controller only supports transferring data between main memory and PCI memory <ref type="bibr">[24, Chapter 12]</ref>. For DMA engines with similar restrictions, capability 1 can be relaxed as long as the restricted source/target memory contains a byte that could be used as a staging area enabling memory-to-memory copies by transferring data first to the restricted space and then back to memory.</p><p>For ease of implementation and testing, our work targets the Raspberry Pi 2's DMA engine (see Section 2) and thus we make no claim that our results hold for other systems. That said, we believe that the three required capabilities listed above are satisfied by modern DMA engines. For example, the following appear to meet our requirements: Intel 8237 (e.g., legacy IBM PC/ATs), CoreLink 330 <ref type="bibr" target="#b1">[2]</ref> (i.e., ARM Advanced Bus Architecture compliant SoCs), Cell multi-core microprocessor <ref type="bibr" target="#b43">[40]</ref> (e.g., Sony Playstation 3), and Intel's I/O Acceleration Technology <ref type="bibr" target="#b26">[25]</ref> (e.g., Intel Xeon Server).</p><p>Our work differs from traditional DMA malwarethat is, malware that runs on an auxiliary processor such as a GPU and leverages that processor's DMA accessin that it runs entirely in the DMA engine. An attacker need only access hardware registers to exhibit control. This can be achieved in user space with administrator permissions on the Raspberry Pi 2 by mapping the appropriate region of physical memory <ref type="bibr">[11, Chapter 4]</ref>.</p><p>In this paper, we are concerned with the art of crafting Turing-and resource-complete gadget sets using a DMA engine. In particular, we do not discuss how an attacker would gain permission to reprogram a DMA engine, which typically requires administrator access, nor do we discuss the full power of so-called DMA malware as both topics are well described in prior work (see Section 7). Concretely, we</p><p>• describe the theory behind the construction of DMA gadgets (Section 3); • build an interpreter for a known Turing-complete language and demonstrate resource-completeness (Section 4); and • build a proof-of-concept DMA rootkit (Section 5).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Background</head><p>Direct memory access (DMA), is a memory bus architectural feature that enables peripheral devices, such as GPUs, drive controller or network controllers, to access physical memory independently of the CPU. In particular, DMA frees the CPU from I/O data transfer by offloading memory operations (i.e., memory-to-memory copying or moving) to the DMA engine.</p><p>In general, each DMA engine has several control registers that specify the operation of DMA transfer, including the direction of data transfer, unit size in which to transfer (e.g., a word or a byte), and the total number of bytes to transfer. DMA transfers are typically configured by the operating system but may be initiated by hardware signals.</p><p>Our work targets the Raspberry Pi 2 for implementation and testing. Specifically, the Pi is equipped with the </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="04">01 square_tbl</head><p>Figure 1: Square gadget. This simple gadget loads a byte x from address src, computes x 2 mod 256 by using x as an index into the square_tbl, and stores the result at address dest. The next control block to be loaded into the DMA engine is at address next_cb.</p><p>BCM2836 ARM processor which contains a 16-channel Broadcom DMA controller <ref type="bibr">[11, Chapter 4]</ref>. DMA transfers are initiated by loading the address of a control block data structure into one of the channel's memory-mapped control registers. This causes the DMA engine to load the rest of its control registers from the control block.</p><p>The control block is composed of eight 32-bit words that specify not only which operation to perform, but also the address of the control block to be loaded next. The control block forms the basis of our DMA gadget construction.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Constructing DMA gadgets</head><p>A single DMA transfer is little more than a glorified, hardware-assisted memcpy(dest, src, size). As described in Section 2, on the Raspberry Pi 2, DMA transfers are initiated by loading the address of a control block into a memory-mapped register. Each control block contains a source address, a target address, a transfer length, and the address of the next control block to load into the engine. In addition, there are fields that control aspects of DMA transfers that are relevant to reading from/writing to DMA-supported peripherals as well as a variety of options such as 2D transfers. However, to make our results more general, we do not make use of any of these features.</p><p>Unlike traditional computer programming, constructing a DMA "program" fundamentally requires using selfmodifying constructs. Each of our DMA gadgets consists of a collection of control blocks, chained together using the next control block fields, and zero or more tables of constant data. Most of the control blocks in each gadget modify one of the source, destination, or next control block fields in a subsequently-executed control block. For gadgets that perform basic operations such as increment values in memory, the final control block will copy the result to memory and then transition to the next gadget. For gadgets that perform control flow, the initial control blocks compute the address of the next control block to "execute" and store it in the next control block field of the final control block -a trampoline -which performs no memory transfer.</p><p>In order to compute simple functions f : {0, 1} 8 → {0, 1} 8 , we use 256-byte tables where the nth entry in the table corresponds to f (n). These tables are stored 256-byte aligned in memory. By putting the address of the table in the source field of a control block with a transfer length of 1, a preceding control block can select the index n by copying a byte to the least significant byte of the source address pointing to the table. <ref type="figure">Figure 1</ref> demonstrates this by giving the control blocks and table for computing the function n → n 2 mod 256.</p><p>In <ref type="figure">Figure 1</ref> and subsequent figures, the source, destination, transfer length, and next control block fields of the control blocks are drawn as follows. Arrows represent pointers and shaded fields or partial fields are modified by previous DMA transfers.</p><p>In the next section, we describe how to build a Turingcomplete set of DMA gadgets which we use to build an interpreter for a simple programming language.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">A Turing-complete gadget set</head><p>In 1964, Böhm described the simple programming language P ′′ and showed that it is Turing-complete. That is, it can compute every Turing-computable function <ref type="bibr" target="#b6">[7,</ref><ref type="bibr" target="#b7">8]</ref>. It holds that a program written in the language can simulate any other computational device or language. In fact, such a program can be written using only six distinct expressions in P ′′ .</p><p>The toy programming language Brainfuck (hereafter referred to as BF) consists of six instructions semantically equivalent to the six P ′′ expressions and two additional instructions used for input and output. To show that we can compute any arbitrary, Turing-computable function, we build an interpreter for BF out of DMA gadgets. In order to implement the I/O instructions, we use DMA gadgets which interact directly with memory-mapped registers for a UART, thus demonstrating that DMA gadgets are resource-complete as well.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">BF details</head><p>In this section, we give a brief overview of the BF programming language. Readers familiar with BF are encouraged to skip to the following section.</p><p>BF is a minimalistic programming language consisting of eight one-character instructions +-&gt;&lt;[],.. All other  Except for the loop instructions which behave as described above, BF instructions are executed sequentially. A program counter, pc, keeps track of the currently executing instruction. The program terminates when the pc moves past the last instruction. <ref type="figure" target="#fig_2">Figure 2</ref> illustrates an example program that outputs the ASCII character D.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Basic building blocks</head><p>We construct our BF interpreter (Section 4.3) using the basic building blocks described in this section. These building blocks can be used to implement a wide variety of gadgets beyond those needed for the BF interpreter. Some of these are described in Section 4.4. Unary functions. The basic operation of most gadgets involves mapping some input to output. Section 3 and <ref type="figure">Figure 1</ref> illustrate the construction of 8-bit, unary functions. It is frequently useful to compute a function g : {0, 1} 8 → {0, 1} 32 . We can do this by constructing a table of the 32-bit output values and using a function f : {0, 1} 8 → {0, 4, . . . , 252} as an offset into the table.</p><formula xml:id="formula_0">I.e., g(n) = table[f (n)].</formula><p>Variable dereferencing. In order to operate on data stored at a location pointed to by a pointer, we can use a control block to copy the value pointed to by the pointer into the source or destination fields of a subsequent control block. <ref type="figure" target="#fig_3">Figure 3</ref> performs the operation * head ← * head + 1 by first copying the 32-bit address pointed to by head into the source field of cb 2 and the destination field of cb 3 .</p><p>Conditional goto. Conditional computation is achieved by writing the address of a control block to the next control block field of a trampoline control block. Which address is written is data-dependent. These conditional gotos can be used to implement if-then-else statements as well as while and do-while loops.</p><p>As a minor space-optimization, we implement conditionals using a 512-byte aligned, 512-byte address table consisting of 128 addresses paired with a 256-byte condition table. The mth conditional goto in the program is associated with a pair of addresses: the addresses of the control blocks corresponding to the false condition, cb m,F , and the true condition, cb m,T . The two addresses are stored 256-bytes apart in the address table. For example, if the address table is stored in memory at address 0x2000, then cb m,F is stored at address 0x2000 + 4m and cb m,T is stored at address 0x2100 + 4m. Each entry in the condition table stores either the second least significant byte of the address of the table or that value plus 256. Continuing the example, for each value n for which the condition is false, the nth entry in the condition table would be 0x20 and for each n for which the condition is true, the nth entry would be 0x21.</p><p>By overwriting the second least significant byte of the source field of a control block -whose source is the address table -with the value from the conditional table, that control block can copy the address of either cb F or cb T into the next control block field of the trampoline. This is illustrated in <ref type="figure" target="#fig_4">Figure 4</ref>.</p><p>Switch. The switch building block branches to different control blocks depending on a data value. The value is used as an index into a 256-byte offset table. The entries in the offset table are the offsets into an address table which holds the addresses of the various control blocks associated with the switch cases.</p><p>Control blocks cb 1 through cb 3 in <ref type="figure" target="#fig_5">Figure 5</ref> along with the dispatch and instruction tables are an example of a simple switch statement. ASCII values are mapped to their corresponding BF gadgets by using the dispatch table as the <ref type="table" target="#tab_2">lookup table and the instruction table as the  address table.</ref> Memory-mapped I/O registers. Memory-mapped I/O registers are used to control hardware peripherals such as general purpose I/O (GPIO) pins, UARTs, I 2 C or SPI buses, and yes, DMA engines. Interacting with such peripherals typically consists of looping, where we read a memory-mapped flag or status register over and over until a particular status is indicated (e.g., transmit buffer not full or receive buffer not empty), and then read or write a value to a memory-mapped data register. This building block is straight-forward to construct using conditionals for the loop and unary functions for the condition test.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.3">BF interpreter gadgets</head><p>In this section, we use the basic building blocks defined in Section 4.2 to construct BF instruction and interpreterspecific gadgets. In addition to the gadgets described below, the BF interpreter requires a BF program to interpret, a region of memory to act as a tape, and three words at known addresses: a program counter, pc, a tape head head, and a loop counter, lc. The program counter and tape head behave as described in Section 4.1. The loop Then, cb1 copies the selected byte into the second least significant byte of cb2's source. This byte selects which of cbT or cbF are copied into tramp's next control block field. If the address table is at address 0x2000, then if the byte pointed to by cond_ptr is even, then cb 1,T will be the next control block executed. Otherwise, cb1,F will be.</p><p>counter is used to find matching brackets in the implementation of the loop instructions.</p><p>Dispatch gadget. This specific gadget dispatches a BF instruction. We use the switch building block with the dispatch table as the offset table and the instruction table as the address table. The dispatch gadget is shown in <ref type="figure" target="#fig_5">Figure 5</ref>.</p><p>Increment/decrement word gadgets. We implement generic 4-byte increment and decrement gadgets which take as input the address of the value to increment (resp. decrement) and the address of the next control block to execute when the operation is complete. These work by operating on a byte at a time. First, we increment (resp. decrement) the least significant byte of the 4-byte word. If the result is 00 (resp. ff), then we repeat with the second least significant byte, and so on. This is a straightforward application of unary functions, variable dereferencing, and conditionals.</p><p>Next instruction gadget. The next instruction gadget increments the pc by one using the increment word gadget and then jumps to the dispatch gadget.</p><p>Increment/decrement instruction gadgets. These gadgets increment or decrement the cell pointed to by pc using the generic increment and decrement word gadgets and then jump to the next instruction gadget.</p><p>Move right/left instruction gadgets. These gadgets move the head right or left by incrementing or decrementing head using the generic increment and decrement word gadgets and then jump to the next instruction gadget.</p><p>Loop instruction gadgets. The left and right loop instruction gadgets use the increment/decrement byte and word, conditional, and switch gadgets in its implementation. We use the switch gadget and define our lookup We implement the left condition to first check whether the cell pointed to by head is zero. If it is, the gadget jumps to the next instruction gadget. Otherwise, it increments lc using the increment word gadget and scans right, incrementing and decrementing lc as brackets are encountered until lc = 0 at which point it jumps to the next instruction gadget.</p><p>The right condition is similar with a few exceptions. First, we jump to the next instruction if the cell pointed to by head is zero. At the start of scan left we decrement the pc using the decrement word gadget. The scan left table, as stated above, simply inverts all operations of the scan right table. This has the effect of scanning left until the matching bracket is found at which point it jumps to the next instruction gadget.</p><p>Input/output instruction gadgets. Using the memorymapped I/O building block, the input and output instruction gadgets use the Pi's UART to receive a byte and store it in the cell pointed to by head or to transmit the byte in the cell.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.4">Other gadgets</head><p>In previous sections, we demonstrated that DMA transfers are Turing-and resource-complete by building gadgets to interpret the BF programming language and interact with memory-mapped I/O registers. In this section we sketch the construction of a handful of building blocks that could be used to implement more efficient programs than those built using BF.   <ref type="figure" target="#fig_3">Figure 3</ref>) is stored at offset 8 in the instruction table. The control block cb3 copies the corresponding entry from the instruction table into the next control block field of a trampoline control block.</p><p>Similar to the unary function building block, we can construct arbitrary binary functions f : {0, 1} 8 × {0, 1} 8 → {0, 1} 8 by using a 64-kilobyte table, appropriately aligned such that concatenation of the left and right operands forms an offset into the table. Larger binary operations can be constructed by operating 8-bits at a time. For arithmetic operations such as addition, an additional table containing a carryout bit could be used to implement carries.</p><p>Relational operators can be implemented in much the same way or they can leverage a subtraction.</p><p>Finally, DMA-specific features can be used to easily implement functionality which would otherwise be more difficult to implement or be less performant. For one example, the DMA engine on the Raspberry Pi 2 is capable of zeroing regions of memory. Another example is the Pi is capable of performing moderately complex copying modes including nonconsecutive 2D copies. Lastly, as mentioned above, the DMA is usually responsible for communicating directly with hardware peripherals and DMA engines typically support gating the transfers between devices and memory using a variety of hardware signals. This would significantly simplify access to supported peripherals.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">A DMA rootkit</head><p>The most common operating system used on the Raspberry Pi is a Debian-derived distribution called Raspbian which has a Linux kernel. Linux maintains a circular linked list of task_structs each of which holds information about a process.</p><p>The head of the list, init_task, is an exported kernel symbol which is exposed using the ksymtab mechanism. Each task_struct contains a pointer to cred structure which contains various credentials, including the user ID (UID) of the process.</p><p>We implemented a DMA rootkit that first finds the address of init_task and then continually walks the linked list. For each process, the rootkit examines the process's UID. If the UID matches the target UID, then the UID is changed to 0, effectively giving the process super user privileges. Any processes with the target UID that are running are modified shortly after the rootkit is started. Similarly, any processes with the target UID that are started after the rootkit are quickly modified.</p><p>Unlike the DMA gadgets described in Section 4, for the rootkit we utilize the DMA engine's ability to perform a 2D transfer. This enables the rootkit to copy the task_struct's next struct pointer and its cred pointer to a known location in memory given only the address of the next task_struct pointer. <ref type="bibr" target="#b3">4</ref> In more detail, starting with a four-byte kernel virtual address, va for a task_struct's next struct pointer which is stored in a fixed location p, the rootkit first converts va to a bus address ba. Next, it loads the two words at ba and ba + ∆ -where ba + ∆ is the bus address of the cred pointer -to p and p + 4 using a 2D transfer with an appropriate stride constant ∆. After this transfer, location p contains a kernel virtual address for a task_struct's next struct pointer and p + 4 contains a kernel virtual address for the current task_struct's cred struct. The latter address is converted to a bus address, the UID is loaded, compared to the target UID, and on a match, 0 is written. In either case, the loop repeats.</p><p>Since the list is circular, the rootkit's logic is particularly simple. It consists of two DMA control blocks to get the address of init_task and an additional 18 to implement the loop, UID test, and UID setting.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Implementation</head><p>We implemented the BF interpreter described in Section 4.3 and the rootkit described in Section 5 on a Raspberry Pi 2. We were running the common Debian-based operating system, Raspbian. By default, Raspbian exposes the physical address space -including both the SDRAM main memory and the memory-mapped I/O registers -through the psuedo device file /dev/mem.</p><p>Our code is setuid root. It opens /dev/mem, maps pages of physical memory and I/O memory into the process's virtual address space, then closes the file and drops privileges. Next, it crafts DMA control blocks and tables as described above in an unused region of physical memory. Finally, a run_dma() function loads the address of the first control block in the DMA engine's memory-mapped I/O control block register which begins execution of the DMA program. All of our code is available at https://github.com/ stevecheckoway/rundma.</p><p>For input and output, we connected an FTDI UART to USB cable to the UART pins on the Pi.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Related work</head><p>There are two, mostly disjoint, lines of research related to our work: the security of auxiliary processors inside computers, and unintended, Turing-complete computation.</p><p>Auxiliary processors. Security researchers have only recently begun examining the security of auxiliary processors and the firmware that runs on them. The most obvious example of an auxiliary processor is the GPU which uses DMA to transfer graphics data between the graphics card and main memory. <ref type="bibr">Vasiliadis et al. [48]</ref> use the GPU to implement malware unpacking and runtime polymorphism in order to harden malware against detection. <ref type="bibr">Ladakis et al. [29]</ref> use the GPU to build a key logger that monitors the system's keyboard buffer.</p><p>Duflot and Perez <ref type="bibr" target="#b18">[17]</ref> examine the processor that runs on network interface cards (NICs). They exploit a vulnerability in the NIC's firmware to achieve arbitrary code execution and mount a DMA attack to add a backdoor in the kernel. Triulzi <ref type="bibr" target="#b47">[44,</ref><ref type="bibr" target="#b48">45]</ref> uses both the NIC and video card in concert to recover sensitive data in memory such as cryptographic keys. In follow-up work, Duflot et al. <ref type="bibr" target="#b19">[18]</ref> construct an anomaly detection system that uses an IOMMU mechanism to limit access to main memory.</p><p>The IEEE 1394 FireWire specification allows the FireWire bus to communicate via DMA to minimize interrupts and buffer copies. Numerous researchers exploit this feature to access main memory directly <ref type="bibr" target="#b4">[5,</ref><ref type="bibr" target="#b8">9,</ref><ref type="bibr" target="#b22">21,</ref><ref type="bibr" target="#b37">34]</ref>. Kalenderidis and Collinson <ref type="bibr" target="#b27">[26]</ref> exploit Intel Thunderbolt in a similar fashion.</p><p>The Intel Management Engine (ME) is a microcontroller embedded in the Intel chip set with a separate NIC, DMA access to main memory, and remote out-of-band management technology called Intel Active Management Technology (AMT). Stewin and Bystrov <ref type="bibr" target="#b45">[42]</ref> use the ME to build a DMA key logger, and Tereshkin and Wojtczuk <ref type="bibr" target="#b46">[43]</ref> use AMT to construct a "Ring −3" rootkit. Similarly, Farmer <ref type="bibr" target="#b20">[19]</ref> and Moore <ref type="bibr" target="#b35">[32]</ref> examine vulnerabilities in the Intelligent Platform Management Interface (IPMI).</p><p>Other exploitable auxiliary processors include laptop batteries <ref type="bibr" target="#b32">[31]</ref> and webcams <ref type="bibr" target="#b11">[12]</ref>.</p><p>Unintended computation. The ability to craft input data to drive programs in the target system has been discussed by the hacker community as far back as Aleph One's seminal article on buffer overflows <ref type="bibr" target="#b0">[1]</ref>. Returnto-libc <ref type="bibr" target="#b42">[39]</ref>, Krahmer's borrowed code chunks technique <ref type="bibr" target="#b29">[28]</ref>, and return-oriented programming (ROP) <ref type="bibr" target="#b40">[37]</ref> represent an evolution of exploitation techniques leading to Turing-complete computation built by borrowing existing program code. ROP was first introduced by Shacham <ref type="bibr" target="#b40">[37]</ref> as a technique to perform arbitrary, Turing-complete computation by executing a string of gadgets: short sequences of instructions, linked together by an "update-load-branch" mechanism <ref type="bibr" target="#b16">[15]</ref>, that exist within the program or linked library. ROP has since been extended to various architectures <ref type="bibr" target="#b13">[13,</ref><ref type="bibr" target="#b14">14,</ref><ref type="bibr" target="#b21">20,</ref><ref type="bibr" target="#b28">27,</ref><ref type="bibr" target="#b31">30]</ref>. More recent work has focused on the automation of each step in the technique <ref type="bibr" target="#b5">[6,</ref><ref type="bibr" target="#b24">23,</ref><ref type="bibr" target="#b38">35,</ref><ref type="bibr" target="#b39">36]</ref>. For example, Bittau et al. <ref type="bibr" target="#b5">[6]</ref> explores the limits of ROP by crafting an exploit without possessing the target's binary.</p><p>Turing-complete gadget sets need not be comprised of misappropriated CPU instructions. Indeed, parsers for complex file and record formats can be abused to provide Turing-complete computation. <ref type="bibr">Oakley and Bratus [33]</ref> uses the Debugging With Attribute Records Format (DWARF) to perform arbitrary computation with the DWARF bytecode. <ref type="bibr">Shapiro et al. [38]</ref> use the ELF loader mechanism to effect computation.</p><p>The prior work most similar to ours combines specialized hardware and unintended computation. Bangert et al. <ref type="bibr" target="#b3">[4]</ref> demonstrate a Turing-complete execution environment using the IA32 arcitecture's page fault handling mechanism. Neither the page fault handling hardware nor the DMA hardware was designed with computation in mind; however, computation emerges from the hardware's complexity.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="8">Conclusions</head><p>In this work, we have shown that DMA engines can be used to perform Turing-complete computation even though it is not their intended function. In particular, we have crafted DMA Turing-and resource-complete gadget sets that we used to build an interpreter for BF. In addition, we built a DMA rootkit to performs privilege escalation for targeted programs.</p><p>Although we are the first to build malware entirely out of DMA transfers, we are not the first to consider the capabilities DMA provides to auxiliary processors running in the system (see Section 2). Indeed, researchers have considered various countermeasures to such DMA malware. These countermeasures are applicable to our work as well. Example countermeasures include using the input/out memory management unit (IOMMU) <ref type="bibr" target="#b44">[41]</ref>, peripheral firmware load-time integrity <ref type="bibr" target="#b45">[42,</ref><ref type="bibr" target="#b49">46]</ref>, anomaly detection systems <ref type="bibr" target="#b19">[18]</ref>, and bus agent runtime monitors (BARMs) <ref type="bibr" target="#b44">[41]</ref>.</p><p>Several of these defenses have been found lacking. Researchers have noted that peripheral firmware load-time integrity is inadequate because it does not provide runtime integrity <ref type="bibr" target="#b19">[18,</ref><ref type="bibr" target="#b45">42]</ref>. Stewin and Bystrov <ref type="bibr" target="#b45">[42]</ref> further describes the IOMMU as lacking because it can be configured improperly, and it cannot be applied if there are memory access policy conflicts.</p><p>Given the current lack of strong defenses against DMA abuse and the ability of DMA to do both Turing-complete and resource-complete computation, it is clear that more work on secure defenses is needed.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: BF example. The program is in mid-execution with head currently pointing to cell 0 on the tape. The current instruction is a -, which decrements the byte pointed to by head, setting it to zero. Next, the right condition checks if the byte pointed to by head is zero; it is, so the program executes the next instruction which moves head one cell to the right. Cell 1 is then decremented twice, setting its value to 0x44. Finally, the program outputs the ASCII character 'D' and halts.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: Increment gadget. The tape head is stored in a fixed location, head_addr. The first two control blocks copy head to cb2's source and cb3's destination, respectively. Then, cb2 copies the cell pointed to by head into the least significant byte of cb3's source which acts as an offset into the increment table. Finally, cb3 stores the selected value back into the tape.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_4"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: Conditional goto gadget. First, cb0 copies the byte pointed to by cond_ptr into the least significant byte of cb1's source to use as an index into the conditional table. Then, cb1 copies the selected byte into the second least significant byte of cb2's source. This byte selects which of cbT or cbF are copied into tramp's next control block field. If the address table is at address 0x2000, then if the byte pointed to by cond_ptr is even, then cb 1,T will be the next control block executed. Otherwise, cb1,F will be.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_5"><head>Figure 5 :</head><label>5</label><figDesc>Figure 5: Dispatch gadget. The byte pointed to by the program counter is used as an offset into the dispatch table. The dispatch table contains the offset into the instruction table for the corresponding instruction. For example, the byte '+' has ASCII value 43; the 43rd entry of the dispatch table is 8; and the address of the increment gadget (see Figure 3) is stored at offset 8 in the instruction table. The control block cb3 copies the corresponding entry from the instruction table into the next control block field of a trampoline control block.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="false"><head>-decrement the cell pointed to by head &gt; increment head to point to the next cell &lt; decrement head to point to the previous cell [ if the cell pointed to by head is nonzero, execute the next instruction; otherwise, jump to the instruction following the matching ] ] if the cell pointed to by head is zero, execute</head><label></label><figDesc></figDesc><table>The cur-
+rent instruction is a -, which decrements the byte pointed 
+to by head, setting it to zero. Next, the right condition 
+checks if the byte pointed to by head is zero; it is, so the 
+program executes the next instruction which moves head 
+one cell to the right. Cell 1 is then decremented twice, set-
+ting its value to 0x44. Finally, the program outputs the 
+ASCII character 'D' and halts. 
+
+characters act as a no-op. BF instructions operate on a 
+tape divided into cells, much like the tape of a Turing ma-
+chine. Each cell holds one of 256 values 00, 01, . . . , ff 
+and is initially empty. There is an implicit tape head, 
+head, which points to the current cell on the tape. The 
+eight instructions have the follow semantics. 
++ increment the cell pointed to by head 
+the next 
+instruction; otherwise, jump to the instruction follow-
+ing the matching [ 
+, store input to the cell pointed to by head 
+. output the cell pointed to by head 
+The increment and decrement instructions +/-operate 
+modulo 256 and the loop instructions [] nest as ex-
+pected. 
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_1" validated="false"><head>table , or bracket table, to contain an offset into two distinct address tables, or scan right table and scan left table, at the nth index, where n equals</head><label>,</label><figDesc>0 or the ASCII byte representation of '[', or ']'. The scan right table assigns its indexes with the following control block addresses in order: scan right, increment loop counter, decrement loop counter, and quit. The scan left table inverts all operations.</figDesc><table></table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_2" validated="false"><head>table .</head><label>.</label><figDesc></figDesc><table>The 
+dispatch table contains the offset into the instruction table for the corresponding instruction. For example, the byte '+' has 
+ASCII value 43; the 43rd entry of the dispatch table is 8; and the address of the increment gadget (see </table></figure>
+
+			<note place="foot" n="1"> For example, the x86 mov instruction is Turing-complete [16]. 2 As we show in Section 5, DMA transfers can perform sequential interactive computation à la Persistent Turing Machines [22]. 3 In some systems an IOMMU unit may restrict DMA access to certain regions of memory.</note>
+
+			<note place="foot" n="4"> Lists in the Linux kernel contain pointers to the next element&apos;s next element pointer rather than to the beginning of the structure. In normal kernel code, this leads to an additional arithmetic instruction to recover a pointer to the structure.</note>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgments</head><p>We thank our shepherd Travis Goodspeed, Cynthia Taylor and the anonymous reviewers for their time and invaluable comments.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title level="m" type="main">Smashing the stack for fun and profit. Phrack Magazine</title>
+		<ptr target="http://www.phrack.org/issues.html?issue=49&amp;id=14" />
+		<imprint>
+			<date type="published" when="1996-08" />
+			<biblScope unit="volume">49</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dma</forename><surname>Corelinktm</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Controller</surname></persName>
+		</author>
+		<idno>DMA-330. ARM</idno>
+		<ptr target="http://infocenter.arm.com/help/topic/com.arm.doc.ddi0424c/DDI0424C_dma330_r1p1_trm.pdf" />
+		<imprint>
+			<date type="published" when="2010-07" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">The object-oriented database system manifesto</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Malcolm</forename><surname>Atkinson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Frano ̧is Bancilhon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Klaus</forename><surname>Dewitt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Dittrich</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stanley</forename><surname>Maier</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Zdonik</surname></persName>
+		</author>
+		<ptr target="https://www.cs.cmu.edu/~clamen/OODBMS/Manifesto/Manifesto.PS.gz" />
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of DOOD 1989</title>
+		<editor>Won Kim, Jean-Marie Nicolas, and Shojiro Nishio</editor>
+		<meeting>DOOD 1989</meeting>
+		<imprint>
+			<publisher>Elsevier</publisher>
+			<date type="published" when="1989-12" />
+			<biblScope unit="page" from="223" to="263" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Page-fault weird machine: Lessons in instruction-less computation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Julian</forename><surname>Bangert</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sergey</forename><surname>Bratus</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rebecca</forename><surname>Shapiro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sean</forename><forename type="middle">W</forename><surname>Smith</surname></persName>
+		</author>
+		<ptr target="https://www.usenix.org/conference/woot13/workshop-program/presentation/Bangert" />
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of WOOT 2013. USENIX, August 2013</title>
+		<meeting>WOOT 2013. USENIX, August 2013</meeting>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+		<title level="m" type="main">FireWire: all your memory are belong to us. Presented at CanSecWest</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Becher</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Maximillian</forename><surname>Dornseif</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Christian</forename><forename type="middle">N</forename><surname>Klein</surname></persName>
+		</author>
+		<ptr target="https://cansecwest.com/core05/2005-firewire-cansecwest.pdf" />
+		<imprint>
+			<date type="published" when="2005-05" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Hacking blind</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><surname>Bittau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adam</forename><surname>Belay</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ali</forename><surname>Mashtizadeh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Mazieres</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dan</forename><surname>Boneh</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of IEEE Security and Privacy</title>
+		<meeting>IEEE Security and Privacy</meeting>
+		<imprint>
+			<date type="published" when="2014-05" />
+			<biblScope unit="page" from="227" to="269" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">On a family of Turing machines and the related programming language</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Corrado</forename><surname>Böhm</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">International Computation Centre Bulletin</title>
+		<imprint>
+			<biblScope unit="volume">3</biblScope>
+			<biblScope unit="page" from="187" to="94" />
+			<date type="published" when="1964-07" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Flow diagrams, Turing machines and languages with only two formation rules</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Corrado</forename><surname>Böhm</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Giuseppe</forename><surname>Jacopini</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Communications of the ACM</title>
+		<imprint>
+			<biblScope unit="volume">9</biblScope>
+			<biblScope unit="issue">5</biblScope>
+			<biblScope unit="page" from="366" to="71" />
+			<date type="published" when="1966-05" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<monogr>
+		<title level="m" type="main">Hit by a bus: Physical access attacks with firewire</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adam</forename><surname>Boileau</surname></persName>
+		</author>
+		<ptr target="http://www.security-assessment.com/files/presentations/ab_firewire_rux2k6-final.pdf" />
+		<imprint>
+			<date type="published" when="2006-09" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Beyond planted bugs in &quot;trusting trust&quot;: The input-processing frontier</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sergey</forename><surname>Bratus</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Trey</forename><surname>Darley</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Locasto</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Meredith</forename><forename type="middle">L</forename><surname>Patterson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rebecca</forename><surname>Shapiro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Anna</forename><surname>Shubina</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE</title>
+		<imprint>
+			<biblScope unit="volume">12</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="83" to="87" />
+			<date type="published" when="2014-01" />
+			<publisher>Security Privacy</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<monogr>
+		<title level="m" type="main">Broadcom Corporation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Bcm2835 Arm Peripherals</surname></persName>
+		</author>
+		<ptr target="https://www.raspberrypi.org/wp-content/uploads/2012/02/BCM2835-ARM-Peripherals.pdf" />
+		<imprint>
+			<date type="published" when="2012-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">iSeeYou: Disabling the MacBook webcam indicator LED</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matthew</forename><surname>Brocker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stephen</forename><surname>Checkoway</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of USENIX Security</title>
+		<meeting>USENIX Security</meeting>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="337" to="52" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<monogr>
+				<ptr target="https://www.usenix.org/conference/usenixsecurity14/technical-sessions/presentation/brocker" />
+		<title level="m">USENIX Association</title>
+		<imprint>
+			<date type="published" when="2014-08" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">When good instructions go bad: Generalizing return-oriented programming to RISC</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Erik</forename><surname>Buchanan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ryan</forename><surname>Roemer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hovav</forename><surname>Shacham</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stefan</forename><surname>Savage</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of CCS</title>
+		<editor>Paul Syverson and Somesh Jha</editor>
+		<meeting>CCS</meeting>
+		<imprint>
+			<publisher>ACM Press</publisher>
+			<date type="published" when="2008" />
+			<biblScope unit="page" from="27" to="38" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<monogr>
+		<title level="m" type="main">Can DREs provide longlasting security? The case of return-oriented programming and the AVC Advantage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stephen</forename><surname>Checkoway</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ariel</forename><forename type="middle">J</forename><surname>Feldman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Brian</forename><surname>Kantor</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">Alex</forename><surname>Halderman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Edward</forename><forename type="middle">W</forename><surname>Felten</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hovav</forename><surname>Shacham</surname></persName>
+		</author>
+		<editor>David Jefferson, Joseph Lorenzo Hall, and Tal Moran</editor>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Usenix/Accurate/</forename><surname>Iavoss</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2009-08" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">Return-oriented programming without returns</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stephen</forename><surname>Checkoway</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lucas</forename><surname>Davi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alexandra</forename><surname>Dmitrienko</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ahmad-Reza</forename><surname>Sadeghi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hovav</forename><surname>Shacham</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Marcel</forename><surname>Winandy</surname></persName>
+		</author>
+		<ptr target="https://www.cs.jhu.edu/~s/papers/noret_ccs2010.html" />
+	</analytic>
+	<monogr>
+		<title level="m">Angelos Keromytis and Vitaly Shmatikov</title>
+		<imprint>
+			<publisher>ACM Press</publisher>
+			<date type="published" when="2010-10" />
+			<biblScope unit="page" from="559" to="72" />
+		</imprint>
+	</monogr>
+	<note>Proceedings of CCS 2010</note>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<monogr>
+		<title level="m" type="main">mov is Turing-complete</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stephen</forename><surname>Dolan</surname></persName>
+		</author>
+		<ptr target="http://www.cl.cam.ac.uk/~sd601/papers/mov.pdf" />
+		<imprint>
+			<date type="published" when="2013-07" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<monogr>
+		<title level="m" type="main">Can you still trust your network card? Presented at CanSecWest</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Loïc</forename><surname>Duflot</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yves-Alexis</forename><surname>Perez</surname></persName>
+		</author>
+		<ptr target="http://www.ssi.gouv.fr/IMG/pdf/csw-trustnetworkcard.pdf" />
+		<imprint>
+			<date type="published" when="2010-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">What if you can&apos;t trust your network card?</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Loïc</forename><surname>Duflot</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yves-Alexis</forename><surname>Perez</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Benjamin</forename><surname>Morin</surname></persName>
+		</author>
+		<ptr target="http://www.ssi.gouv.fr/IMG/pdf/paper.pdf" />
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of RAID 2011</title>
+		<editor>Robin Sommer, Davide Balzarotti, and Gregor Maier</editor>
+		<meeting>RAID 2011</meeting>
+		<imprint>
+			<publisher>Springer</publisher>
+			<date type="published" when="2011-09" />
+			<biblScope unit="page" from="378" to="397" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<monogr>
+		<title level="m" type="main">IPMI: Freight train to hell</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dan</forename><surname>Farmer</surname></persName>
+		</author>
+		<ptr target="http://fish2.com/ipmi/itrain.pdf" />
+		<imprint>
+			<date type="published" when="2013-01" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">Code injection attacks on Harvard-architecture devices</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aurélien</forename><surname>Francillon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Claude</forename><surname>Castelluccia</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of CCS 2008</title>
+		<editor>Paul Syverson and Somesh Jha</editor>
+		<meeting>CCS 2008</meeting>
+		<imprint>
+			<publisher>ACM Press</publisher>
+			<date type="published" when="2008" />
+			<biblScope unit="page" from="15" to="26" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<monogr>
+		<title level="m" type="main">Firewire attacks against Mac OS Lion FileVault 2 encryption</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Todd</forename><surname>Garrison</surname></persName>
+		</author>
+		<ptr target="http://www.frameloss.org/2011/09/18/firewire-attacks-against-mac-os-lion-filevault-2-encryption/" />
+		<imprint>
+			<date type="published" when="2011-09" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<monogr>
+		<title level="m" type="main">Turing machines, transition systems, and interaction. Information and Computation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dina</forename><forename type="middle">Q</forename><surname>Goldin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Scott</forename><forename type="middle">A</forename><surname>Smolka</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Paul</forename><forename type="middle">C</forename><surname>Attie</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Elaine</forename><forename type="middle">L</forename><surname>Sonderegger</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2004-11" />
+			<biblScope unit="volume">194</biblScope>
+			<biblScope unit="page">http</biblScope>
+		</imprint>
+	</monogr>
+	<note>Online</note>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">Return-oriented rootkits: Bypassing kernel code integrity protection mechanisms</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ralf</forename><surname>Hund</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thorsten</forename><surname>Holz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Felix</forename><surname>Freiling</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of USENIX Security</title>
+		<editor>Fabian Monrose</editor>
+		<meeting>USENIX Security</meeting>
+		<imprint>
+			<date type="published" when="2009-08" />
+			<biblScope unit="page" from="383" to="98" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<monogr>
+				<ptr target="http://www.intel.com/content/www/us/en/intelligent-systems/queens-bay/platform-controller-hub-eg20t-datasheet.html" />
+		<title level="m">Intel Platform Controller Hub EG20T: Datasheet. Intel</title>
+		<imprint>
+			<date type="published" when="2012-07" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">Intel QuickData technology software guide for Linux</title>
+		<ptr target="http://www.intel.com/content/dam/doc/white-paper/quickdata-technology-software-guide-for-linux-paper.pdf" />
+	</analytic>
+	<monogr>
+		<title level="j">Intel Server Platform Group</title>
+		<imprint>
+			<date type="published" when="2008-05" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<monogr>
+		<title level="m" type="main">Thunderbolts and lightning, very very frightening</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Loukas</forename><surname>Kalenderidis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sam</forename><surname>Collinson</surname></persName>
+		</author>
+		<ptr target="https://www.youtube.com/watch?v=0FoVmBOdbhg" />
+		<imprint>
+			<date type="published" when="2014-05" />
+		</imprint>
+	</monogr>
+	<note>Presented at SyScan</note>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<monogr>
+		<title level="m" type="main">Return oriented programming for the ARM architecture</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tim</forename><surname>Kornau</surname></persName>
+		</author>
+		<ptr target="http://zynamics.com/downloads/kornau-tim--diplomarbeit--rop.pdf" />
+		<imprint>
+			<date type="published" when="2009" />
+			<pubPlace>Germany</pubPlace>
+		</imprint>
+		<respStmt>
+			<orgName>Ruhr-University Bochum</orgName>
+		</respStmt>
+	</monogr>
+<note type="report_type">Master thesis</note>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<monogr>
+		<title level="m" type="main">x86-64 buffer overflow exploits and the borrowed code chunks exploitation technique</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sebastian</forename><surname>Krahmer</surname></persName>
+		</author>
+		<ptr target="http://www.suse.de/~krahmer/no-nx.pdf" />
+		<imprint>
+			<date type="published" when="2005-09" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">You can type, but you can&apos;t hide: A stealthy GPU-based keylogger</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Evangelos</forename><surname>Ladakis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lazaros</forename><surname>Koromilas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Giorgos</forename><surname>Vasiliadis</surname></persName>
+		</author>
+		<ptr target="http://www.cs.columbia.edu/~mikepo/papers/gpukeylogger.eurosec13.pdf" />
+	</analytic>
+	<monogr>
+		<title level="m">Thorsten Holz and Sotiris Ioannidis</title>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2013-04" />
+		</imprint>
+	</monogr>
+	<note>Proceedings of EuroSec 2013</note>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<monogr>
+		<title level="m" type="main">Developments in Cisco IOS forensics</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Felix</forename><surname>Lidner</surname></persName>
+		</author>
+		<ptr target="http://www.recurity-labs.com/content/pub/FX_Router_Exploitation.pdf" />
+		<imprint>
+			<date type="published" when="2009-11" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<monogr>
+		<title level="m" type="main">Battery firmware hacking: Inside the innards of a smart battery</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Charlie</forename><surname>Miller</surname></persName>
+		</author>
+		<ptr target="http://media.blackhat.com/bh-us-" />
+		<imprint>
+			<date type="published" when="2011-08" />
+		</imprint>
+	</monogr>
+	<note>Presented at Black Hat Briefings</note>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Miller/Bh_Us_11_Miller_Battery_</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Firmware_Public_Wp</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<monogr>
+		<title level="m" type="main">A penetration tester&apos;s guide to IPMI and BMCs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">D</forename><surname>Moore</surname></persName>
+		</author>
+		<ptr target="https://community.rapid7.com/community/metasploit/blog/2013/07/02/a-penetration-testers-guide-to-ipmi" />
+		<imprint>
+			<date type="published" when="2013-07" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b36">
+	<analytic>
+		<title level="a" type="main">Exploiting the hard-working DWARF: Trojan and exploit techniques with no native executable code</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">James</forename><surname>Oakley</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sergey</forename><surname>Bratus</surname></persName>
+		</author>
+		<ptr target="http://dl.acm.org/citation.cfm?id=2028052.2028063" />
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings WOOT 2011. USENIX Association, August 2011</title>
+		<meeting>WOOT 2011. USENIX Association, August 2011</meeting>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b37">
+	<monogr>
+		<title level="m" type="main">Physical security attacks on Windows Vista</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Peter</forename><surname>Panholzer</surname></persName>
+		</author>
+		<ptr target="https://www.sec-consult.com/fxdata/seccons/prod/downloads/vista_physical_attacks.pdf" />
+		<imprint>
+			<date type="published" when="2008-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b38">
+	<monogr>
+		<title level="m" type="main">Finding the bad in good code: Automated return-oriented programming exploit discovery</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ryan</forename><surname>Roemer</surname></persName>
+		</author>
+		<ptr target="https://cseweb.ucsd.edu/~rroemer/doc/thesis.pdf" />
+		<imprint>
+			<date type="published" when="2009-03" />
+		</imprint>
+		<respStmt>
+			<orgName>UC San Diego</orgName>
+		</respStmt>
+	</monogr>
+	<note>Master&apos;s thesis</note>
+</biblStruct>
+
+<biblStruct xml:id="b39">
+	<analytic>
+		<title level="a" type="main">Q: Exploit hardening made easy</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Edward</forename><forename type="middle">J</forename><surname>Schwartz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thanassis</forename><surname>Avgerinos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Brumley</surname></persName>
+		</author>
+		<ptr target="http://users.ece.cmu.edu/~ejschwar/papers/usenix11.pdf" />
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of USENIX Security</title>
+		<editor>David Wagner</editor>
+		<meeting>USENIX Security</meeting>
+		<imprint>
+			<date type="published" when="2011-08" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b40">
+	<analytic>
+		<title level="a" type="main">The geometry of innocent flesh on the bone: Return-into-libc without function calls (on the x86)</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hovav</forename><surname>Shacham</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of CCS 2007</title>
+		<editor>Sabrina De Capitani di Vimercati and Paul Syverson</editor>
+		<meeting>CCS 2007</meeting>
+		<imprint>
+			<publisher>ACM Press</publisher>
+			<date type="published" when="2007-10" />
+			<biblScope unit="page" from="552" to="61" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b41">
+	<analytic>
+		<title level="a" type="main">Weird machines&quot; in ELF: A spotlight on the underappreciated metadata</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rebecca</forename><surname>Shapiro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sergey</forename><surname>Bratus</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sean</forename><forename type="middle">W</forename><surname>Smith</surname></persName>
+		</author>
+		<ptr target="https://www.usenix.org/conference/woot13/workshop-program/presentation/Shapiro" />
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of WOOT 2013. USENIX, August 2013</title>
+		<meeting>WOOT 2013. USENIX, August 2013</meeting>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b42">
+	<monogr>
+		<title level="m" type="main">Getting around non-executable stack (and fix)</title>
+		<ptr target="http://seclists.org/bugtraq/1997/Aug/0063.html" />
+		<imprint>
+			<date type="published" when="1997-08" />
+		</imprint>
+	</monogr>
+	<note>Bugtraq</note>
+</biblStruct>
+
+<biblStruct xml:id="b43">
+	<monogr>
+		<title level="m" type="main">Cell broadband engine processor dma engines, part 1: The little engines that move data</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vaidyanathan</forename><surname>Srinivasan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Anand</forename><forename type="middle">K</forename><surname>Santhanam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Madhavan</forename><surname>Srinivasan</surname></persName>
+		</author>
+		<ptr target="http://www.ibm.com/developerworks/library/pa-celldmas/" />
+		<imprint>
+			<date type="published" when="2005-12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b44">
+	<analytic>
+		<title level="a" type="main">A primitive for revealing stealthy peripheral-based attacks on the computing platform&apos;s main memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Patrick</forename><surname>Stewin</surname></persName>
+		</author>
+		<ptr target="http://link.springer.com/chapter" />
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of RAID 2013</title>
+		<meeting>RAID 2013</meeting>
+		<imprint>
+			<date type="published" when="2013-10" />
+			<biblScope unit="page" from="1" to="20" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b45">
+	<analytic>
+		<title level="a" type="main">Understanding dma malware</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Patrick</forename><surname>Stewin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Iurii</forename><surname>Bystrov</surname></persName>
+		</author>
+		<idno type="doi">10.1007/978-3-642-37300-8_2</idno>
+		<ptr target="http://dx.doi.org/10.1007/978-3-642-37300-8_2" />
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of DIMVA 2012</title>
+		<meeting>DIMVA 2012</meeting>
+		<imprint>
+			<publisher>Springer-Verlag</publisher>
+			<date type="published" when="2012-07" />
+			<biblScope unit="page" from="21" to="41" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b46">
+	<monogr>
+		<title level="m" type="main">Introducing ring −3 rootkits. Presented at Black Hat Briefings</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alexander</forename><surname>Tereshkin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rafal</forename><surname>Wojtczuk</surname></persName>
+		</author>
+		<ptr target="http://www.blackhat.com/presentations/bh-usa-09/TERESHKIN/BHUSA09-Tereshkin-Ring3Rootkit-SLIDES.pdf" />
+		<imprint>
+			<date type="published" when="2009-07" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b47">
+	<monogr>
+		<title level="m" type="main">Project Maux Mk</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arrigo</forename><surname>Triulzi</surname></persName>
+		</author>
+		<ptr target="http://www.alchemistowl.org/arrigo/Papers/Arrigo-Triulzi-PACSEC08-Project-Maux-II.pdf" />
+		<imprint>
+			<date type="published" when="2008-11" />
+			<biblScope unit="volume">II</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b48">
+	<monogr>
+		<title level="m" type="main">The Jedi packet trick takes over the Deathstar</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arrigo</forename><surname>Triulzi</surname></persName>
+		</author>
+		<ptr target="http://www.alchemistowl.org/arrigo/Papers/Arrigo-Triulzi-CANSEC10-Project-Maux-III.pdf" />
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b49">
+	<monogr>
+		<title level="m" type="main">TCG PC client specific implementation specification for conventional BIOS</title>
+		<ptr target="http://www.trustedcomputinggroup" />
+		<imprint>
+			<date type="published" when="2005-07" />
+		</imprint>
+		<respStmt>
+			<orgName>Trusted Computing Group</orgName>
+		</respStmt>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b50">
+	<analytic>
+		<title level="a" type="main">The weird machines in proofcarrying code</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Julien</forename><surname>Vanegue</surname></persName>
+		</author>
+		<ptr target="http://www.ieee-security.org/TC/SPW2014/papers/5103a209.PDF" />
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of SPW 2014</title>
+		<meeting>SPW 2014</meeting>
+		<imprint>
+			<publisher>IEEE Computer Society</publisher>
+			<date type="published" when="2014-05" />
+			<biblScope unit="page" from="209" to="222" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b51">
+	<analytic>
+		<title level="a" type="main">GPU-assisted malware</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Giorgos</forename><surname>Vasiliadis</surname></persName>
+		</author>
+		<ptr target="http://dcs.ics.forth.gr/Activities/papers/gpumalware.malware10.pdf" />
+	</analytic>
+	<monogr>
+		<title level="m">Michalis Polychronakis, and Sotiris Ioannidis</title>
+		<editor>Jean-Yves Marion, Noam Rathaus, and Cliff Zhou</editor>
+		<imprint>
+			<publisher>IEEE Computer Society</publisher>
+			<date type="published" when="2010-10" />
+			<biblScope unit="page" from="1" to="6" />
+		</imprint>
+	</monogr>
+	<note>Proceedings of MAL-WARE 2010</note>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

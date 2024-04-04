@@ -1,0 +1,1180 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T04:29+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Unicorefuzz: On the Viability of Emulation for Kernelspace Fuzzing</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dominik</forename><surname>Maier</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">U</forename><surname>Berlin</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Benedikt</forename><surname>Radtke</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">U</forename><surname>Berlin</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bastian</forename><surname>Harren</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">U</forename><surname>Berlin</surname></persName>
+						</author>
+						<title level="a" type="main">Unicorefuzz: On the Viability of Emulation for Kernelspace Fuzzing</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+					<note>ARTIFACT EVALUATED PASSED</note>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Fuzzing uncovers an ever-growing number of critical vul-nerabilities. Despite the simple concept-execute the target until it crashes-setting up fuzz tests can pose complex challenges. This is especially true for code that cannot run as part of a userland process on desktop operating systems-for example device drivers and kernel components. In this paper, we explore the use of CPU emulation to fuzz arbitrary parsers in kernelspace with coverage-based feedback. We propose and open-source Unicorefuzz and explain merits and pitfalls of emulation-based fuzzing approaches. The viability of the approach is evaluated against artificial Linux kernel modules, the Open vSwitch network virtualization component as well as bugs originally uncovered by syzkaller. Emulator-based fuzzing of kernel code is not very complex to set up and can even be used to fuzz operating systems and devices for which no source code is available.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Fuzz testing is a powerful way to uncover a variety of bugs in an automated fashion. Companies start building up fuzzing pipelines like OSS-Fuzz, proposed by Serebryany <ref type="bibr" target="#b38">[36]</ref>. Fuzzing user space software has been done for several decades <ref type="bibr" target="#b20">[18]</ref>, however fuzzing operating systems and kernels poses a more difficult task <ref type="bibr" target="#b36">[34]</ref>. If arbitrary kernel components in an emulator could be fuzzed directly, security researchers would be able to scrutinize any part of any kernel and thus gain a significant edge in the everlasting battle against security vulnerabilities. A few years ago, fuzzing kernel code, for example Wi-Fi drivers, required complex setups. They had to resemble real-world scenarios, like dedicated rogue access points <ref type="bibr" target="#b6">[6]</ref> that are hard to integrate into feedback-based fuzzing methodologies. Fuzzing kernelspace code is hard since any state change affects the whole system, the code is tucked away from userland and recovering from crashes is hardly possible without an additional layer of abstraction. The current state of the art of kernel fuzzing, syzkaller, solves this problem by fuzzing kernel inside Virtual Machines, triggering code from the VM-internal userland via syscalls and passing feedback back to the userland <ref type="bibr" target="#b19">[17]</ref>. This, however, means syscalls for all tests need to exist or need to be written. It also makes security testing of binary-only kernel modules, as well as odd operating systems, hard to impossible. In this paper, we take a different approach to the problem domain. We propose Unicorefuzz, a novel way to fuzz parsers in the kernelspace, based on AFL-Unicorn, a CPU emulatorbased fuzzer. The Unicorn emulator supports a vast range of processor architectures <ref type="bibr" target="#b33">[31]</ref>, which makes fuzzing of arbitrary kernel code, even for embedded architectures, viable. In this paper, we show that fuzzing arbitrary kernelspace functions is possible and viable.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1.1">Basic terminology</head><p>First, we define basic terms we will use throughout this paper.</p><p>Fuzzer A fuzzer successively generates inputs to the fuzz target while observing its behavior. It collects inputs that trigger behavior of interest for further analysis.</p><p>Target The fuzz target is the item being tested using a fuzzer. Depending on the methodology used this can be anything ranging from an interpreted script to a hardware device. The main requirements are that it accepts input and exhibits some resulting observable behavior.</p><p>Coverage A contiguous block of steps or instructions that are executed unconditionally is known as a basic block, while branches are conditional transfers between basic blocks. Depending on the inputs, different paths (i.e. chains of basic blocks) may be triggered. The amount of branches taken in a target affects the coverage -with more being a higher number. Normalized, coverage indicates the percentage of all possible branches taken in a single execution.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1.2">Feedback Fuzzing</head><p>Feedback fuzzing instruments the fuzz target in such a way that it receives immediate feedback about the effects of an input. According to this feedback, the fuzzer will change test cases in future iterations. Coverage guided fuzzing is the most famous example. It uses code coverage or, closely related, the number of distinct basic blocks transitions triggered, as a feedback for the fuzzer's genetic algorithm <ref type="bibr" target="#b28">[26]</ref>. The fuzzer prefers test cases yielding higher coverage and different code paths. The goal is the maximization of code coverage in the target. Employing code coverage as a fitness function for a genetic algorithm then allows the fuzzer to iteratively build a model of the program's input grammar, which in turn improves the inputs given to the tested application. The idea to use instrumentation to learn test inputs through genetic algorithms was already proposed in 1995 by Stahmer <ref type="bibr" target="#b41">[39]</ref>. In 2006, Jared DeMott took this approach again and proposed an evolving fuzzer <ref type="bibr" target="#b13">[11,</ref><ref type="bibr" target="#b14">12]</ref>. Simultaneously Drwery and Ormandy proposed and patented a similar method <ref type="bibr" target="#b17">[15,</ref><ref type="bibr" target="#b18">16]</ref>. The prominent fuzzers today, AFL and libFuzzer, both favour inputs that cause code paths previously not observed to be executed <ref type="bibr" target="#b29">[27,</ref><ref type="bibr" target="#b45">43]</ref>. Even with coverage guided fuzzing, using a valid input file is still recommended and expected to yield a higher code coverage early on <ref type="bibr" target="#b39">[37,</ref><ref type="bibr" target="#b45">43]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1.3">Contribution</head><p>With Unicorefuzz, we propose a novel approach to kernel fuzzing. We discuss the possibilities to fuzz any parser through partial emulation. The approach yields good results in artificial test cases and successfully reproduced bugs previously found by syzkaller. As a case study, it fuzzed a parser in the kernel code of Open vSwitch. The current setup was used to fuzz statically linked kernel modules as well loadable kernel objects on Linux. The implementations created during this research will be open sourced.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Related Work</head><p>Fuzzing kernel components is not as widespread as fuzzing user space programs, but some notable projects have successfully fuzzed kernel subsystems, drivers and APIs. We will not go into greater detail on publications that fuzz device drivers, such as Periscope by <ref type="bibr">Song et al. [38]</ref> who focus on the hardware-OS-boundary. Instead, we discuss notable general-purpose kernel fuzzers in the following.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">Trinity</head><p>While fuzzing syscalls with purely random values is simple to set up and can find some bugs, most of the tests fail immediately because of completely incorrect parameters: EINVAL (invalid argument). To reduce the percentage of wasted tests, the kernel fuzzer Trinity uses rules to execute syscalls with better-than-random input. Users need to supply annotation files for every syscall, so-called madvise files, including the number of arguments and argument kinds. The creator of Trinity found more than 150 bugs inside system call code, networking stack, virtual memory management and device drivers <ref type="bibr" target="#b26">[24]</ref> in 2012.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">DIFUZE</head><p>Corina et al. propose DIFUZE, an interface aware fuzzer for kernel drivers. <ref type="bibr" target="#b9">[9]</ref>. In contrast to Trinity, DIFUZE does not need descriptions of interfaces, rather, they are inferred when building the kernel from source. DIFUZE does not offer Instrumentation options.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.3">syzkaller</head><p>Just like Trinity, syzkaller relies on templates to reduce the percentage of wasted tests, but uses coverage based feedback-fuzzing to increase the code coverage of fuzz tests <ref type="bibr" target="#b19">[17,</ref><ref type="bibr" target="#b44">42]</ref>. The coverage data is tracked on a per-task basis and extracted from the target via a special debugfs entry in /sys/kernel/debug/kcov that outputs the current instrumentation information <ref type="bibr" target="#b44">[42]</ref>. This kernel patch has been merged into the mainline Linux kernel by now <ref type="bibr" target="#b25">[23]</ref>. During the first few months alone, syzkaller found more than 150 bugs in the then recent Linux kernel.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.4">In-Kernel AFL</head><p>Nossum and Casasnovas have ported AFL to kernel space to fuzz test filesystem implementations. Like syzkaller, their unnamed tool uses coverage data supported by GCC. They expose a shared memory region to be accessible from the user space in /dev/afl and mmap it into AFL's memory. This way the section exists only once in physical memory. AFL can access it in the same way as it does when testing user space binaries. Since the overhead of virtualization with KVM VMs was high, they switched to User-Mode Linux which yielded a speedup of 60x. Bugs were quickly discovered in the implementations of many file system drivers <ref type="bibr" target="#b35">[33]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.5">TriforceAFL</head><p>TriforceAFL fuzzes virtual machines by extending AFL's QEMU mode. The host runs AFL and QEMU, the guest runs a so-called driver, a userland program that runs the target. AFL sends its generated input to the driver and QEMU sends an edge trace back to AFL <ref type="bibr" target="#b23">[21]</ref>. The driver communicates with the TriforceAFL setup through a dedicated hypercall in QEMU.  </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.6">kAFL</head><p>The fuzzer kAFL leverages Intel's Processor Trace to recover hardware assisted code coverage. It supports OSindependent, coverage-guided kernel fuzzing and has found several bugs in Linux, macOS and Windows drivers. To provide a communication channel between the VM and kAFL, modified versions of QEMU (QEMU-PT) and KVM (KVM-PT) provide new hypercalls. After the VM has started, the agent transmits the address of the panic handler (or BugCheck on Windows) to QEMU-PT, which replaces the code at that address with a HC_SUBMIT_PANEL hypercall. If the target panics, QEMU-PT is thus notified immediately. Afterwards the agent fetches the actual user mode agent (HC_GET_PROGRAM) and starts it, transmits the value of the CR3 register (HC_SUBMIT_CR3) and declares where it expects its input (HC_SUBMIT_BUFFER). Now the main loop is ready to run. The PT data is decoded and converted to AFL's bitmaps and fed into kAFL to evaluate a test's taken branches. On every benchmarked platform, kAFL delivers more than 20 times the executions per second of TriforceAFL <ref type="bibr" target="#b36">[34]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Unicorefuzz</head><p>This section discusses the building blocks for Unicorefuzz as well as the implementation itself.</p><p>Emulator Based Instrumentation For feedback fuzzing of kernel code, Unicorefuzz builds on top of AFL-Unicorn, which, in turn, uses a patched version of Unicorn, a fork of QEMU. As discussed in 1.2, modern fuzzers use feedback, usually code coverage or basic blocks reached, for test-case generation. Since advanced emulators, for example QEMU, translate a program dynamically, basic block by basic block <ref type="bibr" target="#b3">[3]</ref>, instrumentation can be added to the emulator or the translated code with ease. By instrumenting targets this way, they can be tested through feedback-fuzzing without the need to compile them from source. Unicorn is a CPU emulator which dynamically translates CPU instructions from any supported binary instruction set into the host instruction set. In particular, given a binary for a CPU platform, QEMU, or Unicorn, for that matter, works by performing the following steps during runtime:</p><p>1. Translate a basic code block from the target platform's instruction set to the host platform's instruction set.</p><p>2. Cache the translated blocks.</p><p>3. Store a mapping from source program counter to target program counter in an address lookup table.</p><p>4. Execute the translated block.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.">Repeat for next discovered block.</head><p>The translation blocks are similar to basic block by design <ref type="bibr" target="#b3">[3]</ref>. Leveraging this correspondence between translation blocks and basic blocks and because execution is handed back to the emulator after each run, it is possible to implement an instrumentation similar to the compile time instrumentation, using the program counter as feedback on each new basic block. AFL, a common feedback-based fuzzer, offers this instrumentation with QEMU mode. AFL QEMU-mode emulates fuzz targets in a patched version of QEMU that reports executed branches back to AFL. To increase speed, a forkserver resets the state to a fully loaded initial state between fuzz runs. After a new basic block is translated, the fork child's parent will also translate it and cache te result to ensure the costly translation won't be necessary again after the next fork. The control returns to QEMU after each block, which is extended with calls to afl_maybe_log, a function that passes the coverage map back to AFL via shared memory.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">AFL-Unicorn</head><p>The AFL-Unicorn mode makes use of Unicorn Engine, a lightweight CPU-emulator originally forked from the aforementioned QEMU <ref type="bibr" target="#b33">[31]</ref>. In AFL-QEMU, the emulator extends every basic block to send instrumentation information to AFL and starts AFL's forkserver after the emulator has been set up. For speed, basic blocks are cached in the parent parent process in Unicorn's AFL forkserver. AFL itself merely has to start the harness and generate inputs. The inner workings of the Unicorefuzz forkserver, are depicted in <ref type="figure" target="#fig_3">fig. 3</ref>.3. The figure can be read as a timeline, from left to right. Initially, AFL spawns the Unicorefuzz harness, which loads the initial kernel memory (in the middle). The kernel part of the harness then forks child processes, each of which run until their exit is reached. If the child kernel (bottom) dynamically requires new memory regions or translates a new basic block, it will report back to the parent. Blocks are reported back through a pipe and then translated by the parent, so that they will already be translated for the next run, memory is stored to disk. This enables AFL-Unicorn to fuzz any binary-only machine code of all supported frontend processor architectures on every backend processor architecture <ref type="bibr" target="#b43">[41]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">avatar 2</head><p>As another piece of Unicorefuzz, avatar 2 is an orchestration framework, abstracting over a range of debugger and binary analysis targets <ref type="bibr" target="#b32">[30]</ref>. As discussed below, Unicorefuzz makes heavy use of avatar 2 to dump process memory and registers of the fuzz target. The orchestration framework can attach to binary analysis frameworks, smart devices, any GDB session, as well as PANDA and QEMU VMs.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">Unicorefuzz</head><p>In the following, we discuss Unicorefuzz, a framework able to fuzz most targets through emulation.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3.1">Preparation</head><p>Since AFL-Unicorn is capable of fuzz testing arbitrary binaries, it is also able to fuzz kernel components. While it interaction with hardware or emulated devices is not part of Unicorn, it can emulate almost any code. Since modelling periphery would not be an easy task in Unicorn, we focus on the emulation of parsers. These parsers usually work on buffers of untrusted input and don't require responses from periphery devices. In the preparation step, Unicorefuzz needs to copy over all registers, insert the input generated by AFL and run the emulation. For this, Unicorefuzz makes use of the avatar 2 framework to interact with a gdb stub. The user has to specify a breakpoint, as well as a memory region for AFL input in the harness. Although real devices could be fuzzed using Unicorefuzz, we used virtual machines with breakpoints at the target function. The user has to specify the fuzz target address in the wrapper, start it and make the virtual machine execute the desired function. Once the breakpoint fires, it freezes the VM, dumps all required registers and waits for dynamic mapping memory requests.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3.2">Dynamic Mapping</head><p>While dumping the entire memory of a target and mapping it in the harness to fuzz a function would be possible, it would defeat the purpose and cause unnecessary memory overhead. By keeping the target VM alive (in a halted state) and creating a communication channel to the fuzzer, Unicorefuzz's probe wrapper will load new memory pages on demand, see 1. Whenever Unicorn accesses unmapped memory, it calls the UC_HOOK_MEM_UNMAPPED handler, which sends a memory info request to the probe wrapper component of Unicorefuzz. The request is either processed successfully (if the requested memory is valid) and mapped in the emulator, or rejected, in which case Unicorefuzz forces a crash. If it succeeds, the corresponding memory region is also cached to disk. Otherwise an invalid memory access was found and the process is killed with SIGSEGV -the crash will be reported to AFL.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3.3">Fuzz-Test Execution</head><p>Due to the caching mechanisms, no interaction with the VM is needed anymore -the mappings are pre-fork at this point. The harness of Unicorefuzz creates a Unicorn Engine object, maps all required and previously requested memory regions and sets the registers' values accordingly. The input has to be passed to Unicorn by calling mem_write() or reg_write () .</p><p>After the user specified the addresses for fuzz input, the AFL forkserver is started by running the emulation for one instruction. When the emulation references unmapped memory again, the harness checks whether the memory region was requested in previous runs. If the probe wrapper's output directory already contains the dumped memory or a rejection, it can continue or abort immediately. Otherwise it creates an empty file in the wrapper's input directory (where the filename denotes the requested address) and polls the wrapper's output directory for the memory region dump, or the rejection. If a file in the input folder exists, it tries to read the requested memory from the virtual machine and dumps it to the output folder if the memory was successfully read, or creates a rejection file otherwise.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Evaluation</head><p>To evaluate viability of emulator based kernel fuzzing, the concept was tested against both synthetic and real-world targets.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">broken.ko</head><p>For performance analysis and tooling tests, we created a variety of intentionally broken kernel modules, where Unicorefuzz is able to find bugs almost immediately. Take as example the following module:   The kernel module in listing 1 crashes when it receives a certain input over its procfs entry. Its procfs write_callback divides by zero if (and only if) the first byte of the input is 0x41 ('A'): Setting up a testcase is trivial, however still needs manual work:</p><p>1. Determine the address and return address of write_callback , add it to the Unicorefuzz harness.</p><p>2. Determine the input buffer address and add it to the Unicorefuzz probe wrapper</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.">Fuzz</head><p>Even though the AFL component was started with an almost empty input directory, it was able to find a crashing input immediately with no false positives and no hangs. The compiler had replaced the division by zero with an invalid opcode, but Unicorefuzz catches invalid instructions and appropriately reports them as crashes. This and other test cases prove the viability as kernel fuzzer. Note that the procfs entry was just an example, the concept also works for other functions in the kernel.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Open vSwitch</head><p>Bugs in software that has to parse networking input are often security issues with dangerous impact. Since previous work has discovered bugs in Open vSwitch's user space components <ref type="bibr" target="#b42">[40]</ref>, their kernelspace counterpart, which is in the Linux source tree, poses an interesting target.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2.1">sk_buff</head><p>The function key_extract extracts a so-called flow key from an ethernet frame. It takes a pointer to an sk_buff containing the packet and a pointer to an sw_flow_key to which the flow key is written to. The probe wrapper was adapted to break on key_extract . Passing the correct parameters to key_extract needs manual analysis work. An sk_buff has multiple fields that could be exposed to the fuzzer. <ref type="figure" target="#fig_3">Figure 3</ref> depicts a basic overview of the relevant parts in an sk_buff. Other variables other than the data buffer might be hard to fuzz, since the data structure is preprocessed by Linux. Fuzzing variables that pose as pointer would definitely yield many false-positives, even more so on internal APIs. This is why we decided on fuzzing the data part as we expected this to lead to the most promising results. Nevertheless, fuzzing metadata is an interesting subject, but it will be close to impossible to differentiate </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2.2">Results</head><p>After more than 6500 cycles, AFL found 62 new edges and the input got copied to the correct address. There were no crashes or hangs found in key_extract . Possibilities are that even if we had corrupted logics in the out parameter (sw_flow_key), bugs would not occur until later in the code. Choosing a larger scope, starting further up in the stacktrace and running larger chunks of code, a few functions up the stacktrace, will be tested in the future.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.3">Rediscovering Syzbot Bugs</head><p>The team behind syzkaller <ref type="bibr" target="#b19">[17]</ref>  The function appeared perfect, since it triggers an actual BUG() deeper in the function and is calls using sk_buf, a the same internal socket data structure we already fuzzed for Open vSwitch. After setting up the correct kernel function, the breakpoint at the function entry and executing the reproduction script, Unicorefuzz uncovers the bug through fuzzing. While successful this time, we don't deem the results valuable. In this scenario, the achievement of syzkaller was getting the kernel to a state where this function would crash, something Unicorefuzz does not address, since state is being reset after each function call. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.4">Speed</head><p>To evaluate the performance impact of Unicorefuzz, we compared it's performance against AFL's QEMU mode. Since QEMU mode can only fuzz user space binaries, the tested function from the kernel module in section 4.1 was ported into a user space binary. Because of the low complexity of the function with minimal dependencies, porting was trivial. The entire source code is depicted in listing 2. The tests were run on a ThinkPad T520 (Intel Core i7-2670QM @2.20GHz), the results are shown in <ref type="figure" target="#fig_5">figure 4</ref>.4. The Unicorn based fuzzing setup yields 47% the amount of execs/per second, when compared with the user space binary in QEMU mode, whichin turn -has performance overhead over a natively compiled AFL, see <ref type="figure" target="#fig_5">figure 4</ref>. In the following, we will discuss design decisions as well as practical roadblocks we encountered while building Unicorefuzz.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1">Seeds</head><p>Collecting valid input for a program poses a simple and effective method for initial input generation. The valid use of a tool, or function call in the case of Unicorefuzz, contains domain specific knowledge about the tool in question. Larger test cases take longer to execute since more data has to be processed. Many similar seeds covering the same code flow lead to runs that take additional time without ever triggering new and interesting corner cases. Empty input or single bytes hardly ever trigger code paths in fuzz targets. Instead, some sort of initial input or a way to generate it is usually applied when fuzzing a target. For Unicorefuzz users can collect data of the parameters when breakpoints are triggered. However, mindlessly following this methodology might not be successful, since, depending on the parameter, internal data structures might have changed between calls. On top seeds must not destroy current data structures and parameters.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2">Sanitization</head><p>Muench et al. classify the results of memory corruptions found through fuzzing in different categories, of which observable crashes and hangs are easy to track. Late crashes and malfunctioning may be hard to spot while the class of no effect is impossible to track down with no added observation channels like address sanitization. Sanitization methods check if certain assumptions hold true at any given time and report fails or even shut down the target in such a case. Many vulnerabilities in binary application written in C/C++ are memory corruption bugs, which are triggered, for example, by an out of bounds read or an out of bounds write. However, not every input that triggers a memory corruption bug translates to necessarily crashing input immediately. The memory corruption itself and the subsequent use of the corrupted memory, which triggers the program crash, may often be far apart. Thus, even when a crashing input is given, it may be hard to actually detect the underlying memory bug. We evaluated Unicorefuzz against Kernels built with Kernel Address Sanitizer (KASAN). Address Sanitizers use compile time instrumentation in order to detect, for instance, out-of-bounds memory access and use-after-free bugs <ref type="bibr" target="#b37">[35]</ref>. KASAN makes use of a shadow memory to assess whether a particular byte of the kernel memory is safe to access. Address sanitization introduces relatively low performance costs due to the way it maps memory to the shadowed memory <ref type="bibr" target="#b37">[35]</ref>. Since the Linux kernel on x64 makes use of obscure functionality, KASAN broke Unicorn in the beginning and thus our test cases had to be patched. Thanks the fixes, however, we are able to make full use of KASAN, should a kernel and module be built with it.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.3">Replayability</head><p>Even though valid input leads to a valid crash, depending on the preconditions, the input may not immediately be replayable. In the case of Unicorefuzz, however, all crashes are 100% replayable. Unicorefuzz, as opposed to syzkaller, is stateless. Stateless fuzzing calls the target over and over again, from the same test state. In this case, it is the complex state, but the same properly initialized state for every execution. The input state is persisted to disk, all input is persisted through the usual AFL folder structure. Since Unicorn does not have external input sources in this scenario, replaying one input will always yield the same crash.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.4">Constraining Inputs</head><p>Fuzzing a function that is located inside of a module and expects the input to be according to a certain structure, can be challenging. An example of such a function could be a parser that expects an sk_buf, as discussed in 4.2.1. Since this function is embedded inside the kernel, there are other layers above checking the input before the function is called. If the function is then triggered directly by the fuzzer, an unconstrained input can lead to crashes that can never occur as the state is already constrained inside the calling functions. Thus, false positives are likely. When constraining the input more than necessary, the fuzzer misses bugs. It's a non-trivial problem that still requires manual labor. However, definitions which fields of common structures should and should not be open to the fuzzer may be shared.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.5">The Curious Case of GS_BASE</head><p>The segment registers are not used in their original -x86 -context in x86_64 bytecode, but the GS register instead has a GS_BASE register that is used to access CPU-specific memory. The same is true for FS_BASE Among others, internal bookkeeping, stack canaries and the kernel address sanitizer (KAZAN) use this register, so support for it has to be ensured. The FS_BASE and GS_BASE are mapped to model-specific registers (C000_0100h and C000_0101h) <ref type="bibr" target="#b0">[1]</ref>. Model-specific registers (MSRs) were originally experimental CPU registers that were not guaranteed to be built into successor models, however GS and FS base are commonly used. Still, Unicorn Engine, at the time of writing, does not offer an API to interact with these registers directly. Instead, for Unicorefuzz we have to map some unmapped space and write the base registers using shellcode for the wrmsr instruction. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Features</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.6">Initial Emulated Operation</head><p>AFL-Unicorn starts the forkserver after executing the first instruction, then loads the input <ref type="bibr" target="#b43">[41]</ref>. If the first instruction interacts with a part of the input, the results of that instruction are not based on the appropriate modified input from AFL, but on the original input from the target. Since the segment register workaround described in 5.5 has to execute shellcode and therefore, first instructions, it mitigates this problem on X86_64 by coincidence.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.7">Scheduling</head><p>AFL-Unicorn emulates only one processor core, so, while emulating the scheduler on a single core works, fuzzing functions that need an active secondary core to complete will not work. Furthermore, if a function needs access to a lock-protected resource whose lock is busy at the moment the target's breakpoint fires, it cannot return since no other core will ever release the lock.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.8">Race Conditions</head><p>A single processor emulator setup with a tight harness will not find race conditions because there is no other load on the system. There are no other CPUs which could introduce races for locks or concurrent data structures and when fuzzing an individual, synchronous kernel function, no user space programs will interfere. While this greatly reduces the odds of discovery of race condition-related bugs, it makes crashes perfectly reproducible.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.9">Comparison Against Other Fuzzers</head><p>Evaluating fuzzer performance is hard (see section 6.1). However, we can compare certain features. As outlined in <ref type="figure">figure 6</ref>, the non-emulated fuzzers don't incur the emulators' performance impact, but lack the ability to target binaries where the source code is not available, with the exemption of kAFL which only works on recent Intel processors. Despite the usefulness of the execution speed being boosted by proper instrumentation, it has to be acknowledged that the raw throughput of non-emulating fuzzers may lead to faster results, if their user space agents can quickly trigger the desired target function. If the target is not easily triggered by a user space agent, the targeted approach of Unicorefuzz is superior, as one halted virtual machine is enough to conduct an arbitrary number of possibly distributed fuzz tests.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Future Work</head><p>While we presented novel research along the field of fuzzing during the course of this paper, there is plenty of room for improvements.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6.1">Unified Evaluation Criteria</head><p>For years, researchers have been searching for a way to properly evaluate fuzzer performance against each other, with limited success. In 2009, Clarke already stated that "it is impossible to accurately measure the effectiveness of fuzzing, since the only practical metric, code coverage, only measures one 'dimension' of fuzzing: the amount of (reachable) code executed; it does not measure the range of input values fed to the target at each code region. We have also seen that target monitoring is often less than ideal" <ref type="bibr" target="#b8">[8]</ref>. Dolan-Gavitt et al. propose LAVA-M, a test set for binary analysis that can be used for performance evaluations <ref type="bibr" target="#b16">[14]</ref>, however artificial benchmarks may lead to overfitting. <ref type="bibr">Mu et al.</ref> show that reproducibility of real-world security vulnerabilities, however, is complex, nevertheless their efforts could be used to partly evaluate os level fuzzers like syzkaller <ref type="bibr" target="#b31">[29]</ref>. Notably, Trent Bunson postulates how to spot good Fuzzing <ref type="bibr" target="#b5">[5]</ref>. Klees et al. perform a scientific evaluation of different fuzzers with a larger number of runs <ref type="bibr" target="#b27">[25]</ref>. We demand a similar test suite for kernel bugs.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6.2">Embedded Fuzzing</head><p>Since every embedded processor has some debugging port which can export memory pages and register values, adapting the setup to embedded operating systems fuzzing is viable. A single target is enough to answer dynamic memory mapping requests, so distributing the fuzzing to multiple local or remote machines is also straightforward.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6.3">Static Rewriting</head><p>Instead of adding instrumentation at compile time, or dynamically at runtime, it can also be added using static analysis. The obvious benefit is an increased throughput as opposed to emulated instrumentation. Projects that modify (userland-)binaries to add them, report code coverage and fuzz them exist <ref type="bibr" target="#b34">[32]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6.4">Emulation Performance Increases</head><p>Fuzzing speed depends on various factors. Recent advancements focus on speed of path finding, but also on sheer execution speed of the instrumentation through lightweight hardware features <ref type="bibr" target="#b36">[34,</ref><ref type="bibr" target="#b46">44]</ref>. Current research has shown that AFL's QEMU mode's performance can be improved by re-enabling QEMU's block chaining, which merges code blocks if one ends with a direct jump. It is disabled because it interferes with AFL's instrumentation: merged blocks don't jump back into the emulator after every single contained block, so it effectively disables tracing direct jumps. The author injects the instrumentation code into the translated code and thus can safely enable block chaining. Combined with proper caching, this yields a speedup of 3-4 times the mainline QEMU mode <ref type="bibr" target="#b4">[4]</ref>. This patch could be ported to AFL-Unicorn and could significantly reduce the performance gap to compiler-assisted instrumentation. For this to work, however, further patches to Unicorn itself are needed: block chaining was removed from Unicorn, presumably to decrease code complexity and simplify hooking. Given enough time and energy, it might even be possible to port vectorized emulation, as proposed by Falk, to AFL Unicorn <ref type="bibr" target="#b21">[19]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6.5">Triaging</head><p>Fuzzing outputs a large amount of potential bugs. Depending on the setup, they may be false-positives (especially when underconstraining parameters), or all represent the same bug. Fuzz testing yields numerous crashes, even for a single application <ref type="bibr" target="#b30">[28]</ref>. The amount of crashes may be too high to manually audit <ref type="bibr" target="#b7">[7]</ref>. To keep pressure from the manual analyst, a fuzz setup usually triages the target in some way. The amounts of data are, therefore, unstructured:</p><p>1. Fuzzing a function may lead to multiple crashing inputs, which can be attributed to the same bug.</p><p>2. Not every crash points to a bug that poses a security threat. But often both security researchers as well as developers want to focus on bugs that expose security vulnerabilities. The fuzzing pipeline needs to assess the severeness of a crash <ref type="bibr" target="#b30">[28]</ref>.</p><p>3. We also want to find the underlying bug that caused a crash. This step has been done in a manual fashion so far, although there are attempts to automate it: DeMott et al. identify which part of the source code is responsible for the bug. Using the assumption that lines of code responsible for a bug are mainly exercised by crashing inputs, they calculate a suspiciousness score for each line of code <ref type="bibr" target="#b15">[13]</ref>.</p><p>Deduplication and analysis of crashes can be done by examining the similarity of the program's stack trace at the time of crashing. Methods that do so have already been employed successfully <ref type="bibr" target="#b11">[10]</ref>. Similarly, heuristics exist to classify crashes according to the exploitability of the bug that caused the crash <ref type="bibr" target="#b22">[20]</ref>. The heuristics work by executing the program with the crashing input and then inspecting the crashing state. For example, a NULL-pointer dereference bug can cause a crash, but is hard to exploit or not at all exploitable on modern operating systems. However, if the EIP register can be controlled with user defined input, the bug is extremely critical <ref type="bibr" target="#b39">[37]</ref>. <ref type="bibr">Huang et al. and Thanassis et al. both</ref> propose to automatically generated exploits from crashes. If a crash can be marked exploitable fully automated, the bug is critical <ref type="bibr" target="#b1">[2,</ref><ref type="bibr" target="#b24">22]</ref>. For other bugs, assessing a crash properly is not trivial.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Conclusion</head><p>After evaluating the current state of the art, we provide an implementation of a novel fuzzer, emulating kernel code. We show that fuzzing kernel functions with an emulator is possible, viable and relatively easy to set up, even if the target function is not exposed to the user space. With this method, any parsing functions can be fuzzed with coverage-guided feedback, as long as they do not interact with hardware. Though the use of an emulator with support for memory access hooks has an obvious impact on execution speed. Still, the throughput is at roughly 46% of AFL's QEMU usermode -and thus acceptable.</p><p>The innate advantage of being able to start a fuzz-test at any point in the kernel code, even on binary blobs and across architectures is, to the best of our knowledge, unmatched by other approaches to kernel fuzzing. We do see drawbacks in the manual overhead needed to chose valid regions for parameter structs or arrays, however we hope to improve upon this point. Kernel fuzzing has already found a significant amount of bugs when only looking from afar -the syscall APIbut tests could never fuzz internal functions directly. Unicorn is able to emulate a number of processor architectures, whose kernels can be easily fuzzed with the described technique, if it is possible to write a probe wrapper for that platform. Unicorefuzz is able to execute everything where no multiprocessor coordination is required. We will open source the implementation of Unicorefuzz and hope to improve on the concept further.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: Architecture of Unicorefuzz</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head></head><label></label><figDesc>( 5 / a &gt; 0 ) { p r i n t k ( KERN_INFO " t h i s w i l l n e v e r h a p p e n ! \ n " ) ; } } r e t u r n l e n ; }</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: Simplified overview of AFL-Unicorn forkserver with Unicorefuzz additions.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: Layout of sk_buf and its data</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_4"><head></head><label></label><figDesc>offer syzbot, an open dash- board listing hundreds of bugs found with syzkaller. As part of this evaluation, we chose a reproducible syzkaller bug in:</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_5"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: Around 200 Execs/Sec when emulating a larger kernel function on Intel Core i5-5257U (2.7 GHz)</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_6"><head>Figure 5 :</head><label>5</label><figDesc>Figure 5: Speed comparison of AFL, AFL in QEMU mode and Unicorefuzz</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_1" validated="false"><head>Unicorefuzz time AFL spawns Kernel launches Kernel forks bp -&gt; exit</head><label></label><figDesc></figDesc><table>feeds 
+input 
+
+feeds 
+input 
+
+reports 
+feedback 
+
+reports 
+feedback, 
+exitcode, 
+blocks, 
+memory 
+regions 
+
+caches 
+new 
+blocks 
+
+Kernel 
+
+bp -&gt; exit 
+
+feeds 
+input 
+
+reports 
+feedback 
+
+reports 
+feedback, 
+exitcode, 
+blocks, 
+memory 
+regions 
+
+caches 
+new 
+blocks 
+
+Kernel 
+
+bp -&gt; exit 
+
+feeds 
+input 
+
+... 
+loop 
+until 
+abort 
+
+... 
+reads 
+seeds 
+
+fork 
+server 
+
+Forkserver init 
+Execution 1 
+Execution 2 
+Execution n 
+
+paused at 
+breakpoint 
+
+forks 
+forks 
+
+collects&amp; 
+mutates 
+
+blocks&amp; 
+memory 
+
+blocks&amp; 
+memory 
+
+feeds 
+input 
+
+feeds 
+input 
+
+collects&amp; 
+mutates 
+
+</table></figure>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgments</head><p>The authors wish to thank Vincent Ulitzsch, Fabian Freyer and Marius Muench for valuable input.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">Advanced Micro Devices</title>
+	</analytic>
+	<monogr>
+		<title level="m">AMD: AMD64 Architecture Programmer&apos;s Manual</title>
+		<imprint>
+			<biblScope unit="volume">2</biblScope>
+		</imprint>
+	</monogr>
+	<note>System Programming</note>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Automatic exploit generation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Avgerinos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">K</forename><surname>Cha</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Rebert</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">J</forename><surname>Schwartz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Woo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Brumley</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Commun. ACM</title>
+		<imprint>
+			<biblScope unit="volume">57</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="74" to="84" />
+			<date type="published" when="2014-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title/>
+		<idno type="doi">10.1145/2560217.2560219</idno>
+		<ptr target="https://doi.org/10.1145/2560217.2560219" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Qemu, a fast and portable dynamic translator</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Bellard</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX Annual Technical Conference, FREENIX Track</title>
+		<imprint>
+			<date type="published" when="2005" />
+			<biblScope unit="volume">41</biblScope>
+			<biblScope unit="page">46</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+		<title level="m" type="main">Improving afl&apos;s qemu mode performance</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Biondo</surname></persName>
+		</author>
+		<ptr target="https://abiondo.me/2018/09/21/improving-afl-qemu-mode" />
+		<imprint>
+			<date type="published" when="2018-09" />
+		</imprint>
+	</monogr>
+	<note>0x41414141 in ?? (</note>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title level="m" type="main">How to Spot Good Fuzzing Research</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Brunson</surname></persName>
+		</author>
+		<ptr target="https://blog.trailofbits.com/2018/10/05/how-to-spot-good-fuzzing-research" />
+		<imprint>
+			<date type="published" when="2018-10" />
+		</imprint>
+	</monogr>
+	<note>Online; accessed 11</note>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Discovering and exploiting 802.11 wireless driver vulnerabilities</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Butti</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Tinnes</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Journal in Computer Virology</title>
+		<imprint>
+			<biblScope unit="volume">4</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="25" to="37" />
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Taming compiler fuzzers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Groce</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">K</forename><surname>Wong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Fern</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Eide</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Regehr</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM SIGPLAN Notices</title>
+		<imprint>
+			<biblScope unit="volume">48</biblScope>
+			<biblScope unit="page" from="197" to="208" />
+			<date type="published" when="2013" />
+			<publisher>ACM</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<monogr>
+		<title level="m" type="main">Fuzzing for software vulnerability discovery</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Clarke</surname></persName>
+		</author>
+		<idno>RHUL-MA-2009-4</idno>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+		<respStmt>
+			<orgName>Department of Mathematic, Royal Holloway, University of London</orgName>
+		</respStmt>
+	</monogr>
+<note type="report_type">Tech. Rep.</note>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">DIFUZE: interface aware fuzzing for kernel drivers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Corina</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Machiry</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Salls</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Shoshitaishvili</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Hao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Kruegel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Vigna</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2017 ACM SIGSAC Conference on Computer and Communications Security</title>
+		<editor>Thuraisingham, B.M., Evans, D., Malkin, T., Xu, D.</editor>
+		<meeting>the 2017 ACM SIGSAC Conference on Computer and Communications Security<address><addrLine>Dallas, TX, USA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2017-10-30" />
+			<biblScope unit="page" from="2123" to="2138" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<monogr>
+		<title/>
+		<idno type="doi">10.1145/3133956.3134069</idno>
+		<ptr target="https://doi.org/10.1145/3133956.3134069" />
+		<imprint>
+			<date type="published" when="2017" />
+			<publisher>ACM</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Rebucket: A method for clustering duplicate crash reports based on call stack similarity</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Dang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Wu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Nobel</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2012 34th International Conference on Software Engineering (ICSE)</title>
+		<imprint>
+			<date type="published" when="2012-06" />
+			<biblScope unit="page" from="1084" to="1093" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<monogr>
+		<title/>
+		<idno type="doi">10.1109/ICSE.2012.6227111</idno>
+		<ptr target="https://doi.org/10.1109/ICSE.2012.6227111" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">The evolving art of fuzzing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Demott</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">DEF CON</title>
+		<imprint>
+			<biblScope unit="volume">14</biblScope>
+			<date type="published" when="2006" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Revolutionizing the field of grey-box attack surface testing with evolutionary fuzzing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Demott</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Enbody</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">F</forename><surname>Punch</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">BlackHat and Defcon</title>
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Towards an automatic exploit pipeline</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">D</forename><surname>Demott</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">J</forename><surname>Enbody</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">F</forename><surname>Punch</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Internet Technology and Secured Transactions (ICITST), 2011 International Conference for</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2011" />
+			<biblScope unit="page" from="323" to="329" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">LAVA: Large-scale automated vulnerability addition</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Dolan-Gavitt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Hulin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Kirda</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Leek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Mambretti</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Robertson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Ulrich</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Whelan</surname></persName>
+		</author>
+		<idno type="doi">10.1109/SP.2016.15</idno>
+		<ptr target="https://doi.org/10.1109/SP.2016.15" />
+	</analytic>
+	<monogr>
+		<title level="m">2016 IEEE Symposium on Security and Privacy (SP)</title>
+		<imprint>
+			<date type="published" when="2016-05" />
+			<biblScope unit="page" from="110" to="121" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<monogr>
+		<title level="m" type="main">Flayer: Exposing application internals</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Drewry</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Ormandy</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2007" />
+			<biblScope unit="volume">7</biblScope>
+			<biblScope unit="page" from="1" to="9" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<monogr>
+		<title level="m" type="main">Software testing using taint analysis and execution path alteration</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">A</forename><surname>Drewry</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Ormandy</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2013-02" />
+			<biblScope unit="volume">381</biblScope>
+			<biblScope unit="page">192</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<monogr>
+		<title level="m" type="main">Coverage-guided kernel fuzzing with syzkaller</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Drysdale</surname></persName>
+		</author>
+		<ptr target="https://lwn.net/Articles/677764/" />
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">A report on random testing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">W</forename><surname>Duran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Ntafos</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 5th international conference on Software engineering</title>
+		<meeting>the 5th international conference on Software engineering</meeting>
+		<imprint>
+			<publisher>IEEE Press</publisher>
+			<date type="published" when="1981" />
+			<biblScope unit="page" from="179" to="183" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<monogr>
+		<title level="m" type="main">Vectorized Emulation: Hardware accelerated taint tracking at 2 trillion instructions per second</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Falk</surname></persName>
+		</author>
+		<ptr target="https://gamozolabs.github.io/fuzzing/2018/10/14/vectorized_emulation.html" />
+		<imprint>
+			<date type="published" when="2018-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Foote</surname></persName>
+		</author>
+		<ptr target="https://github.com/jfoote/exploitable" />
+		<imprint>
+			<date type="published" when="2018" />
+			<publisher>Exploitable</publisher>
+		</imprint>
+	</monogr>
+	<note>Online; accessed 2018-09-09</note>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Hertz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Newsham</surname></persName>
+		</author>
+		<ptr target="https://raw.githubusercontent.com/" />
+		<imprint/>
+	</monogr>
+	<note>Project triforce</note>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">Crax: Software crash analysis for automatic exploit generation by modeling attacks as symbolic continuations</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">K</forename><surname>Huang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">H</forename><surname>Huang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">Y</forename><surname>Huang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">W</forename><surname>Lai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">L</forename><surname>Lu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">M</forename><surname>Leong</surname></persName>
+		</author>
+		<idno type="doi">10.1109/SERE.2012.20</idno>
+		<ptr target="https://doi.org/10.1109/SERE.2012.20" />
+	</analytic>
+	<monogr>
+		<title level="m">2012 IEEE Sixth International Conference on Software Security and Reliability</title>
+		<imprint>
+			<date type="published" when="2012-06" />
+			<biblScope unit="page" from="78" to="87" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Kernel</surname></persName>
+		</author>
+		<ptr target="https://www.kernel.org/doc/html/v4.17/dev-tools/kcov.html" />
+		<title level="m">kcov: code coverage for fuzzing</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Kerrisk</surname></persName>
+		</author>
+		<ptr target="https://lwn.net/Articles/536173/" />
+		<title level="m">Lca: The trinity fuzz tester</title>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<monogr>
+		<title level="m" type="main">Evaluating fuzz testing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Klees</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Ruef</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Cooper</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Wei</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Hicks</surname></persName>
+		</author>
+		<idno>CoRR abs/1808.09700</idno>
+		<ptr target="http://arxiv.org/abs/1808.09700" />
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<monogr>
+		<title level="m" type="main">Fairfuzz: Targeting rare branches to rapidly increase greybox fuzz testing coverage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Lemieux</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Sen</surname></persName>
+		</author>
+		<idno>CoRR abs/1709.07101</idno>
+		<ptr target="http://arxiv.org/abs/1709.07101" />
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<monogr>
+				<ptr target="https://llvm.org/docs/LibFuzzer.html" />
+		<title level="m">LLVM Project: libFuzzer -a library for coverage-guided fuzz testing</title>
+		<imprint>
+			<date type="published" when="2018-09" />
+		</imprint>
+	</monogr>
+	<note>Online; accessed 15</note>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<monogr>
+		<title level="m" type="main">Crash analysis with bitblaze</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Miller</surname></persName>
+			<affiliation>
+				<orgName type="collaboration">Blackhat</orgName>
+			</affiliation>
+		</author>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<analytic>
+		<title level="a" type="main">Understanding the reproducibility of crowd-reported security vulnerabilities</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Mu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Cuevas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Hu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Xing</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Mao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Wang</surname></persName>
+		</author>
+		<ptr target="https://www.usenix.org/conference/usenixsecurity18/presentation/mu" />
+	</analytic>
+	<monogr>
+		<title level="m">27th USENIX Security Symposium, USENIX Security</title>
+		<editor>Enck, W., Felt, A.P.</editor>
+		<meeting><address><addrLine>Baltimore, MD, USA, Au</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="919" to="936" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">Avatar²: A multi-target orchestration platform</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Muench</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Francillon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Balzarotti</surname></persName>
+		</author>
+		<ptr target="http://www.eurecom.fr/publication/5437" />
+	</analytic>
+	<monogr>
+		<title level="m">BAR 2018, Workshop on Binary Analysis Research, colocated with NDSS Symposium</title>
+		<meeting><address><addrLine>San Diego, USA. San Diego, UNITED STATES</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2018-02-18" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<monogr>
+		<title level="m" type="main">Unicorn: Next generation cpu emulator framework</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">Q</forename><surname>Ngyuen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">V</forename><surname>Dang</surname></persName>
+		</author>
+		<ptr target="http://www.unicorn-engine.org/BHUSA2015-unicorn.pdf" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Nikolich</surname></persName>
+		</author>
+		<ptr target="https://groups.google.com/forum/#!topic/afl-users/HlSQdbOTlpg" />
+		<title level="m">Afl fuzzing blackbox binaries</title>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Nossum</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Q</forename><surname>Casasnovas</surname></persName>
+		</author>
+		<ptr target="https://events.static.linuxfound.org/sites/events/files/slides/AFL%20filesystem%20fuzzing,%20Vault%202016_0.pdf" />
+		<title level="m">Filesystem fuzzing with american fuzzy lop</title>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b36">
+	<analytic>
+		<title level="a" type="main">kafl: Hardware-assisted feedback fuzzing for OS kernels</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Schumilo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Aschermann</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Gawlik</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Schinzel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Holz</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">26th USENIX Security Symposium (USENIX Security 17)</title>
+		<meeting><address><addrLine>Vancouver, BC</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="167" to="182" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b37">
+	<analytic>
+		<title level="a" type="main">Addresssanitizer: A fast address sanity checker</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Serebryany</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Bruening</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Potapenko</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Vyukov</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX Annual Technical Conference</title>
+		<imprint>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="309" to="318" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b38">
+	<analytic>
+		<title level="a" type="main">Oss-fuzz-google&apos;s continuous fuzzing service for open source software</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Serebryany</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX Security Symposium</title>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b39">
+	<analytic>
+		<title level="a" type="main">SoK: (State of) The Art of War: Offensive Techniques in Binary Analysis</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Shoshitaishvili</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Salls</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Stephens</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Polino</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Dutcher</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Grosen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Feng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Hauser</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Kruegel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Vigna</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">IEEE Symposium on Security and Privacy</title>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b40">
+	<analytic>
+		<title level="a" type="main">Periscope: An effective probing and fuzzing framework for the hardware-os boundary</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Song</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Hetzelt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Das</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Spensky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Na</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Volckaert</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Vigna</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Kruegel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Seifert</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Franz</surname></persName>
+		</author>
+		<ptr target="https://www.ndss-symposium.org/ndss-paper/periscope-an-effective-probing-and-fuzzing-framework-for-the-hardware-os-boundary/" />
+	</analytic>
+	<monogr>
+		<title level="m">26th Annual Network and Distributed System Security Symposium, NDSS 2019</title>
+		<meeting><address><addrLine>San Diego, California, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>The Internet Society</publisher>
+			<date type="published" when="2019" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b41">
+	<monogr>
+		<title level="m" type="main">The automatic generation of software test data using genetic algorithms</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">H</forename><surname>Sthamer</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1995" />
+		</imprint>
+		<respStmt>
+			<orgName>University of Glamorgan</orgName>
+		</respStmt>
+	</monogr>
+<note type="report_type">Ph.D. thesis</note>
+</biblStruct>
+
+<biblStruct xml:id="b42">
+	<monogr>
+		<title level="m" type="main">Ve-2018-1000155: Denial of service, improper authentication and authorization</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Thimmaraju</surname></persName>
+		</author>
+		<ptr target="https://www.openwall.com/lists/oss-security/2018/05/09/4" />
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+	<note>and covert channel in the openflow 1.0+ handshake</note>
+</biblStruct>
+
+<biblStruct xml:id="b43">
+	<monogr>
+		<title level="m" type="main">afl-unicorn: Fuzzing arbitrary binary code</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Voss</surname></persName>
+		</author>
+		<ptr target="https://hackernoon.com/afl-unicorn-fuzzing-arbitrary-binary-code-563ca28936bf" />
+		<imprint>
+			<date type="published" when="2017-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b44">
+	<monogr>
+		<title level="m" type="main">Add fuzzing coverage support</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Vyukov</surname></persName>
+		</author>
+		<ptr target="https://gcc.gnu.org/viewcvs/gcc?view=revision&amp;revision=231296" />
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b45">
+	<monogr>
+		<title level="m" type="main">Technical &quot;whitepaper&quot; for AFL-fuzz</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Zalewski</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b46">
+	<analytic>
+		<title level="a" type="main">Ptfuzz: Guided fuzzing with processor trace feedback</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Zhou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Luo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Wu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Min</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Access</title>
+		<imprint>
+			<biblScope unit="volume">6</biblScope>
+			<biblScope unit="page" from="37302" to="37313" />
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b47">
+	<monogr>
+		<title/>
+		<idno type="doi">10.1109/ACCESS.2018.2851237</idno>
+		<ptr target="https://doi.org/10.1109/ACCESS.2018.2851237" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

@@ -1,0 +1,1732 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:57+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">The Case for Dual-access File Systems over Object Storage</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kunal</forename><surname>Lillaney</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">Johns Hopkins University</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vasily</forename><surname>Tarasov</surname></persName>
+							<affiliation key="aff1">
+								<orgName type="institution">IBM Research-Almaden</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Pease</surname></persName>
+							<affiliation key="aff1">
+								<orgName type="institution">IBM Research-Almaden</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Randal</forename><surname>Burns</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">Johns Hopkins University</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">The Case for Dual-access File Systems over Object Storage</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Object storage has emerged as a low-cost and hyper-scalable alternative to distributed file systems. However, interface incompatibilities and performance limitations often compel users to either transfer data between a file system and object storage or use inefficient file connectors over object stores. The result is growing storage sprawl, unacceptably low performance, and an increase in associated storage costs. One promising solution to this problem is providing dual access, the ability to transparently read and write the same data through both file system interfaces and object storage APIs. In this position paper we argue that there is a need for dual-access file systems over object storage, and examine some representative use cases which benefit from such systems. Based on our conversations with end users, we discuss features which we believe are essential or desirable in a dual-access object storage file system (OSFS). Further, we design and implement an early prototype of Agni 1 , an efficient dual-access OSFS which overcomes the shortcomings of existing approaches. Our preliminary experiments demonstrate that for some representative workloads Agni can improve performance by 20%-60% compared to either S3FS, a popular OSFS, or the prevalent approach of manually copying data between different storage systems.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Some estimates predict that by 2020 the world will produce 44 zetabytes of unstructured data each year <ref type="bibr" target="#b74">[75]</ref>. Users and enterprises increasingly look to object storage as an economical and scalable solution for storing this unstructured data <ref type="bibr" target="#b38">[42,</ref><ref type="bibr" target="#b40">44]</ref>. In addition, object stores can offer simplified management, ease of use, and better data durability than traditional file systems <ref type="bibr" target="#b30">[34,</ref><ref type="bibr" target="#b31">35,</ref><ref type="bibr" target="#b57">59]</ref>. These factors have led to the emergence of a rich ecosystem of object stores, both in the cloud and on-premises <ref type="bibr" target="#b1">[2,</ref><ref type="bibr">11,</ref><ref type="bibr" target="#b14">16,</ref><ref type="bibr" target="#b17">19,</ref><ref type="bibr" target="#b19">[21]</ref><ref type="bibr" target="#b20">[22]</ref><ref type="bibr" target="#b21">[23]</ref>. It is predicted that in 2019 more than 30% of the storage capacity in data centers will be provided by object storage <ref type="bibr" target="#b34">[38]</ref> and by 2023 the object storage market is expected to grow to $6 billion <ref type="bibr" target="#b36">[40]</ref>. Object stores are increasingly being used for tasks that have traditionally required file systems, such as data analytics, media streaming, static web content serving, and data archiving <ref type="bibr" target="#b61">[63,</ref><ref type="bibr" target="#b82">83]</ref>.</p><p>Object store and file system interfaces have fundamental namespace and data access differences. Object stores are typically characterized by RESTful access, flat namespaces, immutable data, relaxed consistency, and rich user-defined metadata. These limited object storage semantics make them unsuitable for some applications. For example, object stores do not support partial writes, so any update must rewrite an entire object. As a result, existing workflows that rely on partial writes need to be redesigned for object storage in order to avoid the performance penalty of rewrites <ref type="bibr" target="#b76">[77]</ref>. Object storage systems also do not provide a hierarchical namespace. Many applications, such as genomic workflows <ref type="bibr" target="#b52">[54,</ref><ref type="bibr" target="#b59">61]</ref>, depend on a namespace hierarchy, file renames, and file pointers, none of which are supported by object stores.</p><p>Users and infrastructure providers have adopted different approaches to overcoming the disparity between files and objects, especially for recently emerging use cases. In one approach, distributed file systems are paired with object storage, and data is periodically copied over to a file system from the object store for data analytics <ref type="bibr" target="#b3">[4,</ref><ref type="bibr" target="#b11">13,</ref><ref type="bibr" target="#b25">27]</ref>. This approach offers the full spectrum of file interfaces but is unwieldy for large datasets and can lead to over-provisioning, cost inflation, reduced backup efficiency, additional time for data transfer, and poor quality of service (QoS) due to storage sprawl <ref type="bibr" target="#b70">[71]</ref>. An alternate approach, which we term object storage file system (OSFS), overlays file interfaces on top of existing object stores <ref type="bibr" target="#b37">[41,</ref><ref type="bibr" target="#b47">49,</ref><ref type="bibr" target="#b58">60,</ref><ref type="bibr" target="#b60">62,</ref><ref type="bibr" target="#b62">64,</ref><ref type="bibr" target="#b79">80]</ref>. This approach gives a single location for data and provides ease of administration and use. Given its benefits, we focus on OSFS in this paper.</p><p>Based on our exhaustive survey we believe that existing OSFSs fall short of simultaneously providing two capabilities that are essential in modern multi-application infrastructures: (i) dual access to data and (ii) an efficient file system interface. We define dual access as the user's ability to directly address data through a native object or file interface without going through an intermediary layer or having to look up the file-to-object mapping. Quintessentially, dual access should be intuitive, the same data should be accessible by the same name thorough either interface. An example of a workflow that benefits from dual access is a movie file being accessed by a transcoder using fread, then being made available by a Content Distribution Network (CDN) service via GET.</p><p>In this paper, we first present a class of applications that could potentially benefit from an OSFS with a dual-access capability. We further identify requisites for designing such a system so that it has a high probability of adoption. We then briefly describe a potential solution, called Agni, with preliminary insights into its design. Finally, we provide some elementary performance comparisons between Agni and S3FS, a popular OSFS for the discussed use cases, as well as comparing the prevailing manual data transfer approach.</p><p>Based on our interactions with real customers we present two motivational use cases for a dual-access storage system. We believe that these examples represent a growing class of applications which can greatly benefit from dual access.</p><p>Media transcoding, editing and analytics. The vast majority of media-based workloads are characterized by the generation of numerous media files, followed by some form of data processing on those files, and finally relocation to an archive for cold storage or dissemination to end users. Data processing can be in the form of video editing, trimming, applying cinematic effects, overlaying different audio channels, and transcoding into different media formats. Most of the software involved in the processing stage relies on file interfaces. At the same time, cost effectiveness and near-limitless capacity drive the Media and Entertainment industry towards large-scale adoption of object storage <ref type="bibr" target="#b31">[35,</ref><ref type="bibr" target="#b39">43]</ref>.</p><p>A simple example workflow entails the generation of raw video footage from film studios which is directly moved into object storage using object interfaces. That raw footage is then edited and transcoded into different media formats and resolutions to support compatibility with different platforms. When processing is complete, both the original raw videos and the different transcoded formats are moved back into object storage. Data intended for end-user consumption is delivered directly from object storage using CDNs.</p><p>Gene alignment. Currently scientists are struggling with massive data sets (petabytes and growing) in the domain of human genomics <ref type="bibr" target="#b56">[58]</ref>. The challenge here is to effectively store large amounts of data, conduct genome analysis at scale, and eventually share this data among the research community. Object storage is well suited for solving these issues and serving as the central data repository for all genomic data <ref type="bibr" target="#b31">[35]</ref>. However, most of the current genome analysis pipelines rely on file system capabilities for analysis <ref type="bibr" target="#b35">[39,</ref><ref type="bibr" target="#b52">54,</ref><ref type="bibr" target="#b55">57,</ref><ref type="bibr" target="#b59">61,</ref><ref type="bibr" target="#b67">68]</ref>. A typical example of a gene sequencing pipeline involves generation of human genome sequences at laboratories. This data is then moved to a central data archive for durability and dissemination. The data is downloaded over the network to a local file system or network-attached device for gene sequence alignment. Different researchers run their own versions of sequence aligners over the unaligned data with tools such as Bowtie2 <ref type="bibr" target="#b35">[39]</ref>. Sequence-aligned data is re-uploaded to the central archive (based, e.g., on object storage) and shared with other researchers. Scientists re-download the data and analyze it using tools such as SAMtools <ref type="bibr" target="#b53">[55]</ref> and BCFtools <ref type="bibr" target="#b75">[76]</ref>.</p><p>Use cases in other domains such as neuroscience <ref type="bibr" target="#b46">[48,</ref><ref type="bibr" target="#b51">53,</ref><ref type="bibr" target="#b54">56]</ref>, geoinformatics <ref type="bibr" target="#b69">[70,</ref><ref type="bibr" target="#b71">72]</ref>, machine learning <ref type="bibr" target="#b50">[52]</ref>, industrial process control <ref type="bibr" target="#b44">[47]</ref>, and computer vision <ref type="bibr" target="#b42">[45,</ref><ref type="bibr" target="#b63">65]</ref> can also benefit from dual access.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Design requirements</head><p>We identify the design requirements for a system which would be effective for the discussed use cases. These are based on our analysis of use cases, interactions with domain experts, and prior experience in developing storage systems. We present them in descending order of priority.</p><p>Object based. The system should employ object storage to store its data. This allows the system to realize the benefits of scalable, low-cost object stores. While it is technically easier to provide object interfaces over file systems, such a design choice does not inherit the desirable properties of object stores. Furthermore, users and enterprises are already entrenched in object storage and thus an object-based system would require minimal changes to either the vendor or storage technology.</p><p>Intuitive dual access. To address the storage sprawl issue the system should provide intuitive dual access to the data. We stress being intuitive because this is a vital property for high usability and wide adoption. The most intuitive approach to dual access is to adopt a 1⇒1 mapping. For example, the contents of a file should be fully stored in and accessible through a single object. We do not consider a system which splits a file into multiple objects with either 1⇒N or N⇒N mappings as one that provides intuitive dual access.</p><p>Generic and backend-agnostic. The system should be deployable over standard APIs, which is important for high flexibility, avoiding vendor lock-in, and the ability to use object stores that are already deployed in customer environments. We assume a limited, yet representative, set of operations: (i) PUT(name, data) adds a named object; (ii) GET(name, range) fetches a specific range from the object or the entire object 2 ; (iii) DEL(name) deletes an object by name; (iv) MULTI-PART DOWNLOAD(name) retrieves an object in parallel 3 ; (v) MULTI-PART UPLOAD(name, data) adds a named object in parallel. Based on our experience, these are a common subset of object interfaces available across all popular object stores.</p><p>Efficient file interface. In-place updates and metadata operations form an integral part of numerous application workloads <ref type="bibr" target="#b51">[53,</ref><ref type="bibr" target="#b81">82]</ref>. Given the disparities between object and file interfaces, providing both dual access and good performance is challenging. Existing OSFSs support either intuitive dual access or good performance for specific file interfaces, but not both (Section 4). For instance, a simple 1⇒1 mapping that maintains a file in a single object offers the most intuitive dual access from the user's perspective, and many existing dual-access OSFSs implement this mapping <ref type="bibr" target="#b9">[10,</ref><ref type="bibr" target="#b12">14,</ref><ref type="bibr">32,</ref><ref type="bibr" target="#b37">41,</ref><ref type="bibr" target="#b49">51,</ref><ref type="bibr" target="#b60">62,</ref><ref type="bibr" target="#b62">64]</ref>. However, 1⇒1 mapping can drastically reduce the performance of partial file writes and file renames. This is because even a small modification to a file or the renaming of a file requires a GET and a PUT of an entire object. As a result, OSFSs either do not support partial writes at all or incur significant performance overhead. Other systems sacrifice intuitive dual access and adopt 1⇒N, N⇒1, or N⇒N file-to-object mapping policies <ref type="bibr" target="#b22">[24,</ref><ref type="bibr">30,</ref><ref type="bibr" target="#b78">79,</ref><ref type="bibr" target="#b79">80]</ref>.</p><p>Coherent namespaces. Data is accessed through both interfaces, and the system should support coherent object and file namespaces to enable intuitive access. Object storage features a flat namespace with key-value style semantics. An OSFS could use object names with embedded path components to mimic a directory structure for the user's convenience, considering '/' in the object names as delimiters. But this can lead to various incoherencies in the file system namespace during creation and deletion of objects. For example, assume that there exists a directory named /A/ in the file system namespace; it would lead to an incoherence if the user were to PUT an object named A in the object namespace. These incoherences only get compounded when we start to add support for directories, hard links, and symlinks. Moreover, this could lead to data either becoming unreachable or accidentally overwritten. The current set of systems rely on the user's cognizance to prevent any incoherence, and do not take this issue into consideration.</p><p>Eventual data access consistency. The system should ideally ensure that data access is consistent across both object and file interfaces. We closely examine the use cases and draw the conclusion that though data is accessed through both interfaces, rarely is this concurrent. In our view, this property should be exploited for performance improvement when designing the system. We further believe that eventual consistency is a suitable model, especially given that object storage users and applications already expect it <ref type="bibr" target="#b33">[37,</ref><ref type="bibr" target="#b72">73]</ref>.</p><p>Distributed. Object storage is inherently scalable and only a distributed file system can fully utilize this characteristic. The massive datasets of the presented use cases also indicate that a solution would need to scale out beyond the compute power of a single node. One approach to this is to implement a full-fledged distributed file system that performs byte-range locking. However, on closer examination of the use cases, the datasets would need distributed access, but not necessarily to the same data. A potential file system would probably be able to operate with weak cache consistency, since individual nodes would likely work on distinct parts of the data. Some cloud providers even offer NFS over object storage <ref type="bibr" target="#b6">[7,</ref><ref type="bibr" target="#b28">31]</ref>. We believe that a distributed file system with NFS V3-like semantics, but not weighed down by the scalability and performance limitations of NFS, would provide a good balance between consistency and performance.</p><p>Unified access control. The differences between file systems and object storage extend to access control methods. Access control in object storage is more detailed than the Access Control Lists (ACLs) that are available on standard file systems, and the two tend to be incongruent. Current OSFSs do not provide unified access control between files and objects, i.e., the permissions set for an object are not reflected in its file equivalent or vice-versa. However, enterprises desire this unification across interfaces. In addition, there is a vast diversity in the nature of access control supported by different object storage vendors, which presents a dilemma for a backend-agnostic system. For example, some object stores support object level permissions <ref type="bibr" target="#b0">[1,</ref><ref type="bibr" target="#b7">8,</ref><ref type="bibr" target="#b15">17]</ref> while others only offer permissions at the container level <ref type="bibr" target="#b16">[18,</ref><ref type="bibr" target="#b24">26]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Existing systems</head><p>We surveyed existing systems and classified them into two broad categories, I and II, based on the approaches presented in Section 1. We further subdivided II into three types, IIa, IIb, and IIc, based on their support for dual access and efficient file interfaces. The results of our survey are summarized in <ref type="table" target="#tab_0">Table 1</ref>, illustrating that despite a fairly high number of existing relevant systems, none of them meet all of the desirable requirements. (We do not include file systems which were designed to use object-based storage devices (OSDs), such as Lustre <ref type="bibr" target="#b68">[69]</ref>, or systems like SwiftOnFile <ref type="bibr" target="#b29">[33]</ref>, which is an object store deployed over a distributed file system, because of their prohibitive limitations on dual access and generality.) I : File systems paired with object storage ( in the table). These are hierarchical storage management systems based on block and object storage. A distributed file system is deployed over block storage and paired with object storage. Data is either transparently or manually migrated between them. This approach is inefficient and cumbersome for large datasets and leads to storage sprawl with the continuous transfer of data between different storage tiers. II : OSFSs operate over existing object storage systems. (a)</p><p>Inefficient file system interface. These systems offer intuitive dual access but support only simple or inefficient file interfaces. They can be viewed as object stores with rudimentary file system properties. (b)</p><p>No dual access. These systems offer the full set of efficient file interfaces but do not support intuitive dual access. They are essentially distributed file systems with few object-like features <ref type="bibr" target="#b3">4</ref> . An example is CephFS, which is neither generic nor does it support dual access. It only operates over RADOS, its own object store, and though it does store data in RADOS, this data cannot be accessed via object interfaces. (c)</p><p>Best of both worlds. These systems offer both intuitive dual access and the full spectrum of efficient file interfaces. ProxyFS and OIO-FS fall in this category. However, they are neither generic, since they operate only on specific object stores, nor distributed. Moreover, they provide only limited object interfaces or support only reads. ProxyFS adopts N⇒N object-to-file mapping and relies on Swift's ability to present a scattered object as a single entity via the object interface. Swift containers (buckets) need to be pre-configured for dual-access operation and this feature cannot be enabled retroactively. ProxyFS is also the only other existing system which considers the issue of maintaining a consistent namespace, and is attempting to tackle it. It relies on the internal capability of pre-configured Swift containers to maintain coherence but this is currently limited to only a few cases <ref type="bibr" target="#b27">[29]</ref>. OIO-FS adopts a 1⇒1 object-to-file mapping and supports dual access only for reads. We conclude that none of the existing systems fulfill the desired feature set from Section 3. This prompted us to design and develop Agni ( ) to overcome such limitations.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Agni</head><p>Agni is an efficient dual-access OSFS that provides eventual consistency through both file and object interfaces while utilizing only commonly implemented object APIs and capabilities. The effect of an operation through either interface is eventually reflected through the other interface. It implements a multi-tier data structure that provides high performance for partial writes by accepting them in memory, persisting them to a log, and aggregating writes when merging the log. Logged updates are indexed temporally which allows the system to update existing files even while flushing data to the log. Agni merges logged updates asynchronously and presents a single object to the user. In addition, we have implemented useful dual-access user APIs that, among other functions, allow users to synchronize files with objects on demand.</p><p>Agni commits all file writes to a log that resides in object storage in order to avoid read-modify-write overhead for partial writes. The system maps a single file to a single object, but does so across three distinct storage tiers: (i) cache, (ii) log, and (iii) base. File-based applications read data from and write data to the top-most tier-the cache. Agni fetches data into the cache on demand. Asynchronously, the flush process writes data out from the cache to the intermediary tier-the log. Periodically, a merge process asynchronously reconciles data from the log with the object in the bottom-most tier-the base. The resting state of the system is when all data is located in the base. At times parts of file system data can reside in all three tiers, but flush and merge processes eventually return the system to its resting state. We call this approach eventual 1⇒1 mapping, and the associated delay file-to-object visibility lag. <ref type="figure" target="#fig_0">Figure 1</ref> depicts the three tiers, and the relationship between them and applications. The file interface always sees consistent data while the object interface sees consistent data when there is no dirty data in the cache and the log.</p><p>The log provides a transient staging ground for partial writes. We defer the read-modify-write until the file is merged into the base tier. To ensure a faster and simpler merge, Agni maintains a separate log for each file. Updates made via the object interface are reflected to the file system using object notifications <ref type="bibr" target="#b4">5</ref> . We refer to this time delay as object-to-file visibility lag. Weak cache consistency across distributed nodes is maintained via a publish/subscribe messaging service.</p><p>Currently Agni assumes the absence of concurrent file and object data updates, and does not implement any locking. This can lead to data corruption when concurrent data writes do occur. For example, the base can be overwritten because of a write through the object interface even when a file is open. In this case, data written through both interfaces could potentially be interspersed. However, we expect this to occur rarely in practice. In the future we plan to explore the use of checksums to guarantee object-to-file consistency to address this issue: every object in the log would be associated with a checksum of the base that would ensure unmerged updates are not merged with an overwritten base. In addition, we implement coalesce()-a file interface to force a synchronous merge. On its completion, updates from the file interface are reflected in the object interface.</p><p>We implemented Agni using FUSE <ref type="bibr" target="#b77">[78]</ref>. Our system supports multiple file systems concurrently, one per object store bucket. For this paper, we store metadata in Redis <ref type="bibr" target="#b66">[67]</ref> and use tmpfs as Agni's cache. Agni currently runs on AWS S3 <ref type="bibr" target="#b0">[1]</ref>, OpenStack Swift <ref type="bibr" target="#b24">[26]</ref>, and Google Cloud Storage <ref type="bibr" target="#b15">[17]</ref>. The object notification processor uses the serverless compute service <ref type="bibr" target="#b4">[5]</ref>, and updates are conveyed to distributed nodes using a cloud native messaging service <ref type="bibr" target="#b5">[6]</ref>. Currently Agni does not support a consistent namespace or an integrated access control mechanism. Our implementation is written in Python; it is open-source, and available at https://github.com/objectfs/objectfs. Preliminary evaluation: We validate the performance of Agni for two different applications by comparing it to S3FS, a popular OSFS, and to a script which imitates manually copying data. We prioritized our comparison to these approaches because they satisfy two principal criteria: dual access and being backend-agnostic. Of the 19 other file systems in <ref type="table" target="#tab_0">Table  1</ref>, only 7 systems qualify and only two of those have nearcomplete POSIX support-S3FS and YAS3FS. We choose to compare Agni to S3FS because of its popularity and maturity <ref type="bibr" target="#b62">[64]</ref>. S3FS is implemented in C++ using FUSE, and uses tmpfs as its local cache. It can be mounted across multiple nodes, but there is no mechanism to maintain coordination between them and thus it is not a distributed file system.</p><p>Benchmarks are performed on Amazon Web Services (AWS) using an m5.4xlarge instance with 16 vCPUs, 64 GB of RAM, and AWS high network bandwidth. For both systems we use a 36 GB in-memory file system as a cache, and for Agni we allocate 4 GB to the Redis server.</p><p>We simulate the media use case by running ffmpeg <ref type="bibr" target="#b73">[74]</ref>, a transcoding application, to transcode 14 MPEG files (total 32 GB) <ref type="bibr" target="#b5">6</ref> to MOV files. Gene sequence alignment is simulated using bowtie2 <ref type="bibr" target="#b35">[39]</ref>, a gene sequence aligner, to align a single large genome file of 8 GB <ref type="bibr" target="#b6">7</ref> . The manual data transfer work- load attempts to mimic the case for both file systems paired with object storage and a manual user performing the actions. <ref type="figure" target="#fig_1">Figure 2</ref> depicts the results. Agni performs better because it overlaps I/O and computation. It can upload data to object storage while parts of it are under processing. Other systems have to wait for the entire file to be processed before their upload can begin. The merge time denotes the file-to-object visibility lag after the data is uploaded. Agni performs 40%-60% faster in case of ffmpeg and 20%-40% faster in case of bowtie2 when compared to both of the existing approaches.</p><p>Future work: Agni is a system under active development, and lacks some attributes essential for its deployment in a production environment. Our current focus is to implement coherent namespaces and access control over our dual-access system. Towards this goal, we plan to support two operating modes for Agni: (i) Mode I will offer complete intuitive dual access and the best object interface performance, but will only support basic object interfaces, and applications will have not have the ability to verify the reflection of file interface updates through the object interface. Additionally, this mode will able to rectify namespace incoherencies that can be remedied retroactively without data loss, and will be able to identify the set of incoherencies that will require user intervention to resolve. Finally, access control in this mode will be dependent on the support offered natively by the object store.</p><p>(ii) Mode II will actively prevent the occurance of namespace incoherence, and will support filesystem-like operations such as creation and deletion of directories, symlinks, and hard links via the object interface. Access control will be uniform and independent of the object store. In addition, applications will have the capability to verify the reflection of file interface updates before accessing an object. However, this mode will have lower object interface performance and intuitiveness.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: A design overview of the Agni architecture with different storage tiers and dual data access interfaces.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>6Figure 2 :</head><label>2</label><figDesc>Figure 2: Comparing runtimes for existing applications.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="false"><head>Table 1 : Characterization of existing object storage based file systems.41], SVFS [32], Riofs [51] No support for partial writes, renames and metadata S3FS [64], Blobfuse [10], Gcsfuse [14]</head><label>1</label><figDesc>a Currently supports a single object store but uses only generic object operations. We consider it generic because it could be ported to other object stores. b Currently support NFSv3 semantics. Consistent cache coherency can be achieved with the use of distributed locking mechanisms which are currently absent. This is distinct from running NFS or equivalent services over existing object storage. c This is being actively discussed and future versions are expected to support it.</figDesc><table>Name 
+Dual 
+access 
+
+Gen-
+eric 
+
+File-system interface support and efficiency 
+Name 
+space 
+
+Distr-
+ibuted 
+
+Access 
+control 
+Goofys [YAS3FS [62] 
+
+
+a 
+Incomplete support. Inefficient file 
+and metadata updates 
+
+
+b 
+
+MarFS [49], SCFS [36] 
+No support for partial writes 
+S3QL [30] 
+
+
+ObjFS [24], Cumulus [79], BlueSky [80] 
+
+a 
+
+CephFS [81] 
+
+Full support. Optimal file and metadata updates 
+
+
+
+Elastifile [13], CloudFS [27], FSX [4] 
+
+
+Full support. Optimal file and metadata updates 
+
+
+
+
+OIO-FS [25] 
+Incomplete support. Optimal file and metadata 
+updates 
+
+
+ProxyFS [28] 
+Limited 
+Future c 
+
+
+
+Agni 
+
+
+Full support. Optimal file and metadata updates Future c 
+b 
+Future c 
+
+</table></figure>
+
+			<note place="foot" n="1"> The name of our system is inspired by Agni, the two-faced Hindu deity. Just as the deity has two faces, our storage system has two interfaces.</note>
+
+			<note place="foot" n="2"> A ranged GET is also referred to as a partial GET 3 Large objects can be broken into chunks and downloaded/uploaded in parallel. A chunk is referred to as a PART.</note>
+
+			<note place="foot" n="4"> We do not mention proprietary systems like Cloudian HyperFile [12] and MagFS [20] because there is little public information about their internals. To our knowledge, these systems can also be characterized under this category.</note>
+
+			<note place="foot" n="5"> Most object storage can be configured to notify applications for specific object events [3, 9, 15].</note>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+			</div>
+
+			<div type="annex">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Discussion topics for HotStorage'19</head><p>We would like to get the storage community's feedback on the following points: 1. Many enterprises are looking to move towards multi-cloud or hybrid-cloud setups. We'd like to discuss the challenges of deploying dual-access storage systems in such organizations. 2. We leverage the acceptability of weak data consistency across both interfaces to improve Agni's performance. This works for our use cases, but are there use cases that require strong data consistency? If weak consistency is sufficient, what would be acceptable object-to-file and fileto-object visibility lags? 3. We describe a set of use cases in Section 2 which are well suited for dual-access systems. Are attendees aware of any other use cases (sourced from their real-world experience) which could benefit from such systems? 4. We have presented our rationale behind the design requirements in Section 3. Are there other design attributes which we have not discussed? Are there any aspects of our design which necessitate more deliberation or rethinking? Further, we believe that more data workflows are bound to migrate to cloud. Which additional design attributes would be important to better position Agni in cloud environments? 5. In Future work, we discuss our approach to tackling the unsolved challenges of presenting a coherent namespace and unified access control. The intuition is to provide support for a diversity of potential user requirements and choices of object storage. Does our approach appear to be feasible or are we overfitting? Are there other approaches to this problem and how do organizations currently address these issues?</p></div>			</div>
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title/>
+		<ptr target="https://aws.amazon.com/s3/" />
+	</analytic>
+	<monogr>
+		<title level="j">Amazon Simple Storage Service</title>
+		<imprint>
+			<biblScope unit="issue">S3</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title/>
+		<ptr target="https://aws.amazon.com/pricing" />
+	</analytic>
+	<monogr>
+		<title level="j">Amazon Web Services Pricing</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title/>
+		<ptr target="https://docs.aws.amazon.com/AmazonS3/latest/dev/NotificationHowTo.html" />
+	</analytic>
+	<monogr>
+		<title level="j">AWS Event Notifications</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aws</forename><surname>Fsx</surname></persName>
+		</author>
+		<ptr target="https://aws.amazon.com/fsx/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aws</forename><surname>Lambda</surname></persName>
+		</author>
+		<ptr target="https://aws.amazon.com/lambda/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aws</forename><surname>Sns</surname></persName>
+		</author>
+		<ptr target="https://aws.amazon.com/sns/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<monogr>
+				<ptr target="https://aws.amazon.com/storagegateway/file/" />
+		<title level="m">AWS Storage Gateway for Files</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Azure</forename><surname>Blob Storage</surname></persName>
+		</author>
+		<ptr target="https://azure.microsoft.com/en-us/services/storage/blobs/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Blob Storage</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Events</surname></persName>
+		</author>
+		<ptr target="https://docs.microsoft.com/en-us/azure/storage/blobs/storage-blob-event-overview" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Blobfuse</surname></persName>
+		</author>
+		<ptr target="https://github.com/Azure/azure-storage-fuse" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cloudian</forename><surname>Hyperfile</surname></persName>
+		</author>
+		<ptr target="https://cloudian.com/products/hyperfile-nas-controller/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Elastifile</forename><surname>Cloud File</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>System</surname></persName>
+		</author>
+		<ptr target="https://www.elastifile.com/product/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Gcsfuse</surname></persName>
+		</author>
+		<ptr target="https://github.com/GoogleCloudPlatform/gcsfuse" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<monogr>
+				<ptr target="https://cloud.google.com/storage/docs/object-change-notification" />
+		<title level="m">Google Change Notifications</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<monogr>
+		<title level="m" type="main">Google Cloud Platform Pricing</title>
+		<ptr target="https://cloud.google.com/pricing" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Google</forename><surname>Cloud Storage</surname></persName>
+		</author>
+		<ptr target="https://cloud.google.com/storage/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Ibm Cloud Object</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Storage</surname></persName>
+		</author>
+		<ptr target="https://www.ibm.com/cloud/object-storage" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Ibm Cloud Pricing</surname></persName>
+		</author>
+		<ptr target="https://www.ibm.com/cloud/pricing" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Maginatics</forename><surname>Magfs</surname></persName>
+		</author>
+		<ptr target="http://downloads.maginatics.com/MaginaticsMagFSTechnicalWhitepaper.pdf" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Microsoft Azure Pricing</surname></persName>
+		</author>
+		<ptr target="https://cloud.microsoft.com/en-us/pricing" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Microsoft Azure Pricing</surname></persName>
+		</author>
+		<ptr target="https://azure.microsoft.com/en-us/pricing/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Minio</surname></persName>
+		</author>
+		<ptr target="https://www.minio.io/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Objectivefs</surname></persName>
+		</author>
+		<ptr target="https://objectivefs.com/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><forename type="middle">S</forename><surname>Openio</surname></persName>
+		</author>
+		<ptr target="https://docs.openio.io/18.04/source/arch-design/fs_overview.html" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Openstack</forename><surname>Swift</surname></persName>
+		</author>
+		<ptr target="https://docs.openstack.org/swift/latest/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Panzure</forename><surname>Cloudfs</surname></persName>
+		</author>
+		<ptr target="https://panzura.com/technology/panzura-cloudfs/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Proxyfs</surname></persName>
+		</author>
+		<ptr target="https://github.com/swiftstack/ProxyFS" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Proxyfs</forename><surname>Namespace</surname></persName>
+		</author>
+		<ptr target="https://proxyfs.org/architecture/example-flows.html" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ring</forename><surname>Scality</surname></persName>
+		</author>
+		<ptr target="https://www.scality.com/products/ring/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Swiftonfile</surname></persName>
+		</author>
+		<ptr target="https://github.com/openstack/SwiftOnFile" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<monogr>
+		<title level="m" type="main">Object storage benefits, myths and options. IBM Blog</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Alkalay</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2017-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<monogr>
+		<title level="m" type="main">Critical Capabilities for Object Storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Bala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Landers</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Mcarthur</surname></persName>
+		</author>
+		<idno>G00304492</idno>
+		<imprint>
+			<date type="published" when="2018-01" />
+			<publisher>Gartner</publisher>
+		</imprint>
+	</monogr>
+<note type="report_type">Technical Report</note>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">SCFS: A Shared Cloud-backed File System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Bessani</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Mendes</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Oliveira</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Neves</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Correia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Pasin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Verissimo</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2014 USENIX Conference on USENIX Annual Technical Conference</title>
+		<meeting>the 2014 USENIX Conference on USENIX Annual Technical Conference<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="169" to="180" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<analytic>
+		<title level="a" type="main">Building a Database on S3</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Brantner</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Florescu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Graf</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Kossmann</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Kraska</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2008 ACM SIGMOD International Conference on Management of Data, SIGMOD &apos;08</title>
+		<meeting>the 2008 ACM SIGMOD International Conference on Management of Data, SIGMOD &apos;08<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2008" />
+			<biblScope unit="page" from="251" to="264" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<monogr>
+		<title level="m" type="main">Critical Capabilities for Object Storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Chandrasekaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Bala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Landers</surname></persName>
+		</author>
+		<idno>G00271719</idno>
+		<imprint>
+			<date type="published" when="2017-01" />
+			<publisher>Gartner</publisher>
+		</imprint>
+	</monogr>
+<note type="report_type">Technical Report</note>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<analytic>
+		<title level="a" type="main">Scaling read aligners to hundreds of threads on generalpurpose processors</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Charles</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Antonescu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Wilks</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Langmead</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Bioinformatics</title>
+		<imprint>
+			<date type="published" when="2018-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b36">
+	<analytic>
+		<title level="a" type="main">Cloud Object Storage Market Research Report -Global Forecast 2023</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Chavan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Banerji</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Nair</surname></persName>
+		</author>
+		<idno>WGR3496538</idno>
+	</analytic>
+	<monogr>
+		<title level="j">Wise Guy Reports</title>
+		<imprint>
+			<date type="published" when="2018-10" />
+		</imprint>
+	</monogr>
+<note type="report_type">Technical Report</note>
+</biblStruct>
+
+<biblStruct xml:id="b37">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K.-H</forename><surname>Cheung</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Goofys</surname></persName>
+		</author>
+		<ptr target="https://github.com/kahing/goofys" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b38">
+	<monogr>
+		<title level="m" type="main">Lessons Netflix learned from the AWS outage. Netflix Techblog</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Cockroft</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Hicks</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Orzell</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2011-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b39">
+	<monogr>
+		<title level="m" type="main">Achieving A Faster, More Scalable Media Active Archive</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">M</forename><surname>Coughlin</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2017-07" />
+			<pubPlace>Coughlin Associates</pubPlace>
+		</imprint>
+	</monogr>
+<note type="report_type">Technical report</note>
+</biblStruct>
+
+<biblStruct xml:id="b40">
+	<analytic>
+		<title level="a" type="main">The Cost of Doing Science on the Cloud: The Montage Example</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Deelman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Singh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Livny</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Berriman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Good</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the</title>
+		<meeting>the</meeting>
+		<imprint>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b41">
+	<monogr>
+				<idno>1-50:12</idno>
+		<title level="m">ACM/IEEE Conference on Supercomputing, SC &apos;08</title>
+		<meeting><address><addrLine>Piscataway, NJ, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>IEEE Press</publisher>
+			<date type="published" when="2008" />
+			<biblScope unit="volume">50</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b42">
+	<analytic>
+		<title level="a" type="main">Where&apos;s The Bear?: Automating Wildlife Image Processing Using IoT and Edge Cloud Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">R</forename><surname>Elias</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Golubovic</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Krintz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Wolski</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Second International Conference on Internetof-Things Design and Implementation, IoTDI &apos;17</title>
+		<meeting>the Second International Conference on Internetof-Things Design and Implementation, IoTDI &apos;17<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="247" to="258" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b43">
+	<monogr>
+		<title level="m" type="main">Pharmacological and genomic profiling of neurofibromatosis type 1 plexiform neurofibroma-derived schwann cells</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Ferrer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">J C</forename><surname>Gosline</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Stathis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Guo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Guha</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">A</forename><surname>Ryman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">R</forename><surname>Wallace</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Kaschsemenza</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Hao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Ingersoll</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Mohr</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Thomas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Verma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Guinney</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">O</forename><surname>Blakeley</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2018-06" />
+			<publisher>Sci Data</publisher>
+			<biblScope unit="volume">5</biblScope>
+			<biblScope unit="page">180106</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b44">
+	<monogr>
+		<title level="m" type="main">Cloud computing for big data analytics in the Process Control Industry</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Goldin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Feldman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Georgoulas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Castano</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Nikolakopoulos</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2017" />
+			<biblScope unit="page">25</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b45">
+	<monogr>
+				<title level="m">Mediterranean Conference on Control and Automation (MED)</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2017-07" />
+			<biblScope unit="page" from="1373" to="1378" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b46">
+	<monogr>
+		<title level="m" type="main">BIDS apps: Improving ease of use, accessibility, and reproducibility of neuroimaging data analysis methods</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><forename type="middle">J</forename><surname>Gorgolewski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Alfaro-Almagro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Auer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Bellec</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Capot˘ A</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">M</forename><surname>Chakravarty</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><forename type="middle">W</forename><surname>Churchill</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">L</forename><surname>Cohen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">C</forename><surname>Craddock</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">A</forename><surname>Devenyi</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2017-03" />
+			<publisher>Public Library of Science</publisher>
+			<biblScope unit="volume">13</biblScope>
+			<biblScope unit="page">1005209</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b47">
+	<monogr>
+		<title level="m" type="main">MarFS, a Near-POSIX Interface to Cloud Objects. ;Login</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">T</forename><surname>Inman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">F</forename><surname>Vining</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">W</forename><surname>Ransom</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">A</forename><surname>Grider</surname></persName>
+		</author>
+		<imprint>
+			<biblScope unit="page" from="42" to="58" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b48">
+	<monogr>
+		<title level="m" type="main">LA-UR-16-28952)</title>
+		<imprint>
+			<date type="published" when="2017-01" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b49">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Jonkins</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Riofs</surname></persName>
+		</author>
+		<ptr target="https://github.com/skoobe/riofs" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b50">
+	<analytic>
+		<title level="a" type="main">Cloud Big Data Decision Support System for Machine Learning on AWS: Analytics of Analytics</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Kaplunovich</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Yesha</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2017 IEEE International Conference on Big Data (Big Data)</title>
+		<imprint>
+			<date type="published" when="2017-12" />
+			<biblScope unit="page" from="3508" to="3516" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b51">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Kiar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><forename type="middle">J</forename><surname>Gorgolewski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Kleissas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">G</forename><surname>Roncal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Litt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Wandell</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">A</forename><surname>Poldrack</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Wiener</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">J</forename><surname>Vogelstein</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Burns</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Science In the Cloud (SIC): A use case in MRI Connectomics</title>
+		<imprint>
+			<biblScope unit="volume">6</biblScope>
+			<biblScope unit="page" from="1" to="10" />
+			<date type="published" when="2017-05" />
+			<publisher>Oxford University Press</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b52">
+	<analytic>
+		<title level="a" type="main">Cloud-scale RNA-sequencing differential expression analysis with Myrna</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Langmead</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><forename type="middle">D</forename><surname>Hansen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">T</forename><surname>Leek</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Genome biology</title>
+		<imprint>
+			<biblScope unit="volume">11</biblScope>
+			<biblScope unit="issue">8</biblScope>
+			<biblScope unit="page">83</biblScope>
+			<date type="published" when="2010-08" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b53">
+	<analytic>
+		<title level="a" type="main">The Sequence Alignment/Map Format and SAMtools</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Handsaker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Wysoker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Fennell</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Ruan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Homer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Marth</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Abecasis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Durbin</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Bioinformatics</title>
+		<imprint>
+			<biblScope unit="volume">25</biblScope>
+			<biblScope unit="issue">16</biblScope>
+			<biblScope unit="page" from="2078" to="2079" />
+			<date type="published" when="2009-08" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b54">
+	<analytic>
+		<title level="a" type="main">Building NDStore Through Hierarchical Storage Management and Microservice Processing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Lillaney</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Kleissas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Eusman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Perlman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Gray Roncal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">T</forename><surname>Vogelstein</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Burns</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2018 IEEE 14th International Conference on e-Science (e-Science)</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2018-10" />
+			<biblScope unit="page" from="223" to="233" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b55">
+	<analytic>
+		<title level="a" type="main">Workload Characteristics of DNA Sequence Analysis: From Storage Systems&apos; Perspective</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Lim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Park</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Choi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Won</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Kim</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 6th Workshop on Rapid Simulation and Performance Evaluation: Methods and Tools, RAPIDO &apos;14</title>
+		<meeting>the 6th Workshop on Rapid Simulation and Performance Evaluation: Methods and Tools, RAPIDO &apos;14<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2014" />
+			<biblScope unit="volume">4</biblScope>
+			<biblScope unit="page" from="1" to="4" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b56">
+	<monogr>
+		<title level="m" type="main">Biology: The big challenges of big data</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Marx</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2013" />
+			<biblScope unit="volume">498</biblScope>
+			<biblScope unit="page" from="255" to="260" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b57">
+	<monogr>
+		<title level="m" type="main">Don&apos;t Get Left Behind! Top Reasons You Need Object Storage. Western Digital Blog</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Ottem</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2017-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b58">
+	<analytic>
+		<title level="a" type="main">Keeping Deep Learning GPUs Well Fed Using Object Storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O</forename><surname>Ozeri</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Ofer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Kat</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 11th ACM International Systems and Storage Conference, SYSTOR &apos;18</title>
+		<meeting>the 11th ACM International Systems and Storage Conference, SYSTOR &apos;18<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="128" to="128" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b59">
+	<analytic>
+		<title level="a" type="main">Big data</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>O&amp;apos;driscoll</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Daugelaite</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">D</forename><surname>Sleator</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Hadoop and cloud computing in genomics</title>
+		<imprint>
+			<publisher>Elsevier</publisher>
+			<date type="published" when="2013" />
+			<biblScope unit="volume">46</biblScope>
+			<biblScope unit="page" from="774" to="781" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b60">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Poccia</surname></persName>
+		</author>
+		<ptr target="https://github.com/danilop/yas3fs" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b61">
+	<analytic>
+		<title level="a" type="main">Worldwide File-Based Storage Forecast</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Potnis</surname></persName>
+		</author>
+		<idno>US44457018</idno>
+	</analytic>
+	<monogr>
+		<title level="m">Storage by Deployment Location</title>
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+<note type="report_type">Technical Report</note>
+	<note>International Data Corporation</note>
+</biblStruct>
+
+<biblStruct xml:id="b62">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Rizun</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>S3fuse</surname></persName>
+		</author>
+		<ptr target="https://github.com/s3fs-fuse/s3fs-fuse" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b63">
+	<analytic>
+		<title level="a" type="main">Video Surveillance Based on Cloud Storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">A</forename><surname>Rodriguez-Silva</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Adkinson-Orellana</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><forename type="middle">J</forename><surname>González-Castano</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Armino-Franco</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>González-Martinez</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2012 IEEE Fifth International Conference on Cloud Computing, CLOUD &apos;12</title>
+		<meeting>the 2012 IEEE Fifth International Conference on Cloud Computing, CLOUD &apos;12<address><addrLine>Washington, DC, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>IEEE Computer Society</publisher>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="991" to="992" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b64">
+	<analytic>
+		<title/>
+		<ptr target="https://www.ncbi.nlm.nih" />
+	</analytic>
+	<monogr>
+		<title level="j">Sage Bionetworks</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b65">
+	<monogr>
+				<title level="m">gov/sra/?term=SRR6311433. Accessed</title>
+		<imprint>
+			<biblScope unit="page" from="2019" to="2020" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b66">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Sanfilippo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Noordhuis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Redis</surname></persName>
+		</author>
+		<ptr target="http://redis.io" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b67">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">C</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Schatz. CloudBurst. Bioinformatics</title>
+		<imprint>
+			<biblScope unit="volume">25</biblScope>
+			<biblScope unit="issue">11</biblScope>
+			<biblScope unit="page" from="1363" to="1369" />
+			<date type="published" when="2009-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b68">
+	<analytic>
+		<title level="a" type="main">Building a file system for 1000-node clusters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Schwan</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2003 Linux symposium</title>
+		<meeting>the 2003 Linux symposium</meeting>
+		<imprint>
+			<date type="published" when="2003-07" />
+			<biblScope unit="page" from="380" to="386" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b69">
+	<analytic>
+		<title level="a" type="main">Geoprocessing on the Amazon cloud computing platform -AWS</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Shao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Di</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Bai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Guo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Gong</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2012 First International Conference on AgroGeoinformatics (Agro-Geoinformatics)</title>
+		<imprint>
+			<date type="published" when="2012-08" />
+			<biblScope unit="page" from="1" to="6" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b70">
+	<monogr>
+		<title level="m" type="main">Data Center Storage: Cost-Effective Strategies, Implementation, and Management</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Smith</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2016" />
+			<publisher>CRC Press</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b71">
+	<analytic>
+		<title level="a" type="main">Big 3D Spatial Data Processing Using Cloud Computing Environment</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Sugumaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Burnett</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Blinkmann</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 1st ACM SIGSPATIAL International Workshop on Analytics for Big Geospatial Data, BigSpatial &apos;12</title>
+		<meeting>the 1st ACM SIGSPATIAL International Workshop on Analytics for Big Geospatial Data, BigSpatial &apos;12<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="20" to="22" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b72">
+	<analytic>
+		<title level="a" type="main">Consistency-based Service Level Agreements for Cloud Storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">B</forename><surname>Terry</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Prabhakaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Kotla</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Balakrishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">K</forename><surname>Aguilera</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Abu-Libdeh</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Twenty-Fourth ACM Symposium on Operating Systems Principles, SOSP &apos;13</title>
+		<meeting>the Twenty-Fourth ACM Symposium on Operating Systems Principles, SOSP &apos;13<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2013" />
+			<biblScope unit="page" from="309" to="324" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b73">
+	<analytic>
+		<title level="a" type="main">Converting Video Formats with FFmpeg</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Tomar</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Linux J</title>
+		<imprint>
+			<biblScope unit="issue">146</biblScope>
+			<biblScope unit="page">10</biblScope>
+			<date type="published" when="2006-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b74">
+	<monogr>
+		<title level="m" type="main">The Digital Universe of Opportunities: Rich Data and the Increasing Value of the Internet of Things</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Turner</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">F</forename><surname>Gantz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Reinsel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Minton</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+<note type="report_type">Technical report</note>
+</biblStruct>
+
+<biblStruct xml:id="b75">
+	<analytic>
+		<title level="a" type="main">BCFtools/RoH: a hidden Markov model approach for detecting autozygosity from next-generation sequencing data</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Tyler-Smith</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Danecek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Durbin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Narasimhan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Xue</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Scally</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Bioinformatics</title>
+		<imprint>
+			<biblScope unit="volume">32</biblScope>
+			<biblScope unit="issue">11</biblScope>
+			<biblScope unit="page" from="1749" to="1751" />
+			<date type="published" when="2016-01" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b76">
+	<analytic>
+		<title level="a" type="main">Rethinking Data Management for Big Data Scientific Workflows</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Vahi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Rynge</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Juve</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Mayani</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Deelman</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2013 IEEE International Conference on Big Data</title>
+		<imprint>
+			<date type="published" when="2013-10" />
+			<biblScope unit="page" from="27" to="35" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b77">
+	<analytic>
+		<title level="a" type="main">To FUSE or Not to FUSE: Performance of User-Space File Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">K R</forename><surname>Vangoor</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Tarasov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Zadok</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">15th USENIX Conference on File and Storage Technologies (FAST 17)</title>
+		<meeting><address><addrLine>Santa Clara, CA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="59" to="72" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b78">
+	<analytic>
+		<title level="a" type="main">Cumulus: Filesystem Backup to the Cloud</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Vrable</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Savage</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">M</forename><surname>Voelker</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">In ACM Transactions on Storage (TOS)</title>
+		<imprint>
+			<biblScope unit="volume">5</biblScope>
+			<biblScope unit="page" from="1" to="14" />
+			<date type="published" when="2009-12" />
+			<publisher>ACM</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b79">
+	<analytic>
+		<title level="a" type="main">BlueSky: A Cloud-backed File System for the Enterprise</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Vrable</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Savage</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">M</forename><surname>Voelker</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 10th USENIX Conference on File and Storage Technologies, FAST&apos;12</title>
+		<meeting>the 10th USENIX Conference on File and Storage Technologies, FAST&apos;12<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="19" to="19" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b80">
+	<analytic>
+		<title level="a" type="main">Ceph: A Scalable, High-performance Distributed File System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">A</forename><surname>Weil</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">A</forename><surname>Brandt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">L</forename><surname>Miller</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">D E</forename><surname>Long</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Maltzahn</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 7th Symposium on Operating Systems Design and Implementation, OSDI &apos;06</title>
+		<meeting>the 7th Symposium on Operating Systems Design and Implementation, OSDI &apos;06<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2006" />
+			<biblScope unit="page" from="307" to="320" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b81">
+	<analytic>
+		<title level="a" type="main">Towards Web-based Delta Synchronization for Cloud Storage Services</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Xiao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Zhai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Q</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Liu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">16th USENIX Conference on File and Storage Technologies (FAST 18)</title>
+		<meeting><address><addrLine>Oakland, CA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="155" to="168" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b82">
+	<monogr>
+		<title level="m" type="main">Unlocking the Power of Analytics with an Always-on Data Lake</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Yuen</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2017-11" />
+		</imprint>
+		<respStmt>
+			<orgName>Enterprise Strategy Group</orgName>
+		</respStmt>
+	</monogr>
+<note type="report_type">Technical report</note>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

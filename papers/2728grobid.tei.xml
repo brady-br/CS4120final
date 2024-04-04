@@ -1,0 +1,1006 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:50+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">CacheCloud: Towards Speed-of-light Datacenter Communication</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shelby</forename><surname>Thomas</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">UC San Diego</orgName>
+								<address>
+									<settlement>San Diego, San Diego</settlement>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Geoffrey</forename><forename type="middle">M</forename><surname>Voelker</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">UC San Diego</orgName>
+								<address>
+									<settlement>San Diego, San Diego</settlement>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">George</forename><surname>Porter</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">UC San Diego</orgName>
+								<address>
+									<settlement>San Diego, San Diego</settlement>
+								</address>
+							</affiliation>
+						</author>
+						<title level="a" type="main">CacheCloud: Towards Speed-of-light Datacenter Communication</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>The network is continuing to advance unabated, with 100-Gb/s Ethernet already a commercial reality, and now 400-Gb/s in the standardization process. Within a single rack, inter-server latency will soon be in the range of 250ns, trending ever closer towards the fundamental propagation delay of light in a fiber. In this paper we argue that in this environment, a major performance bottleneck is DRAM latency, which has stagnated at 100ns per access. Consequently , data should be kept entirely in the CPU cache which has an order of magnitude lower latency and RAM should be considered a slower backing store. We describe the implications of designing a &quot;speed of light&quot; datacenter network stack that can keep up with ever increasing link speeds with the goal of keeping latency as close to the speed of light propagation time as possible.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Large-scale operators and cloud providers have architected highly parallel storage systems, data analytics frameworks, cluster managers and schedulers, and userfacing applications. Yet processing an individual request inevitably still relies on some amount of serial execution, and as a result subsystem latency has become critical, in line with Amdahl's Law. Perhaps more important for cloud providers is processing as much data as possible per user request, which likewise requires low latency, referred to as Gustafson-Barsis's Law <ref type="bibr" target="#b8">[10]</ref>. The need for low-latency networked applications is rooted both in ensuring good user experiences, and also in maximizing the amount of data processed per request.</p><p>The performance characteristics of system components evolve independently. Perhaps a decade ago, the network throughput of gigabit Ethernet was typically much lower than what could be supported by multi-core CPUs and their associated memory (e.g., up to 10 Gb/s). This led to the evolution of interrupt-driven network stacks (in the 90s and early 2000s). The end of Moore's law and Dennard scaling has meant that CPU speed has largely flattened, leading to more cores (but not higher per-core performance). With the introduction of 10-and 40-Gb/s Ethernet, the network has largely caught up, and is nearing parity with the performance of the CPU and memory. This has led to the adoption of user-space network stacks like DPDK <ref type="bibr">[8]</ref> and Netmap <ref type="bibr" target="#b26">[29]</ref>, which bypass the kernel and typically rely on dedicated cores to handle packet processing.</p><p>The network is continuing to advance unabated, with 100-Gb/s Ethernet already a commercial reality, and now 400-Gb/s in the standardization process, paired with both research <ref type="bibr">[28]</ref> and commercial <ref type="bibr" target="#b33">[36]</ref> demonstrations. At these speeds, links are typically optical, due to cost and energy constraints. The result will be a datacenter network that can deliver traffic at the speed of light (in a fiber) at bandwidths that exceed those of the endhost. To the endhost, the network will appear to deliver data at near zero latency and with infinite bandwidth. In the restricted environment of cluster and datacenter networks, the network community will have finally achieved their end goal of hitting the fundamental physical limits of communication performance.</p><p>Where does this leave server, OS, and application design? For servers communicating between racks at typical distances of O(50m), the one-way latency will be in the range of 250ns, and for intra-rack communication, the latency could be an order of magnitude smaller. This oneway latency represents one "component" in our system that is fundamentally impossible to optimize or improve, at any cost. The challenge then is to design a server architecture, network stack, and application that can meet this fundamental lower bound set by the network.</p><p>We have two options. First, we can continue to design systems that rely on parallelism to hide (but not reduce) this latency. Systems today adopt this strategy, since they are equipped with many-core CPUs, multiple memory banks consisting of multiple parallel channels, and highspeed network interfaces. Under this strategy, parallelism increases throughput but does not decrease the latency of an individual request. Here a major bottleneck is RAM latency, which has stagnated at 100ns per access <ref type="bibr" target="#b17">[19]</ref>. Because of this bottleneck, we propose a second option: reducing the latency of an individual request by eschewing RAM in part or entirely! The idea is to move data out of RAM and keep it in the CPU cache itself, which has an order of magnitude lower access latency than RAM. This both lowers the latency of individual requests and increases total throughput. Eliminating the "RAM latency bottleneck" results not only in lower application latency, but also has implications for fault tolerance, consensus, lock managers, atomic counters, and RPCs-most of which operate one or two orders of magnitude below the speed  <ref type="table">Table 1</ref>: Lengths of fiber optic cables in modern datacenters <ref type="bibr" target="#b6">[7]</ref> and associated propagation delay compared with the memory hierarchy.</p><p>of light between the millisecond to microsecond regime. In this paper we argue that keeping datacenter communication close to the speed of light propagation time necessitates the need for CacheCloud, a cluster-wide SRAM manager that treats DRAM as a slower backing store and SRAM as a first class citizen.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Motivation</head><p>Improving the latency of networked software is not a new goal. Indeed, for decades providers have worked to reduce subsystem latency. In this section, we motivate why fiber propagation delay is the right metric to use as a baseline in subsystem performance. We then describe why the recent developments in hardware, the operating system, and software stack motivate this new baseline at this point in time.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">Why propagation delay as a baseline?</head><p>Singla et al. <ref type="bibr" target="#b29">[32]</ref> outlined the case for why the speed of light serves as an aspirational latency goal in the wide area. Indeed in wide-area networks, propagation delay dominates communication latency, and so focusing on matching the end-to-end delivery time to the underlying propagation delay aligns well. But what about clusters and datacenter environments? We know that for large-scale providers, microseconds count when targeting improved latency <ref type="bibr" target="#b3">[4]</ref>. How do these expressed goals compare to the speed of light in a fiber? <ref type="table">Table 1</ref> reproduces some reported measurements of observed fiber-optic cable lengths in datacenters, using multimode fiber (the distribution of single mode fiber is similar). At 100 Gb/s, the maximum supported fiber lengths are 150m, the average length (and latency) observed was just over 50m (271 ns), and the 90th percentile is a bit over 100m (550 ns). The most frequently observed length was only 20m (100 ns) <ref type="bibr" target="#b6">[7]</ref>. While each datacenter will be unique, the takeaway from this published study is that for many server pairs, one-way latencies of 100-200 ns are very possible.  </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">Why speed of light latency now?</head><p>A number of recent advancements make this the right time to strive for ultra-low latency.</p><p>Datacenter networks consist not only of individual fibers, but rather a topology of switches interconnected into multi-hop end-to-end links. For this reason, the end-to-end latency is also a function of the number of hops (and associated queuing delay) in the topology. For folded-Clos "Fat-Tree" topologies, the end-to-end hop count is typically uniform, with perhaps 5 to 9 hops between servers in disjoint parts of the network <ref type="bibr" target="#b0">[1]</ref>. Recent proposals for Expander graph based topologies have the potential for greatly reducing the average hop count observed by flows in the network <ref type="bibr" target="#b13">[16,</ref><ref type="bibr" target="#b30">33,</ref><ref type="bibr" target="#b31">34]</ref>. The end result will be less inherent latency since traffic will transit fewer switches. Thus propagation delay will increase as a key source of end-to-end latency.</p><p>The evolution of hardware and network capabilities shows us that we are reaching the beginning of a new era that brings computer architecture and network closer than ever before. As links have gotten faster, the inter packet gap has shrunk but internal hardware performance such as DRAM and cache latency has stayed mostly constant. This is due to the tendency for hardware manufacturers to prefer scaling out rather than reducing latency <ref type="bibr" target="#b25">[27]</ref>.</p><p>For years, DRAM has been sufficient for our networking needs as the interpacket gap has stayed well above DRAM latency and at one point with 1G links, above disk latency. <ref type="figure">Figure 1</ref>, however, paints a different picture for the future. Only for MTU sized packets at 100G the interpacket gap is above DRAM latency, meaning that cache misses from the L3 cache can be tolerated as memory reads are faster than packet arrival. This changes when we look beyond 100G. 400G links represent the cusp of a new era with network latencies finally exceeding DRAM latency for all packet sizes, whether minimum-sized (64 bytes) or MTU (1500 bytes or higher).  <ref type="figure">Figure 1</ref>: Evolution of link speeds and interpacket gaps compared to CPU memory hierarchy latencies. The top region represents the regime where the network was slower than DRAM. In the middle region, networks are faster then DRAM but slower than cache. In the darkest region, minimum sized packets exceed L3 cache latency for all network speeds above 100G.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.3">What are the advantages and barriers?</head><p>Stubbornly slow DRAM latency: With 100G link speeds becoming commodity and 400G on the horizon, the network and architecture community are at a tipping point. 100 Gb/s links transmit minimum sized packets at a rate of one every 5ns while a DRAM access is more than an order of magnitude higher. Even if we consider receive side scaling among a generous allocation of 12 physical cores, the processor would only then have 60ns to process that packet while DRAM latencies are stuck at 100ns. If each packet incurs a cache miss (i.e. a full memory access), queues in the NIC would fill up and packets would drop. While RAM typically supports higher-performance "burst modes", packet data is not a good fit for the spatial locality required to take advantage of burst mode RAM.</p><p>The result of DRAM-based packet drops is increased congestion, a higher number of retransmits, low overall throughput, and a significant hit to application-observed latency. At 400G this becomes a problem even for MTU sized packets, as packet rates in that regime will be transmitted at a rate of once every 30ns.</p><p>PCI Express latency: While RAM latency is approximately 100ns, the latency of arbitrating and crossing the PCI Express bus could be as high as 800ns/round-trip <ref type="bibr" target="#b17">[19]</ref>. Both PCIe and DRAM have one common property, each of them force the CPU to access off-chip data. While both seem like unavoidable hardware issues that systems designers have no leverage over we argue that this is not the case. Considering the NIC as a "peripheral", no different than a mouse or keyboard, is deeply flawed in modern datacenters. Indeed, at 100 Gb/s and 400 Gb/s, the NIC is a major pipe in much the same way that memory bandwidth is a major pipe into and out of the processor. Co-packaging the NIC into the processor itself is likely necessary for realizing the vision of an endhost that can process network traffic at or near the underlying propagation delay of the channel. While a seemingly drastic redesign of modern server architectures, the idea of a NIC integrated with the processor appeared a decade ago as part of Sun Microsystem's Niagra 2 processor <ref type="bibr" target="#b19">[21]</ref>.</p><p>DDIO: Network latencies have moved beyond the DRAM regime into the cache regime. Some techniques exist to help us navigate this new era. Technologies such as DDIO place packet data directly inside LLC cache and bypass DRAM entirely on both writes and reads. This avoids expensive DMAs and allows network stacks to operate directly from cache without needing to perform memory access with each packet transfer. While a good step forward, DDIO suffers from a number of limitations, including its limited use of cache (about 10% of the LLC cache size can be used by DDIO <ref type="bibr" target="#b11">[14]</ref>), as well as the inability to control the placement of data into the LLC using DDIO. This lack of control poses a major problem for holistically managing the cache as a critical resource in supporting ultra-low latency endhosts.</p><p>Datacenter Cost: Higher speed networks require a requisitely larger fraction of cores to spread packet processing tasks across. The higher the core count, the larger the available interpacket gap to tolerate software and hardware inefficiencies. This adds to the TCO of the datacenter as faster links will also require more costs in infrastructure upgrades in the form of a higher physical core count. <ref type="table" target="#tab_2">Table 2</ref> shows total core count needed to achieve line rate if each packet made an access to SRAM versus DRAM at varying speeds. At 400G, line rate packet processing with a single DRAM access will take 79 physical cores. Keeping the data in the L3 cache can reduce this down to 19 cores. This 4x increase in core count also accounts for a 1.5-2x increase in cost based on the available selection of modern Intel Xeon processors <ref type="bibr">[13]</ref>. More control over the L2 and L1 caches can bring this core count down further as the access latencies here are even lower than the L3 cache. Higher link speeds could then be accommodated with no higher core counts than we have today.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.4">How do applications benefit?</head><p>Some network applications have footprints or working sets that fit within the cache. Such applications often set throughput as the primary performance metric with the goal of operating at line rate. These applications include software forwarding and routing <ref type="bibr" target="#b28">[31]</ref>, firewall and network intrusion detection <ref type="bibr" target="#b27">[30]</ref>, and network function virtualization. Such applications essentially process packets through a data structure at line rate, and these data structures can be maintained in cache. <ref type="bibr">Panda et. al.</ref> shows that for a network function performing longest prefix matching (LPM) throughput drops linearly with the number of main memory accesses per packet <ref type="bibr" target="#b23">[25]</ref>. In other cases, components of a larger distributed system act as serialization points, such as high-throughput sequencers in fault-tolerant distributed systems <ref type="bibr" target="#b2">[3]</ref>. In these cases, the throughput of the entire system depends on the throughput of the component.</p><p>Other network applications will benefit from the submicrosecond latencies that CacheCloud can provide. The core of such applications is some form of messaging or remote procedure call which are becoming increasingly common in datacenter applications <ref type="bibr" target="#b3">[4]</ref>. The performance of cache and acceleration systems like memcached also fundamentally depends upon message latency since in essence they are just transporting data with minimal computation. Latency of message exchanges is at the heart of fault-tolerant distributed systems.</p><p>For these applications, it is unlikely that all of their data structures will fit in the cache (e.g., memcached benefits are tied to the capacity of main memory). In these cases, CacheCloud can accelerate the "hot" portion of the workload, whether it is frequently accessed data in memcached, the most common RPC routines, or the core message exchanges in distributed system protocols. In all of these cases applications can benefit greatly from support for explicitly managing where in the memory hierarchy their data resides. 3 Networking General Purpose SRAM:</p><p>The Case for CacheCloud</p><p>As physical and technilogical constraints bring an end to CPU and DRAM latency scaling, we propose one solution to side step these issues: explicitely expose the rest of the memory hierarchy to the programmer. Like main memory, SRAM (used in CPU caches) latencies have also remained constant for years, albeit at two orders of magnitude lower latency than DRAM. While SRAM has two major drawbacks, small sizes and limited control, current hardware trends may allow for the networking of all available general purpose server SRAM for completely incache distributed systems. Inspired by RAMCloud <ref type="bibr" target="#b22">[24]</ref>, we call this SRAM cluster "CacheCloud". The cost per bit for SRAM is two orders of magnitude more than DRAM <ref type="bibr" target="#b5">[6]</ref>. This is an incredibly expensive premium for a resource that users have no explicit control over. In spite of this, cache sizes have constantly grown. <ref type="figure" target="#fig_1">Figure 2</ref> shows a survey of 700 Xeon processors since 1997 and their combined L2+L3 cache sizes. Over the last decade there has been an exponential growth in average cache size of available processors. While SRAM will not replace DRAM for applications in general, we argue that networking all available general purpose server SRAM opens the doors for ultra low-latency and low variance packet processing. For example, if all the caches in a 1000 node cluster can be addressed as a single unit, 100MiB of SRAM turns into 1000GiB of SRAM -something not possible in a single server due to energy, area, and technology constraints.</p><p>To enable networked SRAMs in today's datacenters, general purpose processors must support fine grain software management of traditionally black box hardware policies. This includes control over policies such as cache replacement, consistency and coherence protocols, and prefetching. We have seen some progress on this in recently years. There has been an explosion of ISA extensions for Intel <ref type="bibr" target="#b9">[11]</ref> and ARM <ref type="bibr" target="#b1">[2]</ref> exposing some control over low level policies. Intel processors include instructions for memory prefetching (PREFETCHW), optimized cache flush (CFLUSHOPT), cache partitioning (CAT), and cache line write-back (CLWB). While ARM provides instructions such as data cache invalidate by set/way (DC ISC) and data cache clean by set/way (DC CSW). In addition there has been recent pushes in the architecture community for improving determinism in general purpose memory hierarchies <ref type="bibr" target="#b21">[23]</ref>. For both systems designers and architects this opens the door for new explorations of bespoke hardware policies for network based application. For example, are current hardware prefetchers appropriate for network applications? Can we predict cache misses before they happen and reroute packets into locations where data is resident in cache? Additionally, can we redesign cache replacement policies from being server oriented to cluster oriented without complete hardware specialization?</p><p>We believe that this trend of increasing the control of CPU policies will enable a new class of research focusing on these questions and allow CacheCloud clusters to become a reality.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Challenges and open problems</head><p>A number of open problems remain to fully realize the CacheCloud vision.</p><p>Software Challenges: There are two major software challenges to leverage global cache control: (1) a Distributed Cache Scheduler (DSC), and (2) a progamming API. Enabling a distributed SRAM cluster requires nodes to maintain a global view of the current state of the system and make decisions based on this state. This itself has challenges for maintaining consistency across the cluster and ensuring that data is being placed strategically to avoid going to DRAM. The DSC may be implemented as a traditional cluster scheduler such as Mesos <ref type="bibr" target="#b10">[12]</ref> or Yarn <ref type="bibr" target="#b32">[35]</ref>, or functionality can be pushed to network devices. Systems like Eris <ref type="bibr" target="#b18">[20]</ref> show that programmable switches may be one avenue to maintain global state for consensus while maintaining very high throughput.</p><p>The second, and possibly most important challenge, is programmability. It is an open question about how much of CacheCloud should be exposed to the application developers and how much policy control they should have to take advantage of CacheCloud mechanisms. One question is whether applications must be forced to conform to CacheCloud primitives that explicitly place data in certain cache lines, or whether the burden should fall on the DSC to provide high level guarantees such as maintaining line rate processing for each application on the box.</p><p>Hardware Challenges: Beyond software improvements, the hardware challenges for CacheCloud require collaboration from processor and interconnect vendors. To this end, the systems and architecture communities must work together to decide which hardware components are most appropriate to expose to enable next generation high speed networks. FlexNIC is one proposal that offloads some of the packet processing into the NIC SRAM and steers packets into cores based on coarse grain application level information <ref type="bibr" target="#b15">[17]</ref> but does not provide interface over the end-host cache. There has been work on QoS-aware memory and prefetching systems at the hardware <ref type="bibr" target="#b16">[18,</ref><ref type="bibr" target="#b7">9]</ref> and software level <ref type="bibr" target="#b20">[22,</ref><ref type="bibr" target="#b4">5]</ref> but most require specialized solutions or focus on using cache instructions to perform isolation for noisy neighbors. We observe that in contrast to the architecture community, which is moving towards specialization with devices such as Google's TPU <ref type="bibr" target="#b12">[15]</ref>, the network community with trends such as NFVs and programmable switches and NICs are moving towards flexibility. Closing the performance gap between these flexible solutions and their specialized counter-parts (e.g., hardware middleboxes and NFVs) requires hardware flexibility at all levels, including the end-hosts, to take advantage of programmable network hardware.</p><p>The second major hardware challenge is the PCIe bus. PCIe as a technology is built for batch transfers, not necessarily low latency. Alternative interconnects could help eliminate the latency overhead of this bus. Another option is directly co-packaging the NIC with the processor or exploit near data computing <ref type="bibr" target="#b24">[26]</ref> or in-network computing.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Conclusion</head><p>As network speeds march beyond 400G it presents both an opportunity and a challenge that the network, OS, and architecture community must approach together. High speed links require us to drastically change our view of the memory hierarchy to sustain line rates and obtain low latency. Ultimately, the unbalanced scaling that has plagued systems designers must be reconciled with through hardware, software, and network co-design. To this end, CacheCloud is one proposal that considers such a design. Only with all three components working in lock step will we achieve latencies that truly match the speed of light.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: Total L2+L3 cache (SRAM) available in 700 Xeon processors. Specs from Intel datasheets.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_1" validated="false"><head>Packet Size 100G DRAM 100G L3 400G DRAM 400G L3</head><label></label><figDesc></figDesc><table>64 
+20 
+2 
+79 
+10 
+
+128 
+10 
+1 
+40 
+5 
+
+192 
+7 
+1 
+27 
+4 
+
+256 
+5 
+1 
+20 
+3 
+
+320 
+4 
+1 
+16 
+2 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_2" validated="false"><head>Table 2 :</head><label>2</label><figDesc></figDesc><table>Number of physical cores needed to process pack-
+ets at line rates for 100G and 400G links for a single DRAM 
+access. Compared to a single L3 (SRAM) access, a net-
+work application with just 1 DRAM access require a 4-8x 
+increase in physical core count which translates to a 2-10x 
+increased server cost based on current Intel Xeon SKUs. 
+
+</table></figure>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgments</head><p>We would like to thanks Luis Vega for insightful discussions on this work. This work funded in part by the National Science Foundation (CNS-1564185, CNS-1629973, and CNS-1553490).</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">A scalable, commodity, data center network architecture</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mohammad</forename><surname>Al-Fares</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alex</forename><surname>Loukissas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amin</forename><surname>Vahdat</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM SIGCOMM Conference</title>
+		<meeting>the ACM SIGCOMM Conference<address><addrLine>Seattle, WA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2008-08" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title/>
+	</analytic>
+	<monogr>
+		<title level="j">ARM. ARM Architecture Reference Manual ARMv8</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">CORFU: A Distributed Shared Log</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mahesh</forename><surname>Balakrishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dahlia</forename><surname>Malkhi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><forename type="middle">D</forename><surname>Davis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vijayan</forename><surname>Prabhakaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Wei</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ted</forename><surname>Wobber</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Computer Systems (TOCS)</title>
+		<imprint>
+			<biblScope unit="volume">31</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Attack of the killer microseconds</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Luiz</forename><surname>Barroso</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mike</forename><surname>Marty</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Patterson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Parthasarathy</forename><surname>Ranganathan</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Commun. ACM</title>
+		<imprint>
+			<biblScope unit="volume">60</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="48" to="54" />
+			<date type="published" when="2017-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">A hardware evaluation of cache partitioning to improve utilization and energy-efficiency while preserving responsiveness</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Henry</forename><surname>Cook</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Miquel</forename><surname>Moreto</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sarah</forename><surname>Bird</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Khanh</forename><surname>Dao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><forename type="middle">A</forename><surname>Patterson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Krste</forename><surname>Asanovic</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 40th Annual International Symposium on Computer Architecture, ISCA &apos;13</title>
+		<meeting>the 40th Annual International Symposium on Computer Architecture, ISCA &apos;13<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2013" />
+			<biblScope unit="page" from="308" to="319" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Digi-Key</surname></persName>
+		</author>
+		<ptr target="https://goo.gl/k9oEBW" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<monogr>
+		<title level="m" type="main">Optical trends in the data center</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Doug</forename><surname>Coleman</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Coordinated control of multiple prefetchers in multi-core systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eiman</forename><surname>Ebrahimi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Onur</forename><surname>Mutlu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chang Joo</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yale</forename><forename type="middle">N</forename><surname>Patt</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 42Nd Annual IEEE/ACM International Symposium on Microarchitecture</title>
+		<meeting>the 42Nd Annual IEEE/ACM International Symposium on Microarchitecture<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2009" />
+			<biblScope unit="volume">42</biblScope>
+			<biblScope unit="page" from="316" to="326" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Reevaluating Amdahl&apos;s Law</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><forename type="middle">L</forename><surname>Gustafson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Commun. ACM</title>
+		<imprint>
+			<biblScope unit="volume">31</biblScope>
+			<biblScope unit="issue">5</biblScope>
+			<biblScope unit="page" from="532" to="533" />
+			<date type="published" when="1988-05" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Cache QoS: From concept to reality in the Intel Xeon processor E5-2600 v3 product family</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Herdrich</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Verplanke</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Autee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Illikkal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Gianos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Singhal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Iyer</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2016 IEEE International Symposium on High Performance Computer Architecture (HPCA)</title>
+		<imprint>
+			<date type="published" when="2016-03" />
+			<biblScope unit="page" from="657" to="668" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Mesos: A platform for fine-grained resource sharing in the data center</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Benjamin</forename><surname>Hindman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andy</forename><surname>Konwinski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matei</forename><surname>Zaharia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ali</forename><surname>Ghodsi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Anthony</forename><forename type="middle">D</forename><surname>Joseph</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Randy</forename><surname>Katz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Scott</forename><surname>Shenker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ion</forename><surname>Stoica</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 8th USENIX Conference on Networked Systems Design and Implementation, NSDI&apos;11</title>
+		<meeting>the 8th USENIX Conference on Networked Systems Design and Implementation, NSDI&apos;11<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2011" />
+			<biblScope unit="page" from="295" to="308" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<monogr>
+		<title level="m" type="main">Intel Data Direct I/O technology (Intel DDIO): A Primer</title>
+		<ptr target="http://www.intel.com/content/dam/www/public/us/en/documents/technology-briefs/data-direct-i-o-technology-brief.pdf" />
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+	<note>Intel Corporation</note>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">In-datacenter performance analysis of a tensor processing unit</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Norman</forename><forename type="middle">P</forename><surname>Jouppi</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 44th Annual International Symposium on Computer Architecture, ISCA &apos;17</title>
+		<meeting>the 44th Annual International Symposium on Computer Architecture, ISCA &apos;17<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="1" to="12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Beyond fat-trees without antennae, mirrors, and disco-balls</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Simon</forename><surname>Kassing</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Asaf</forename><surname>Valadarsky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gal</forename><surname>Shahaf</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Schapira</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ankit</forename><surname>Singla</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM SIGCOMM</title>
+		<meeting>the ACM SIGCOMM</meeting>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<monogr>
+				<title level="m">Conference on Applications, Technologies, Architectures, and Protocols for Computer Communication</title>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">High performance packet processing with FlexNIC</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Antoine</forename><surname>Kaufmann</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Simon</forename><surname>Peter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Naveen</forename><surname>Kr</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thomas</forename><surname>Sharma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arvind</forename><surname>Anderson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Krishnamurthy</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Twenty-First International Conference on Architectural Support for Programming Languages and Operating Systems, ASPLOS &apos;16</title>
+		<meeting>the Twenty-First International Conference on Architectural Support for Programming Languages and Operating Systems, ASPLOS &apos;16<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="67" to="81" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<monogr>
+		<title level="m" type="main">DRAM-aware last-level cache writeback: Reducing write-caused interference in memory systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chang Joo</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Veynu</forename><surname>Narasiman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eiman</forename><surname>Ebrahimi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Onur</forename><surname>Mutlu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yale</forename><forename type="middle">N</forename><surname>Patt</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Kvdirect: High-performance in-memory key-value store with programmable NIC</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bojie</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhenyuan</forename><surname>Ruan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wencong</forename><surname>Xiao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yuanwei</forename><surname>Lu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yongqiang</forename><surname>Xiong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrew</forename><surname>Putnam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Enhong</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lintao</forename><surname>Zhang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 26th Symposium on Operating Systems Principles, SOSP &apos;17</title>
+		<meeting>the 26th Symposium on Operating Systems Principles, SOSP &apos;17<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="137" to="152" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Eris: Coordinationfree consistent transactions using in-network concurrency control</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jialin</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ellis</forename><surname>Michael</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dan</forename><forename type="middle">R K</forename><surname>Ports</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 26th Symposium on Operating Systems Principles, SOSP &apos;17</title>
+		<meeting>the 26th Symposium on Operating Systems Principles, SOSP &apos;17<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="104" to="120" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Performance measurement of an integrated NIC architecture with 10GbE</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Liao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Bhuyan</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">17th IEEE Symposium on High Performance Interconnects</title>
+		<imprint>
+			<date type="published" when="2009-08" />
+			<biblScope unit="page" from="52" to="59" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Heracles: Improving resource efficiency at scale</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Lo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Liqun</forename><surname>Cheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rama</forename><surname>Govindaraju</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Christos</forename><surname>Parthasarathy Ranganathan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Kozyrakis</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 42nd Annual International Symposium on Computer Architecture, ISCA &apos;15</title>
+		<meeting>the 42nd Annual International Symposium on Computer Architecture, ISCA &apos;15<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="450" to="462" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<monogr>
+		<title level="m" type="main">Stale data, or how we (mis-)manage modern caches</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mark</forename><surname>Rutland</surname></persName>
+		</author>
+		<ptr target="https://goo.gl/WtwfHk" />
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+	<note>ARM)</note>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">The case for RAMClouds: Scalable high-performance storage entirely in DRAM</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><surname>Ousterhout</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Parag</forename><surname>Agrawal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Erickson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Christos</forename><surname>Kozyrakis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jacob</forename><surname>Leverich</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Subhasish</forename><surname>Davidmazì Eres</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aravind</forename><surname>Mitra</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Guru</forename><surname>Narayanan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mendel</forename><surname>Parulkar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stephen</forename><forename type="middle">M</forename><surname>Rosenblum</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eric</forename><surname>Rumble</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ryan</forename><surname>Stratmann</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Stutsman</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">SIGOPS Oper. Syst. Rev</title>
+		<imprint>
+			<biblScope unit="volume">43</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="92" to="105" />
+			<date type="published" when="2010-01" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Netbricks: Taking the v out of nfv</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aurojit</forename><surname>Panda</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sangjin</forename><surname>Han</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Keon</forename><surname>Jang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Melvin</forename><surname>Walls</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sylvia</forename><surname>Ratnasamy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Scott</forename><surname>Shenker</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 12th USENIX Conference on Operating Systems Design and Implementation, OSDI&apos;16</title>
+		<meeting>the 12th USENIX Conference on Operating Systems Design and Implementation, OSDI&apos;16<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="203" to="216" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">A case for intelligent RAM</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Patterson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thomas</forename><surname>Anderson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Neal</forename><surname>Cardwell</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Richard</forename><surname>Fromm</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kimberly</forename><surname>Keeton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Christoforos</forename><surname>Kozyrakis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Randi</forename><surname>Thomas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Katherine</forename><surname>Yelick</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Micro</title>
+		<imprint>
+			<biblScope unit="volume">17</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="34" to="44" />
+			<date type="published" when="1997-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">Latency lags bandwidth</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><forename type="middle">A</forename><surname>Patterson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Commun. ACM</title>
+		<imprint>
+			<biblScope unit="volume">47</biblScope>
+			<biblScope unit="issue">10</biblScope>
+			<biblScope unit="page" from="71" to="75" />
+			<date type="published" when="2004-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">Netmap: A novel framework for fast packet i/o</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Luigi</forename><surname>Rizzo</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2012 USENIX Conference on Annual Technical Conference, USENIX ATC&apos;12</title>
+		<meeting>the 2012 USENIX Conference on Annual Technical Conference, USENIX ATC&apos;12<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="9" to="9" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<analytic>
+		<title level="a" type="main">Snort -lightweight intrusion detection for networks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Martin</forename><surname>Roesch</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 13th USENIX Conference on System Administration, LISA &apos;99</title>
+		<meeting>the 13th USENIX Conference on System Administration, LISA &apos;99<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="1999" />
+			<biblScope unit="page" from="229" to="238" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Making middleboxes someone else&apos;s problem: Network processing as a cloud service</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Justine</forename><surname>Sherry</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shaddi</forename><surname>Hasan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Colin</forename><surname>Scott</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arvind</forename><surname>Krishnamurthy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sylvia</forename><surname>Ratnasamy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vyas</forename><surname>Sekar</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM SIGCOMM 2012 Conference on Applications, Technologies, Architectures, and Protocols for Computer Communication, SIGCOMM &apos;12</title>
+		<meeting>the ACM SIGCOMM 2012 Conference on Applications, Technologies, Architectures, and Protocols for Computer Communication, SIGCOMM &apos;12<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="13" to="24" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<analytic>
+		<title level="a" type="main">The Internet at the speed of light</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ankit</forename><surname>Singla</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">Brighten</forename><surname>Balakrishnan Chandrasekaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bruce</forename><surname>Godfrey</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Maggs</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 13th ACM Workshop on Hot Topics in Networks, HotNets-XIII</title>
+		<meeting>the 13th ACM Workshop on Hot Topics in Networks, HotNets-XIII<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2014" />
+			<biblScope unit="volume">1</biblScope>
+			<biblScope unit="page" from="1" to="1" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">Jellyfish: Networking Data Centers Randomly</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ankit</forename><surname>Singla</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chi-Yao</forename><surname>Hong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lucian</forename><surname>Popa</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">Brighten</forename><surname>Godfrey</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">9th USENIX Symposium on Networked Systems Design and Implementation (NSDI&apos;12)</title>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<analytic>
+		<title level="a" type="main">Xpander: Towards Optimal-Performance Datacenters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Asaf</forename><surname>Valadarsky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gal</forename><surname>Shahaf</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Dinitz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Schapira</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 12th International on Conference on emerging Networking EXperiments and Technologies (CoNEXT&apos;16)</title>
+		<meeting>the 12th International on Conference on emerging Networking EXperiments and Technologies (CoNEXT&apos;16)</meeting>
+		<imprint>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="205" to="219" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">Apache Hadoop YARN: Yet another resource negotiator</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vinod</forename><forename type="middle">Kumar</forename><surname>Vavilapalli</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arun</forename><forename type="middle">C</forename><surname>Murthy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chris</forename><surname>Douglas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sharad</forename><surname>Agarwal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mahadev</forename><surname>Konar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><surname>Evans</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thomas</forename><surname>Graves</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jason</forename><surname>Lowe</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hitesh</forename><surname>Shah</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Siddharth</forename><surname>Seth</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bikas</forename><surname>Saha</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Carlo</forename><surname>Curino</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O&amp;apos;</forename><surname>Owen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanjay</forename><surname>Malley</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Radia</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 4th Annual Symposium on Cloud Computing, SOCC &apos;13</title>
+		<meeting>the 4th Annual Symposium on Cloud Computing, SOCC &apos;13<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2013" />
+			<biblScope unit="volume">5</biblScope>
+			<biblScope unit="page" from="1" to="5" />
+		</imprint>
+	</monogr>
+	<note>Benjamin Reed, and Eric Baldeschwieler</note>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<monogr>
+		<title level="m" type="main">Verizon marks milestone with successful 400G technology trial</title>
+		<ptr target="https://goo.gl/y54Jaa" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

@@ -1,0 +1,419 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:54+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Parallelization Primitives for Dynamic Sparse Computations</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tsung-Han</forename><surname>Lin</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">Harvard University</orgName>
+								<orgName type="institution" key="instit2">Harvard University</orgName>
+								<orgName type="institution" key="instit3">Harvard University</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stephen</forename><forename type="middle">J</forename><surname>Tarsa</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">Harvard University</orgName>
+								<orgName type="institution" key="instit2">Harvard University</orgName>
+								<orgName type="institution" key="instit3">Harvard University</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">T</forename><surname>Kung</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">Harvard University</orgName>
+								<orgName type="institution" key="instit2">Harvard University</orgName>
+								<orgName type="institution" key="instit3">Harvard University</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Parallelization Primitives for Dynamic Sparse Computations</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>We characterize a general class of algorithms common in machine learning, scientific computing, and signal processing, whose computational dependencies are both sparse, and dynamically defined throughout execution. Existing parallel computing runtimes, like MapReduce and GraphLab, are a poor fit for this class because they assume statically defined dependencies for resource allocation and scheduling decisions. As a result, changing load characteristics and straggling compute units degrade performance significantly. However, we show that the sparsity of computational dependencies and these al-gorithms&apos; natural error tolerance can be exploited to implement a flexible execution model with large efficiency gains, using two simple primitives: selective push-pull and statistical barriers. With reconstruction for com-pressive time-lapse MRI as a motivating application, we deploy a large Orthogonal Matching Pursuit (OMP) computation on Amazon&apos;s EC2 cluster to demonstrate a 19x speedup over current static execution models.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Mainstream applications, including data mining at web scale, unsupervised machine learning, and high performance computing, often require deploying massive parallel computations in shared computing facilities like Amazon's EC2 cluster. Optimizing scheduling and load balancing decisions on these platforms is a challenge because available resources are dynamically constrained by This material is based on research sponsored in part by the Intel Corporation, and by the Air Force Research Laboratory under agreement number FA8750-10-2-0180. The U.S. Government is authorized to reproduce and distribute reprints for Governmental purposes notwithstanding any copyright notation thereon. The views and conclusions contained herein are those of the authors and should not be interpreted as necessarily representing the official policies or endorsements, either expressed or implied, of Air Force Research Laboratory, the U.S. Government, or the Intel Corporation. Orthogonal Matching Pursuit (OMP)</p><p>1.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>2.</head><p>3.  runtime conditions such as fluctuating customer demand, node failures, and network congestion, which can slow workers and cause "stragglers" to occur regularly <ref type="bibr" target="#b0">[1]</ref>. Consequently, parallel programming models like MapReduce <ref type="bibr" target="#b1">[2]</ref> and GraphLab's Gather/Apply/Scatter <ref type="bibr" target="#b2">[3]</ref> are popular. These models enable users to leverage parallelism by abstracting away complicated scheduling, recovery, and load balancing issues. For example, MapReduce exploits data parallelism in two conceptually simple phases, map and reduce, for tasks like data summarization. In contrast, Gather/Apply/Scatter is designed for data with a known graph structure, and capitalizes on subgraph parallelism by processing disjoint vertex neighborhoods concurrently. This latter approach fits algorithms like PageRank on large graphs, where distributed variables are updated in an uncoordinated manner, and parallel asynchronous execution is a natural fit.</p><p>We seek a program abstraction appropriate for parallelizing dynamic sparse computations in machine learning, scientific computing, and signal processing applications. Consider Orthogonal Matching Pursuit (OMP) <ref type="bibr" target="#b3">[4]</ref> as a representative example. OMP solves an underconstrained linear system y = Ax, when the n × 1 vector x has at most k nonzero components, with k n. OMP iterates over three basic stages: This algorithm's dependencies can be expressed with a bipartite graphical model whose vertices represent variables y j and x i , and whose edges have values a i j , as in <ref type="figure" target="#fig_1">Figure 1</ref>. While all variables are used for the matrixvector multiplication in Stage 1, only a subset of these are carried into Stages 2 and 3. As the computation proceeds and OMP's estimate is iteratively refined, the precise set of variables needed by Stage 2 changes, so we say these variables and their dependencies are dynamic.</p><p>This structure, in which an outer loop identifies a small number of important variables, and dependencies to an inner loop are sparse and dynamic, appears in many algorithms, like K-SVD <ref type="bibr" target="#b4">[5]</ref>, CoSaMP <ref type="bibr" target="#b5">[6]</ref>, StOMP <ref type="bibr" target="#b6">[7]</ref>, SMP <ref type="bibr" target="#b7">[8]</ref>, SuPrEM <ref type="bibr" target="#b8">[9]</ref>, etc. The algorithms themselves underlie applications in machine learning and signal processing, like sparse feature extraction for deep learning and hierarchical inference, and compressive sensing signal recovery, respectively. In the former application, A represents an overcomplete dictionary matrix, and in the latter, a compressive sensing measurement matrix. We call attention to the fact that this dynamic sparsity is intrinsic to the algorithm, and is not a property of the application data structure, as in traditional sparse matrix or PageRank computations operating under a static computational model. Both MapReduce and Gather/Apply/Scatter are suboptimal abstractions for dynamic sparse computations. Though only a few values from Stage 1 are needed by Stages 2 and 3, MapReduce asserts dense all-to-all communication between mappers and reducers, and enforces a rigid synchronization barrier on all variables. Similarly, Gather/Apply/Scatter partitions graph edges among workers and assumes a static graph throughout execution, leading to extra work when nodes pull data from their entire neighborhood, instead of the small subset associated with active variables. GraphLab also requires all synchronization barriers to be fully specified at the outset, and, like MapReduce, is not malleable enough for the dynamic dependencies of our algorithms.</p><p>Dynamic sparse computations mandate a more flexible execution model. For instance, an efficient implementation of OMP should compute and synchronize only on those values necessary for computation. This is difficult when the identities of these variables are unknown at the outset. However, we will exploit both the limited number of active variables, and the natural error tolerance of iterative sparse estimations, to implement a flexible execution model.</p><p>We accomplish this using two simple primitives: selective push-pull and statistical barriers. Selective pushpull isolates computations to active variables involved in the inner loop by using a vertex-initiated "ping-pong" execution flow, eliminating the need to track active dynamic edge sets. Meanwhile, statistical barriers use a statistical metric to relax synchronization requirements. They exploit the fact that a large fraction of task completion (e.g., in OMP Stage 1) is often sufficient to capture k of n important values, when k n. Should a value be missed in one iteration of the algorithm, it can be picked up in subsequent iterations. These two primitives work together to dynamically focus computations on small portions of a much larger, densely connected dependency graph, realizing major efficiency gains.</p><p>With reconstruction of compressive time-lapse MRI images as a motivating application, we extend GraphLab to implement selective push-pull, deploy a large OMP computation on Amazon's EC2 cluster, and demonstrate a 19x speedup over the current static runtime system. We then use an event-driven simulation and straggler statistics from the literature to show that statistical barriers improve both average and worst case computation times, despite the possibility of additional OMP iterations. Finally, we use our EC2 implementation to scale previous OMP-based image reconstruction for compressive timelapse MRI applications with additional processors. This paper is organized as follows: in Section 2, we review GraphLab and MapReduce; Section 3 presents our motivating application, compressive-sensing based timelapse MRI reconstruction; Section 4 discusses our strategy for parallelizing sparse estimation algorithms and describes the two supporting primitives; finally, Section 5 presents performance results.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Review of Parallel Program Abstractions</head><p>To provide background information on parallel programming abstractions, we first consider two popular examples.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">GraphLab</head><p>GraphLab consists of both a low level runtime system for distributing and executing parallel jobs, and a high level program abstraction called Gather/Apply/Scatter. The runtime provides interfaces for loading, distributing, and computing on data with a static graph structure, and uses MPI for inter-processor communication.</p><p>Users define generic "vertex programs" that are bound to each vertex, which implement Gather/Apply/Scatter. At initialization, GraphLab first constructs a graph and associates input data values with vertices and edges. Then, the edge set is partitioned, and edge and vertex data is distributed to workers, where it is held in main memory. Partitioning the edge set load-balances operations in dense vertex neighborhoods, but means that vertices can be "split" when their edge sets are spread across workers. When this happens, workers running a vetex program will compute partial results using their local edge sets, and the runtime system will merge and synchronize values. Throughout, computation is driven forward by signaling vertex programs to execute Gather/-Apply/Scatter, while distributed locks ensure that one vertex per neighborhood executes at a time.</p><p>Gather/Apply/Scatter's three phases proceed as follows: a vertex program gathers, or pulls values from its neighbors, then applies an update to its local value, and finally signals neighbors to begin execution, scattering the computation. Subgraph parallelism is realized when vertex programs in different neighborhoods execute concurrently. The gather phase pulls values toward the active vertex, as opposed to pushing them from neighbor vertices, as a straightforward way to assert that all updates are received before the apply phase.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">MapReduce</head><p>MapReduce is another popular program abstraction for parallelization, supported primarily by the Hadoop MapReduce distribution, and also by GraphLab. The map phase organizes inputs into key/value pairs using multiple parallel mappers. The reduce phase computes on sets of values in a key-parallel fashion. All-to-all communication occurs between mappers and reducers.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.3">Execution Models</head><p>Both abstractions assume statically defined variables and dependencies. In the case of MapReduce, a dependency graph is implied by the arrangement of mappers and reducers: mappers are independent of each other, as are reducers, and dependencies exists from all mappers to all reducers. For GraphLab, the graph is also static, but is user-defined, based on known interrelationships in input data.</p><p>Both abstractions allow limited synchronization flexibility in their execution models. MapReduce assumes that full synchronization is needed between map and reduce stages, and requires all mappers to check in at a barrier. GraphLab provides three modes: fully synchronous, fully asynchronous, and partially asynchronous (i.e. "asynchronous serializable" in GraphLab terminology). This allows users to impose barriers on all, none, or subsets of vertices, but requires that these choices be made prior to execution. To respond to runtime conditions that cause stragglers, both systems provision additional idle machines to recompute straggling tasks.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Motivating Application Scenario: OMP for Compressive Time-Lapse MRI</head><p>Our application vehicle is image reconstruction for compressive time-lapse MRI <ref type="bibr" target="#b9">[10]</ref>, a technique that applies compressive sensing theory to reduce sampling rates during clinical image acquisition. Results include finer temporal resolution for time-lapse MRI scans <ref type="bibr" target="#b10">[11]</ref>, and lower procedure time for patients <ref type="bibr" target="#b11">[12]</ref>. After acquisition, full resolution images are reconstructed using a compressive sensing decoding algorithm such as OMP. In the past, researchers have pursued faster decoding in this specific context to yield more "clinically useful" patient procedures <ref type="bibr" target="#b11">[12]</ref>, so we adopt the goal of reducing decoding time in this work. In Section 5.2, we use signal dimensions and sampling rates from data in <ref type="bibr" target="#b10">[11]</ref> to compare results. OMP's formula is shown in <ref type="figure" target="#fig_1">Figure 1</ref>. The algorithm solves the minimization:</p><formula xml:id="formula_0">min y − Ax 2 s.t. x| 0 ≤ k</formula><p>where y is an m × 1 measurement vector, A an m × n measurement matrix, and x a sparse signal vector with at most k non-zero entries. OMP iteratively refines an estimate of x's support to reduce residual error, terminating after satisfying an error threshold or exceeding an iteration cap. OMP's original form greedily selects one component per iteration over exactly k iterations. It has since generalized, e.g., in <ref type="bibr" target="#b5">[6]</ref>, to select and update multiple components per iteration. In this paper, we use "OMP" to refer to this more-general form. As noted perviously, OMP's outer loop computes matrix-vector multiplications, and its inner loop computes least squares solutions for the support set; this structure, where an inner loop computes on a small set of variables dynamically selected by an outer loop is also present in <ref type="bibr" target="#b6">[7]</ref>, <ref type="bibr" target="#b7">[8]</ref>, <ref type="bibr" target="#b8">[9]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Dynamical Primitives</head><p>We use two primitives that work together to focus computations on dynamically determined subgraphs of our  <ref type="figure">Figure 2</ref>: An illustration of selective push-pull, which excludes inactive variables and performs computations only on a selected subgraph (denoted by solid arrows and bolded nodes) to minimize unnecessary work. This primitive is equivalent to three rounds of the Gather/Apply/Scatter abstraction of GraphLab, with an additional "self-signaling" phase.</p><p>algorithms' full dependency graphs. In the outer computational loop, where nonzero variables are identified, statistical barriers drive execution forward when a portion of tasks reach the barrier. Synchronization is based on a statistical criterion, such as percent completed, that captures when those few important values are likely to have been computed. In the inner loop, where computation involves only these selected variables, we use selective push-pull to dynamically compute on the associated subgraph.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">Selective Push-Pull</head><p>Selective push-pull constrains computation to a subgraph associated with k active vertices from the original set of n vertices, temporarily eliminating the other n − k inactive vertices. During computation, subsets of variables are activated by comparing their values to some criterion, such as a threshold that is predefined or broadcast by a master machine. For OMP, we use this latter method, and update the threshold to be the vertex value of the k th largest x i . Selective push-pull is a general primitive that can naturally express commonly-applied "ping-pong" operations over bipartite graphs. In these operations, computations flow from one side of the bipartite graph to the other, and then back. For instance, referring to <ref type="figure">Figure 2</ref>, selective push-pull is used to implement two matrix-vector multiplications, computing i + 1 st iterates of vectors x and y: y (i+1) = Ax (i) and x (i+1) = A T y (i+1) , with the entries of matrix A as edge values. The primitive is initiated on the x i denoted in red. For every connected edge, an x i multiplies its vertex value with the edge value, and sends the result to neighbors y j . The y j 's will then sum received products and use the result to update their vertex values. Finally, x i 's pull in neighbors' values, multiplying them by the associated edge values. Using this simple primitive, the entire conjugate gradient least squares method can be expressed, which implements OMP's inner loop.</p><p>Runtime efficiency of dynamic subgraph selection is improved using selective push-pull because it does not functionally require edge selection in the graph. Under the normal Gather/Apply/Scatter model, a "pull"-only paradigm, dynamic subgraph selection must index active connected edges for every y i vertex. This solution is not scalable to large graphs due to storage and computation costs. The key idea of selective push-pull is to avoid initiating edge computations from the y i , so y i 's do not need to maintain and compare against lists of activated x i 's.</p><p>We implement selective push-pull on top of GraphLab with only minimal modifications. A selective push-pull can itself be expressed with three rounds of Gather/-Apply/Scatter, as shown in <ref type="figure">Figure 2</ref>. The first round executes on the x i 's, where Gather and Apply are passthrough functions, and Scatter is used to push a value to y j 's and signal them for execution. The second round executes on y j 's, where Apply is used to update the vertex value based on pushed values, while Gather and Scatter are passthrough functions. In the third round, x i 's execute normally, pulling values from y j 's to update their vertex values using Gather and Apply. Our implementation uses barrier synchronization to guarantee the execution order of the three rounds, and the only modification to GraphLab is to allow the x i 's to schedule themselves for the third round, at the end of the first round. We therefore add a "self-signaling" phase into the programming abstraction after Scatter.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Statistical Barriers</head><p>To optimally implement dynamic sparse computations, we need a flexible synchronization method that imposes barriers on subsets of variables, as determined during computation. We implement this model by introducing a statistical barrier primitive that synchronizes on a dynamic subset of variables at the barrier, as determined by some statistical metric. This primitive, for instance, can require that a user-defined portion (e.g., 90%) of tasks complete for execution to continue, imposing synchronization in a statistical sense. Fully synchronous and fully asynchronous execution can be implemented with special cases of the statistical barrier, using threshold values of 100% and 0% of tasks, respectively.</p><p>Our use of statistical barriers exploits iterative sparse estimations' partial resilience to out-of-order execution. When the portion of completed tasks specified by the barrier is enough to capture all active variables, correct execution order is realized; when some values are erroneously excluded, errors can be corrected in subsequent iterations of the algorithm. For example, after the OMP Stage 1 outer loop, the estimated signal can be refined using an incomplete list of nonzero components. The OMP computation will have another chance to capture left-out components in later iterations. Therefore, provided no component is systematically excluded from computation, a statistical guarantee is sufficient for proper execution order, though the total number of iterations may increase to meet the same accuracy objective. This statistical barrier primitive is similar in some aspects to early phase termination <ref type="bibr" target="#b12">[13]</ref>, an optimization technique used to increase overall utilization during parallel computations. If a set of parallelizable tasks is mismatched to the number of processors, early phase termination abandons unfinished tasks when utilization drops below a threshold. Idle time is reduced, as is the total amount of computation performed, and profiling ensures that induced errors are within acceptable limits. Though sharing the same objective of sacrificing some computations to improve overall efficiency, our primitive is used to realize asynchronous execution when precise dependencies are unavailable to the scheduler, but sparsity and error tolerance can be exploited to capture them statistically.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Experiments and Results</head><p>We deploy our modified GraphLab runtime on Amazon's EC2 cluster <ref type="bibr">[14]</ref> to evaluate the performance of our execution model. Selective push-pull is fully implemented, and we measure performance on several large OMP computations as the number of machines is scaled. Statistical barriers require more significant modifications to the GraphLab runtime, so we emulate performance by combining timing measurements from EC2 with straggler statistics reported in the literature, in an event-driven simulation. Completion time is computed by implementing OMP, while omitting results from straggling tasks according to the simulated barrier criterion. The EC2 cloud is a representative data center, from which computing resources can be leased on-demand. Each EC2 instance in our configuration is a 64-bit virtual machine providing one 1.0 GHz core to GraphLab, with 7.5 GB of memory per virtual machine, and a 500 Mbps ethernet link connecting instances. Instances can be requested within a specific geographic region, though physical node location is transparent to the user.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1">Selective Push-Pull</head><p>Figures 3 and 4 compare the running time of OMP's least squares inner loop using both selective push-pull and a baseline static GraphLab runtime, as the number of processors is scaled from 1 to 8. We vary the input signal size from n = 10, 000 to 500, 000, while keeping m = 200 and k = 40 constant throughout experiments. This means that the number of active x i 's is always 40, and the least squares problem has the same size regardless of the input signal size n. This relationship is true to sparse coding used in feature extraction, and in compressive sensing recovery, wherein k and n are generally independent parameters.</p><p>With GraphLab's static graph, the computation time for the inner loop grows linearly with n due to the growth in graph size. Although completion time can be reduced by using multiple machines, it is still a function of n. As shown in <ref type="figure" target="#fig_3">Figure 3</ref>, the computation spans 181 seconds on 8 machines for n = 500, 000. In contrast, with selective push-pull, the computation is focused on a much smaller set of active variables. As shown in <ref type="figure" target="#fig_4">Figure 4</ref>, it takes less than 2 seconds to complete, and the running time is constant relative to n. This shows that selective pushpull succeeds in only triggering necessary computation, and can be essential for large scale sparse computation problems.</p><p>In <ref type="figure" target="#fig_4">Figure 4</ref>, we note that the inner loop computation time is higher when we use more machines in this case, because inter-machine communication cost dominates. Since communication overheads may vary greatly on EC2, we also see a bump for the 8-machine curve at n = 100, 000. This suggests that, for problem sizes where selective push-pull drastically reduces the amount of computation, the inner loop should be migrated to a smaller number of machines. For simplicity in the experiments reported in this paper, we kept the same number of machines, despite a minor performance hit. <ref type="figure" target="#fig_5">Figure 5</ref> shows the time to compute a full iteration of OMP for n = 500, 000. With selective push-pull, the inner loop cost is greatly reduced. As a result, the outer loop computation, which involves all variables, dominates. This means that computation time is decreased as the number of machines increases. Overall, selective push-pull improves our baseline GraphLab implementation with a static graph structure by 19x on 8 machines.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2">Evaluation for Compressive MRI</head><p>Next, we compare our GraphLab implementation of OMP with selective push-pull enabled, to the results reported for compressive time-lapse MRI in <ref type="bibr" target="#b10">[11]</ref>. With dimensions n = 35, 000, m = 7000, and k = 2333, we report a decoding time of 334s using 8 × 1.0 GHz cores. This compares to previous results of 534s on a dual-core 2.4 GHz processor. Though we use more compute cores, <ref type="figure" target="#fig_5">Figure 5</ref> shows that we can scale the computation to further reduce reconstruction time, possibly by leasing additional virtual machines on-demand. This contrasts with the implementation of <ref type="bibr" target="#b10">[11]</ref>, which is limited by the performance of a single platform.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.3">Statistical Barriers</head><p>Finally, using an event-driven simulation and the straggler statistics reported from a year's worth of MapRe- Figure 6: Completion times for n = 10, 000, m = 200 OMP using statistical barriers that require p% of tasks to complete. By trimming stragglers without invoking many additional iterations, a p = 95% statistical barrier saves 2.5x time at the median, and 4x in the worst case.</p><p>duce tasks in a production data center <ref type="bibr" target="#b0">[1]</ref>, we evaluate statistical barrier performance. We run a large number of OMP computations to termination based on a fixed accuracy criterion (residual ≤ 0.01). During each iteration, a statistical barrier is used to push the outer loop computation forward once a user-specified percentage of x i 's have completed. We measure overall completion time, which includes savings from straggler mitigation, as well as costs due to possible additional OMP iterations.</p><p>In <ref type="bibr" target="#b0">[1]</ref>, researchers report 25% of all parallel computations experiencing a high proportion (15+%) of straggling tasks, defined as 1.5x median completion time. Of these stragglers, 80% complete in 2.5x the median, while 10% require more than 10x median completion time, showing just how bad the straggler problem can be in the wild. Using these statistics, we fit the median completion time to that measured on a single EC2 instance. Maximum completion time is capped to 15x the median, and we adopt a pessimistic rate of 30% computations affected by stragglers. Tasks are assigned to w = 10 machines, and are load balanced. We assign the slowest tasks to a single machine. This not only makes the gains from statistical barriers easily understood, but reflects slowdowns that cause machine-specific performance anomalies, such as location-related network delays. Finally, we randomize task execution order so that the computation is not systematically biased. <ref type="figure">Figure 6</ref> shows the empirical cumulative distribution functions (CDFs) of OMP completion times using statistical barriers requiring p = 75%, 90%, or 100% tasks to complete for an outer-loop computation size of n = 100, 000, and k = 40. All computations achieve the same decoding accuracy, though some require more iterations as a result of the statistical barrier. The baseline method uses a rigid barrier (p = 100%) and has a median completion time of 17s, roughly matching the 16s completion time observed using 8 machines on EC2. However, stragglers hurt, and slow the OMP computation by 10x in the worst case. In comparison, both statistical barriers have better median completion times of 6 seconds.</p><p>We see the effect of extra iterations with the aggressive p = 75% barrier, which performs worse in general than the p = 95% barrier, due to extra computations. However, by trimming the worst stragglers, the 95% barrier realizes a 2.5x improvement in the average completion time, and a 4x improvement in the worst case. This simulation shows that, when a small number of stragglers affect the computation, most of the gains from statistical barriers can be captured by setting p to a large value such as p = 90%.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Conclusion</head><p>In this paper, we describe a class of iterative algorithms, which exhibit a sparse set of active variables and dependencies during computation. We showed that this class is suboptimally served by current programming abstractions, whose assumptions of statically defined variables and dependencies lead to a huge performance hit. Exploiting the dynamic sparse structures in these algorithms, we defined two new primitives -selective pushpull, and statistical barriers -that work together to regain lost efficiency by implementing a flexible execution model. Performance gains were then demonstrated in bipartite graphs of practical importance. Although these primitives were described in this paper for this specific class of computations, we believe that they will prove useful to a wider range of applications in which efficiency can be gained by dynamic, sparse graph computations, or by optimistic straggler mitigation.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: Orthogonal Matching Pursuit (OMP) is an iterative algorithm whose computational dependencies are bipartite, sparse, and dynamically determined throughout execution. As indicated by the red lines, only a subset of variables x i computed by Stage 1's matrix multiply are used in the least squares and residual calculations of Stages 2 and 3. In this illustration, these active variables have indices 2, 4, and 6.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Stage 1 (</head><label>1</label><figDesc>Outer loop) Find potential nonzero components in the current iterate x, by computing correlations between the columns of an m × n measurement matrix A = (a i j ) and the associated residual vector y − Ax. Stage 2 (Inner loop) Select the largest k components in x found by Stage 1, exclude others, and estimate x by least squares from the resulting over-constrained system. Stage 3 (Update) Compute the new residual using the esti- mated x; Iterate.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: Computation time of OMP's inner loop under Gather/Apply/-Scatter based on a static graph, measured as the number of machines on EC2 is scaled from 1 to 8, for different problem sizes. Running time scales with the graph size, reaching 181 seconds for 8 machines when n = 500, 000.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_4"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: Computation time for OMP's inner loop using selective pushpull, measured as the number of EC2 machines is scaled from 1 to 8, for different problem sizes. Running time scales with the number of active variables, which is constant in the experiment, independent of graph size n.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_5"><head>Figure 5 :</head><label>5</label><figDesc>Figure 5: The computation time for running a full iteration of OMP when n = 500, 000. With selective push-pull, the computations are focused on active variables, therefore outperforming the baseline GraphLab implementation, which assumes a static graph structure.</figDesc></figure>
+		</body>
+		<back>
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">Reining in the outliers in map-reduce clusters using mantri</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Ananthanarayanan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Kandula</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Greenberg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Stoica</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Lu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Saha</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Harris</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 9th USENIX conference on operating systems design and implementation (OSDI&apos;10)</title>
+		<meeting>the 9th USENIX conference on operating systems design and implementation (OSDI&apos;10)</meeting>
+		<imprint>
+			<publisher>USENIX</publisher>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Mapreduce: simplified data processing on large clusters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Dean</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Ghemawat</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Communications of the ACM</title>
+		<imprint>
+			<biblScope unit="volume">51</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="107" to="113" />
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">Powergraph: Distributed graph-parallel computation on natural graphs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">E</forename><surname>Gonzalez</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Low</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Gu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Bickson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Guestrin</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 10th USENIX conference on operating systems design and implementation (OSDI&apos;12)</title>
+		<meeting>the 10th USENIX conference on operating systems design and implementation (OSDI&apos;12)</meeting>
+		<imprint>
+			<publisher>USENIX</publisher>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Greed is good: Algorithmic results for sparse approximation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">A</forename><surname>Tropp</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Transactions on Information Theory</title>
+		<imprint>
+			<biblScope unit="volume">50</biblScope>
+			<biblScope unit="issue">10</biblScope>
+			<biblScope unit="page" from="2231" to="2242" />
+			<date type="published" when="2004" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Image denoising via sparse and redundant representations over learned dictionaries</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Elad</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Aharon</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Transactions on Image Processing</title>
+		<imprint>
+			<biblScope unit="volume">15</biblScope>
+			<biblScope unit="issue">12</biblScope>
+			<biblScope unit="page" from="3736" to="3745" />
+			<date type="published" when="2006" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title level="m" type="main">CoSaMP: Iterative signal recovery from incomplete and inaccurate samples</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Needell</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">A</forename><surname>Tropp</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2009" />
+			<biblScope unit="volume">26</biblScope>
+			<biblScope unit="page" from="301" to="321" />
+		</imprint>
+	</monogr>
+	<note>Applied and Computational Harmonic Analysis</note>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Sparse solution of underdetermined linear equations by stagewise orthogonal matching pursuit</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">L</forename><surname>Donoho</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Tsaig</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Drori</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J.-L</forename><surname>Starck</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Transactions on Information Theory</title>
+		<imprint>
+			<biblScope unit="volume">58</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="1094" to="1121" />
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Near-optimal sparse recovery in the l1 norm</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Indyk</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Ruzic</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">IEEE 49th Annual Symposium on Foundations of Computer Science (FOCS&apos;08)</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2008" />
+			<biblScope unit="page" from="199" to="207" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">A coding theory approach to noisy compressive sensing using low density frames</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Akcakaya</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Park</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Tarokh</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Transactions on Signal Processing</title>
+		<imprint>
+			<biblScope unit="volume">59</biblScope>
+			<biblScope unit="issue">11</biblScope>
+			<biblScope unit="page" from="5369" to="5379" />
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Sparse MRI: The application of compressed sensing for rapid mr imaging</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Lustig</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Donoho</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">M</forename><surname>Pauly</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Magnetic Resonance in Medicine</title>
+		<imprint>
+			<biblScope unit="volume">58</biblScope>
+			<biblScope unit="issue">6</biblScope>
+			<biblScope unit="page" from="1182" to="1195" />
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">A computationally efficient OMP-based compressed sensing reconstruction for dynamic MRI</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Usman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Prieto</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Odille</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Atkinson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Schaeffter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Batchelor</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Physics in Medicine and Biology</title>
+		<imprint>
+			<biblScope unit="volume">56</biblScope>
+			<biblScope unit="issue">7</biblScope>
+			<biblScope unit="page">99</biblScope>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Practical parallel imaging compressed sensing mri: Summary of two years of experience in accelerating body mri of pediatric patients</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Vasanawala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Murphy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Alley</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Lai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Keutzer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Pauly</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Lustig</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2011 IEEE International Symposium on Biomedical Imaging: From Nano to Macro</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2011" />
+			<biblScope unit="page" from="1039" to="1043" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Using early phase termination to eliminate load imbalances at barrier synchronization points</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">C</forename><surname>Rinard</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM SIGPLAN Notices</title>
+		<imprint>
+			<biblScope unit="volume">42</biblScope>
+			<biblScope unit="page" from="369" to="386" />
+			<date type="published" when="2007" />
+			<publisher>ACM</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

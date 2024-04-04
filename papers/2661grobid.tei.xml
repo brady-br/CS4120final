@@ -1,0 +1,1531 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:49+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Optimizing Network Performance in Distributed Machine Learning</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Luo</forename><surname>Mai</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">Imperial College London</orgName>
+								<orgName type="institution" key="instit2">Microsoft Research</orgName>
+								<orgName type="institution" key="instit3">Microsoft Research</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chuntao</forename><surname>Hong</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">Imperial College London</orgName>
+								<orgName type="institution" key="instit2">Microsoft Research</orgName>
+								<orgName type="institution" key="instit3">Microsoft Research</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Paolo</forename><surname>Costa</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">Imperial College London</orgName>
+								<orgName type="institution" key="instit2">Microsoft Research</orgName>
+								<orgName type="institution" key="instit3">Microsoft Research</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Optimizing Network Performance in Distributed Machine Learning</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>To cope with the ever growing availability of training data, there have been several proposals to scale machine learning computation beyond a single server and distribute it across a cluster. While this enables reducing the training time, the observed speed up is often limited by network bottlenecks. To address this, we design MLNET, a host-based communication layer that aims to improve the network performance of distributed machine learning systems. This is achieved through a combination of traffic reduction techniques (to diminish network load in the core and at the edges) and traffic management (to reduce average training time). A key feature of MLNET is its compatibility with existing hardware and software infrastructure so it can be immediately deployed. We describe the main techniques underpinning ML-NET and show through simulation that the overall training time can be reduced by up to 78%. While preliminary , our results indicate the critical role played by the network and the benefits of introducing a new communication layer to increase the performance of distributed machine learning systems.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Over the last decade, machine learning has witnessed an increasing wave of popularity across several domains, including web search, image and speech recognition, text processing, gaming, and health care. A key factor causing this trend is the availability of large amounts of data that can be used for training purposes. This has led to the appearance of several proposals aiming at scaling out the computation by distributing it across many servers <ref type="bibr" target="#b0">[1,</ref><ref type="bibr" target="#b12">13,</ref><ref type="bibr" target="#b15">16,</ref><ref type="bibr" target="#b23">24,</ref><ref type="bibr" target="#b33">34,</ref><ref type="bibr" target="#b34">35]</ref>.</p><p>Typically, these systems adopt an approach referred to as data parallelism <ref type="bibr" target="#b15">[16]</ref>. Rather than training a single model with all the available input data, they replicate the model across many servers and feed each replica with a subset of the input data. Since the model replicas are trained using different input data, their model parameters will typically diverge. To reconcile these parameters and ensure that all model replicas eventually converge, each replica periodically pushes its set of parameter values to a centralized server, called the parameter server <ref type="bibr" target="#b23">[24]</ref>. The latter aggregates all the received updates for each parameter (e.g., by averaging them) and then sends back to all replicas the newly computed set of values, which will be used at the beginning of the next iteration. As the total numbers of parameters can be very high (up to 10 12 <ref type="bibr" target="#b8">[9]</ref>), multiple parameter servers are used, with each one being responsible for a subset of the parameters.</p><p>A major challenge of this approach is the high communication cost. Model replicas must frequently read and write global shared parameters. This generates a large amount of network traffic and, due to the sequential nature of many of the machine learning algorithms used, it may also stall the computation if the synchronization latency is high. Therefore, the network is often regarded as one of the main bottlenecks for distributed machine learning systems <ref type="bibr" target="#b12">[13,</ref><ref type="bibr" target="#b15">16,</ref><ref type="bibr" target="#b24">25]</ref>. To alleviate this issue, these systems are often deployed on high-performance network fabrics such as Infiniband or RoCE <ref type="bibr" target="#b12">[13,</ref><ref type="bibr" target="#b22">23]</ref>, while others have proposed to trade-off algorithm training efficiency for system performance by introducing asynchronous communication <ref type="bibr" target="#b9">[10,</ref><ref type="bibr" target="#b23">24]</ref>, thus removing some of the barriers. Unfortunately, neither of these approaches is completely satisfactory as the former significantly increases infrastructure costs while the latter reduces overall training efficiency.</p><p>In this paper, we explore a different yet complementary point of the design space. We argue that network bottlenecks can be greatly reduced through a customized communication layer. To demonstrate this, we designed MLNET, a novel communication layer for distributed machine learning. MLNET uses tree-based overlays to implement distributed aggregation and multicast and reduce network traffic, and relies on traffic control and prioritization to improve average training time.</p><p>A key constraint underlying our design is that we wanted MLNET to be a drop-in solution for existing machine learning deployments. Therefore, we implemented MLNET as a user-space process running on hosts without requiring any changes in the networking hardware, in the OS stack, or in the training algorithm code. Further, by sitting in between workers and parameter servers, it decouples these two classes of servers, enabling scaling each one independently and efficiently masking network and server failures. We evaluate its effectiveness in Section 4 by means of large-scale simulations with 800 servers and 50 to 400 parameter servers. The results show that MLNET reduces the training time by a factor of up to 5x.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Background</head><p>In this section, we provide a brief introduction to machine learning, motivate the need for its distributed execution, and discuss the use of parameter servers for scaling distributed machine learning.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">Machine Learning</head><p>The goal of a machine learning algorithm is to construct a prediction model that extracts useful knowledge from training data, and uses it to make inferences about future arrival data. This can be formalized as an optimization problem: Given a set of training data X, it tries to find a model W that minimizes the error of a prediction function F(X,W ). Typically, a machine learning algorithm approaches this problem iteratively, starting from a randomly generated W and then refining its solution gradually as more and more data are processed.</p><p>Complex models are usually able to capture the knowledge hidden in training data. To an extreme, a sufficiently complex model can "memorize" all the information contained in the data. In this case, it can give the correct prediction for any sample it has seen before, but may perform poorly for unseen samples. This is called over-fitting: a model fits its training data well, but does not generalize to others. This is why a large amount of training data is necessary for machine learning. By using more data, a model can generalize sufficiently, reducing the risk of over-fitting.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">Distributed Machine Learning</head><p>As the size of training data can significantly affect prediction accuracy, it has become common practice to train models with large datasets. To speedup these training tasks, they are often distributed across many servers.</p><p>In a distributed setting, a server iteratively refines a shared model by learning from a local data partition, and periodically synchronizes this model with the other servers. More specifically, after each iteration, it calculates a refinement ∆W i to the model W . To make sure that all servers eventually converge to the same model, they can synchronize every iteration, every n iterations, or completely asynchronously. When machine learning algorithms are implemented on traditional distributed platforms such as Hadoop <ref type="bibr" target="#b37">[38]</ref> or Spark <ref type="bibr" target="#b38">[39]</ref>, servers have to synchronize every iteration. This requires placing a barrier at the end of a iteration, incurring increasing overhead as the system scales.</p><p>Parameter Server <ref type="bibr" target="#b23">[24]</ref> is another approach to implement synchronization in distributed machine learning. It outperforms the aforementioned platforms thanks to domain-specific engineering and algorithmic optimizations. In this approach, a set of servers act as parameter servers that store the model W . The other servers process the training data and act as workers. After ∆W i are calculated, workers do not communicate with each other directly, but push ∆W i to the parameter servers and then pull a new W to be used in the next iteration. By tuning push/pull frequencies, programmers can balance the training efficiency and system performance. For example, in the Stale Synchronous Parallel (SSP) model <ref type="bibr" target="#b11">[12,</ref><ref type="bibr" target="#b14">15]</ref>, workers are allowed to cache W and use it in the next iteration while sending the ∆W i of the previous iteration to servers, as long as the cached version is within a staleness threshold s. In this way, communication can be overlapped with computation. Nevertheless, as workers still have to periodically synchronize the model, the network can quickly become a bottleneck. In the next section we show how MLNET can alleviate this problem using a customized communication layer.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">MLNET Design</head><p>We begin the section by describing the MLNET architecture and then we show how this makes it easy to implement our two techniques to optimize network performance, namely traffic reduction and traffic prioritization. While we believe that this is a contribution per se, we also see this a first step towards a deeper rethinking of the network design for distributed machine learning. We will elaborate on this point in Section 5.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Architecture</head><p>MLNET is a communication layer, running as a local process on workers and parameter servers, similar to Facebook mcrouter setup <ref type="bibr" target="#b29">[30]</ref>. These local processes behave like proxy, intercepting all exchanges between workers and parameter servers. To push training results, a worker initiates a normal TCP connection to a parameter server that is actually emulated by a local MLNET process. Regardless of the actual numbers of parameter servers and workers, MLNET maintains a single parameter server abstraction to workers, and symmetrically a single worker abstraction to parameter servers. This design decouples workers and parameter servers and allows them to scale in and out independently. Further, it makes it easy to change the communication logic, e.g., to which server and when send the traffic to, without requiring modifications in the worker's or parameter server's code.</p><p>To achieve transparency w.r.t. both workers and parameter servers, MLNET inherits the standard communication APIs from the Parameter Server <ref type="bibr" target="#b23">[24]</ref> where data is sent between nodes using push and pull operations:</p><p>• weights = pull(modelId, staleness): Pull the weights of a model within a staleness gap.</p><p>• push(modelId, gradients): Push the gradients of the weights of a model. • clock(): Increment the clock of a worker process. We give an example of using this interface. The training of a shared model consists of multiple iterations. At the end of an iteration, a worker pushes the newly calculated gradients of model weights to a parameter server and increases its local clock c worker by calling clock(). The parameter server aggregates all pushes to update model weights and maintains a vector of the clocks of all workers. A model clock c model is defined as the minimum worker clock in the vector. To start the next iteration, the worker then pulls the model weights that have to be within a staleness threshold s (see Section 2.2) by checking if c model ≥ c worker − s.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Distributed Aggregation and Multicast</head><p>The push and pull phases are the primary sources of network traffic in distributed machine learning. In the push phase, workers send the gradients of model weights to parameter servers, while in the pull phase they receive the new weights generated after aggregating the gradients from all model replicas. These two operations can generate high congestion at servers and, if the network fabric is over-subscribed, in the core of the network too.</p><p>Adding more parameter servers would reduce the edge congestion by spreading the traffic (albeit at the expenses of increasing the overall server count) but it is of little help to reduce congestion in the core. We propose, instead, a different yet complementary approach that aims at reducing, rather than simply re-routing, network traffic by exploiting its domain-specific characteristics. Aggregation and multicast tree. The aggregation functions used by parameter servers are typically associative and commutative, e.g., an average function is often used. This means that gradients can be aggregated incrementally and the final result is still correct. We leverage this property to reduce traffic during the push phase. For each parameter server, MLNET uses it as the root and builds a spanning tree connecting all workers. The workers in the leaves send gradients to their parent nodes. The latter aggregate all received gradients and push the results upstream towards the root where the last step of aggregation is performed.</p><p>Assuming that a node has an in-degree d. For each parameter, this node receives d values and transmits only one value (i.e., the aggregated result), thus drastically reducing the network traffic at each hop. This not only helps alleviating the load on parameter servers (avoiding the so-called in-cast effect), but also reduces the load in the network core too, which is beneficial in case of oversubscribed networks. As shown in Section 4, depending on the network fabric characteristics and the system load, different values of d may be preferable.</p><p>A dual technique is also used during the pull phase. In this case, rather than aggregating values on path, we use the same tree to multicast the weights to all replicas. By using a multicast tree, only d values per server are transmitted, which reduces the load on the outbound link of a parameter server (we expect d W , where W is the number of workers in the system). Synchronous vs. asynchronous operations. MLNET use the staleness threshold s to determine how push/pull operations are performed. In a synchronous setting, i.e., s = 0, a worker needs to wait for all its child nodes on the spanning tree in each iteration. In this case, a ML-NET process uses its position on the tree to figure out the number of pushes in an aggregation window as well as the pull responses to multicast.</p><p>When s &gt; 0, a MLNET process needs to decide when to perform push/pull operations. If a pull request can be satisfied with the cached weights (c model ≥ c worker − s), the process responds it immediately, without incurring extra upstream network traffic. If not, the request is forwarded upstream, until it is satisfied with a cached weight, or it waits on the parameter server. When receiving a push message, the process first updates its own model with this message. It then pushes this message upstream if and only if the gradients carried by this message are not within the staleness thresholds compared to its parent node. This means that the degree of asynchrony is controlled by MLNET and it does not have to be hardcoded in a training algorithm. Fault tolerance. To detect failures, a MLNET process uses heartbeats to check the liveness of its parent node on the spanning tree. If a node fails, the downstream nodes are connected to the parent of this failed node. They then exchange model information to ensure that staleness bounds are not broken. If the root of the tree, i.e., a parameter server, fails, its children wait for it to be re-placed and then re-initiates a connection. If a failed node is back, it asks its neighbors to restore its local model and re-enters the tree. In case of multiple concurrent failures, the above mechanism may incur high overhead. MLNET then tears down the tree entirely and reverts to the traditional setup where workers directly communicate with parameter servers.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">Network Prioritization</head><p>The second technique used by MLNET is network prioritization. Mainstream congestion control protocols such as TCP strive to provide per-flow fairness. This can be particularly detrimental in a multi-tenant environment where different models are trained in parallel because contention on network resources will delay the training time of all models sharing that bottleneck.</p><p>To address this issue, we implemented a network prioritization mechanism in MLNET to arbitrate access to network resources. We do not constrain how priorities are defined. For example, a model with relatively smaller communication cost could be given a high priority in order to complete earlier, leading to a shorter average model training time. Hereafter, we only assume that the MLNET process has a way to extract the priority from a flow (e.g., this can be encoded in the first transmitted byte).</p><p>A key challenge of implementing this feature is how to achieve this functionality without requiring any change in existing network infrastructure. Recent proposals, e.g., <ref type="bibr" target="#b2">[3,</ref><ref type="bibr" target="#b17">18,</ref><ref type="bibr" target="#b35">36]</ref>, require custom switch hardware and, hence, do not fulfill our requirements.</p><p>In contrast, we opted for a software only solution. If the network fabric provides full bisection bandwidth, e.g., through a fat-tree design <ref type="bibr" target="#b1">[2,</ref><ref type="bibr" target="#b19">20]</ref>, contention only occurs at the edge <ref type="bibr" target="#b21">[22]</ref>, i.e., at either the worker's or parameter server's uplink. When the destination machine, either a worker or a parameter server, receives a new TCP connection, it can inspect the relative priority (e.g., by looking at the first byte) in order to decide whether to reject the connection or to accept it by possibly dropping some of the existing ones if they have lower priority than the new one. As we show in the Section 4, this simple mechanism is effective in reducing the median training time without hurting the tail performance.</p><p>If the network is over-subscribed, the above mechanism is not sufficient as congestion can occur in the network core. If switches support enough priority queues, we can extend the above mechanism to take advantage of them, similar to recently proposed solutions <ref type="bibr" target="#b5">[6,</ref><ref type="bibr" target="#b27">28]</ref>. For the cases in which switch queues are not available, an alternative approach is to extend our previous work on bandwidth guarantees in a multi-tenant data center <ref type="bibr" target="#b7">[8]</ref> to allocate bandwidth to flows according to their priority. This, however, would require knowledge of worker and parameter server locations and, hence, it might not be suitable for public cloud deployments. We are currently working on a decentralized solution that does not suffer from this limitation, possibly reusing some ideas from recent work on coflow scheduling <ref type="bibr" target="#b10">[11,</ref><ref type="bibr" target="#b17">18]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Preliminary Results</head><p>We use simulations to evaluate the performance of MLNET. While preliminary, the results indicate that our design can i) reduce the end-to-end training time (makespan), by performing distributed aggregation and multicast, and ii) shorten the median makespans of concurrent machine learning tasks by prioritizing flows.</p><p>We use OmNET++ <ref type="bibr" target="#b43">[44]</ref>, a discrete event simulator, to model a mid-size cluster with a three-tier, multi-rooted network topology based on popular scalable data center architectures <ref type="bibr" target="#b1">[2,</ref><ref type="bibr" target="#b19">20]</ref>. The cluster comprises 1,024 servers connected by 320 16-port switches via 10 Gbps links. We model the TCP max/min fairness model and we use the standard Equal Cost Multi Path (ECMP) routing protocol.</p><p>We adopt a synthetic workload modeled after a recently published machine learning algorithm for sparse logic regression <ref type="bibr" target="#b23">[24]</ref>. The model has 65 billion parameters and is trained with a 141 TB dataset. The dataset is evenly partitioned and consumed by 800 workers. We vary the number of parameter servers between 50 and 400. The parameter space is equally divided across the parameter servers. Both workers and parameter servers are randomly deployed on the 1,024 servers.</p><p>Based on our experience in training models with Minerva <ref type="bibr" target="#b34">[35]</ref>, we assume that workers process training data at a rate, uniformly randomly chosen between 100 MB/s and 200 MB/s. They use synchronized push and pull, and communicate with the parameter servers every 30 s. Distributed Aggregation and Multicast. We begin our analysis by focusing on the benefits of using our aggregation and multicast mechanism. To show the impact of the node in-degree d, we compare the performance of today's approach (BASELINE) against two strategies that use a different value of d. The first one, RACK, uses a single aggregator per rack, i.e., d = 7, as in our experiments we assumed eight servers per rack. The other one, BINARY, instead, uses binary trees, i.e., d = 2. <ref type="figure" target="#fig_1">Figure 1a</ref> shows the makespan of these configurations against the number of parameter servers together with 800 workers in a non-oversubscribed network. When there are 50 parameter servers, BINARY and RACK outperform BASELINE, taking only 22% and 42% of the time used by BASELINE. This shows the benefits of reducing the inbound and outbound load at the param-  eter servers. However, with a large number of parameter servers, the load is already sufficiently spread and our solutions become less effective compared to BASE-LINE. Finally, when the number of parameter servers is very high (≥ 300), the cost of re-directing traffic through the tree dominates and the performance of both BINARY and RACK gets worse than BASELINE. This shows the trade-off between the number of parameter servers and traffic reduction. Having more parameter servers helps to spread the load across the fabric and alleviate network bottlenecks. However, this comes at the cost of using more machines and is only effective when the network is not oversubscribed. We then repeated the same experiment assuming a more realistic network setup with an over-subscription ratio of 1:4.</p><p>In this case, congestion occurs in the network core too and, hence, unlike in the nonoversubscribed case, just increasing the number of parameter servers does not help in removing the main bottlenecks. In contrast, by reducing the overall network traffic, MLNET is also able to reduce the congestion in the core. This explains why, as shown in <ref type="figure" target="#fig_1">Figure 1b</ref>, RACK and BINARY outperform BASELINE in all configurations. For example, with 50 parameter servers, RACK reduces the makespan compared to baseline by 73% (resp. 66% for BINARY) and with 400 parameter servers, the makespan is reduced by 71% (resp. 40% for BINARY). Interestingly, in this configuration, BINARY achieves a worse performance than RACK. The reason is that since the height of BINARY's trees is higher, the path length increases accordingly and, hence, BINARY consumes more bandwidth than RACK. While this is not an issue in a non-oversubscribed network in which the core bandwidth is abundant, this becomes problematic in this setup where the core bandwidth is scarce.</p><p>In <ref type="figure">Figure 2</ref>, we show the CDFs of traffic across network links. In this experiment, we consider a nonoversubscribed network with 800 workers and 200 parameter servers. As expected, both RACK and BINARY exhibit a lower traffic per link, which explains the overall improvement in performance. We observed a qualitatively similar result in the over-subscribed case too (omitted for space reasons).</p><p>Flow Prioritization. Next, we explore the impact of network prioritization. We consider a workload in which 20 different models are trained concurrently. To reduce the computation load of our simulations, we scale down each mode to use only 200 workers and 50 parameter servers, and reduce the input data size proportionally. We randomly assign priority to each model and we start all the models at the same time. In <ref type="figure">Figure 3</ref>, to understand the impact of using prioritization alone and combined with traffic reduction, we show the CDF of the makespan for these configurations. As a comparison, we also report the CDF achieved when using traffic reduction alone and when using our TCP-based baseline.</p><p>Just using network prioritization reduces the median make span by 25% while only increasing the tail by 2%. Combining traffic reduction and prioritization together further improves the performance by reducing the median by 60% (resp. 54% for the 95 th -percentile) compared to baseline, and reducing the median by 13.9% compared to using traffic reduction only.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Discussion and Research Directions</head><p>We conclude the paper by highlighting current limitations and future research directions. Model parallelism. The current design of MLNET targets the data parallelism model, in which multiple model replicas are trained concurrently, each using a different subset of input data. A complementary form of parallelism is the so-called model parallelism <ref type="bibr" target="#b15">[16]</ref> in which a large neural network is partitioned across multiple workers. This exhibits a different communication pattern than the data parallelism model being explored in this paper. While some of the techniques discussed here might also be beneficial in this context, our next step is to understand the peculiarity of these patterns and design tailored solutions. One possibility is to extend recently proposed solutions for graph processing <ref type="bibr" target="#b18">[19,</ref><ref type="bibr" target="#b31">32]</ref>. However, despite some similarities, deep neural networks differ from ordinary graphs as they are more structured and constrained but their sizes can be 10-100x larger. Adaptive communication.</p><p>Existing frameworks, e.g., <ref type="bibr" target="#b11">[12,</ref><ref type="bibr" target="#b14">15,</ref><ref type="bibr" target="#b23">24,</ref><ref type="bibr" target="#b24">25]</ref>, trade-off training efficiency for network performance by tolerating some degree of asynchrony through the staleness threshold s. The value of s, however, is usually determined a priori and cannot be easily changed at runtime. In contrast, we are currently exploring the feasibility of dynamically tuning this value based on i) the network load and ii) the convergence rate of individual parameters / models. This is particularly important for long-running training models, executing on public cloud infrastructure, in which the network performance is highly variable <ref type="bibr" target="#b7">[8]</ref>. For example, in case of a highly loaded network, higher values of s (i.g., higher asynchrony) can be selected while, when network utilization drops, more synchronous configurations can be used. A similar approach can also be adopted to identify the best value of the node in-degree d.</p><p>This direction is complementary to recent work investigating similar trade-offs in the context of computation resources <ref type="bibr" target="#b20">[21,</ref><ref type="bibr" target="#b28">29]</ref> and memory bandwidth <ref type="bibr" target="#b36">[37]</ref>. Network infrastructure. A key design goal in our design was to maintain compatibility with the existing network deployments. Next, however, we want to explore the trade-offs of customizing the hardware as well. A first step in this direction is to investigate the feasibility of offloading our distributed aggregation to the switch hardware, e.g., using recently available programmable switch platforms <ref type="bibr" target="#b16">[17,</ref><ref type="bibr" target="#b39">40,</ref><ref type="bibr" target="#b41">42,</ref><ref type="bibr" target="#b42">43]</ref> or middleboxes <ref type="bibr" target="#b3">[4,</ref><ref type="bibr" target="#b25">26,</ref><ref type="bibr" target="#b26">27,</ref><ref type="bibr" target="#b32">33]</ref>. In the longer term, we intend to assess the potential benefits of designing a machine learning rack-scale appliance from the ground up, including chip design, network fabric, and storage infrastructure, following the example of recently proposed rack-scale architectures for computation and storage <ref type="bibr" target="#b4">[5,</ref><ref type="bibr" target="#b6">7,</ref><ref type="bibr" target="#b13">14,</ref><ref type="bibr" target="#b30">31,</ref><ref type="bibr" target="#b40">41]</ref>.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head></head><label></label><figDesc>��� ���� ���� ���� ���� ���� ���� ���� ���������������� ��������������������������� ���� ����������� �������� (a) No over-subscription. �� �� �� �� �� ��� ��� ��� �� ��� ���� ���� ���� ���� ���� ���� ���� ���������������� ��������������������������� ���� ����������� �������� (b) 1:4 over-subscription.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: Training makespan against the number of parameter servers.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 2 :Figure 3 :</head><label>23</label><figDesc>Figure 2: CDF of link traffic for different configurations.</figDesc></figure>
+		</body>
+		<back>
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">Scalable inference in latent variable models</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ahmed</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Aly</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Gonzalez</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Narayanamurthy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Smola</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">WSDM</title>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Al-Fares</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Loukissas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Vahdat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Scalable</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Commodity Data Center Network Architecture. In SIGCOMM</title>
+		<imprint>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">Minimal Near-optimal Datacenter Transport</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alizadeh</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Sharif</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Katti</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Mcke-Own</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Prabhakar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shenker</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Pfabric</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGCOMM</title>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">xOMB: Extensible Open Middleboxes with Commodity Servers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Anderson</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">W</forename><surname>Braud</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">T</forename><surname>Al</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ANCS</title>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">FireBox: A Hardware Building Block for 2020 Warehouse-Scale Computers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Asanovic</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FAST</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+	<note>Keynote</note>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Information-Agnostic Flow Scheduling for Commodity Data Centers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bai</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Han</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Tian</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX NSDI</title>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Pelican: A Building Block for Exascale Cold Data Storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Balakrishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Black</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Donnelly</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>England</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Glass</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Harper</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Legtchenko</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Ogus</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Peterson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rowstron</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<monogr>
+		<title level="m" type="main">Towards Predictable Datacenter Networks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ballani</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Costa</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Karagiannis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Row-Stron</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+		<editor>SIG-COMM</editor>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Sibyl: A system for large scale supervised machine learning</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Canini</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Chandra</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Ie</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Mcfadden</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Gold-Man</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Gunter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Harmsen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Lefevre</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Lep-Ikhin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Llinares</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">L</forename><surname>Mukherjee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Pereira</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Redstone</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Shaked</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Singer</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Machine Learning Summer School</title>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Building an Efficient and Scalable Deep Learning Training System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chilimbi</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Suzue</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Apacible</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kalyanara-Man</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><forename type="middle">Project</forename><surname>Adam</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Efficient Coflow Scheduling with Varys</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chowdhury</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Zhong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stoica</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGCOMM</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Solving the Straggler Problem with Bounded Staleness</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cipar</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Ho</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Q</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">K</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Ganger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">R</forename><surname>Gib-Son</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Keeton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xing</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">HotOS</title>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<monogr>
+		<title level="m" type="main">Deep learning with COTS HPC systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Coates</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Huval</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Wu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Catanzaro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrew</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2013" />
+			<biblScope unit="page">13</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">R2C2: A Network Stack for Rack-scale Computers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Costa</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Ballani</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Razavi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kash</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGCOMM</title>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Exploiting Bounded Staleness to Speed Up Big Data Analytics</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cui</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Cipar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Ho</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Q</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">K</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Kumar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Wei</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Dai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Ganger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">R</forename><surname>Gibbons</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">B</forename><surname>Gibson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xing</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">P</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ATC</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Large Scale Distributed Deep Networks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dean</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Corrado</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">S</forename><surname>Monga</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Devin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Le</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Q</forename><forename type="middle">V</forename><surname>Mao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">Z</forename><surname>Ranzato</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Senior</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Tucker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><forename type="middle">G</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">Y</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">NIPS</title>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">Exploiting Parallelism To Scale Software Routers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dobrescu</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Egi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Argyraki</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Chun</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B.-G</forename><surname>Fall</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Iannaccone</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Knies</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Manesh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And Ratnasamy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Routebricks</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP</title>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Decentralized Task-aware Scheduling for Data Center Networks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dogar</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><forename type="middle">R</forename><surname>Karagiannis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Ballani</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Row-Stron</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGCOMM</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Powergraph: Distributed graph-parallel computation on natural graphs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gonzalez</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">E</forename><surname>Low</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Gu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Bickson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Guestrin</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI</title>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">VL2: A Scalable and Flexible Data Center Network</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Greenberg</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Hamilton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">R</forename><surname>Jain</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Kandula</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Lahiri</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Maltz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">A</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Patel</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sen-Gupta</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGCOMM</title>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Resource Elasticity for Large-Scale Machine Learning</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Huang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Boehm</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Tian</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Reinwald</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Tatikonda</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And Reiss</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><forename type="middle">R</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGMOD</title>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">EyeQ: Practical Network Performance Isolation at the Edge</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeyakumar</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Alizadeh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Mazi`eresmazi` Mazi`eres</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Prab-Hakar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Greenberg</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">NSDI</title>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">MALT: Distributed Data-parallelism for Existing ML Applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">I</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Kadav</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Kruus</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ungureanu</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">EuroSys</title>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<monogr>
+		<title level="m" type="main">Scaling Distributed Machine Learning with the Parameter Server</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">I</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Andersen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">G</forename><surname>Park</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">W</forename><surname>Smola</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">J</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ahmed</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Josifovski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Long</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Shekita</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">U</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B.-Y</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="page">14</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">Communication Efficient Distributed Machine Learning with the Parameter Server</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">I</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Andersen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">G</forename><surname>Smola</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><forename type="middle">U</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">NIPS</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">NetAgg: Using Middleboxes for Application-specific On-path Aggregation in Data Centres</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mai</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Rupprecht</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Alim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Costa</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Migli-Avacca</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Pietzuch</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wolf</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">L</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">CoNEXT</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">ClickOS and the Art of Network Function Virtualization</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Martins</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Ahmed</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">T</forename><surname>Al</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">NSDI</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Munir</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Baig</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Irteza</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">M</forename><surname>Qazi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><forename type="middle">A</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">X</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dogar</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><forename type="middle">R</forename><surname>Friends</surname></persName>
+		</author>
+		<title level="m">Not Foes: Synthesizing Existing Transport Strategies for Data Center Networks</title>
+		<editor>SIG-COMM</editor>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Towards Resource-Elastic Machine Learning</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Narayanamurthy</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Weimer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Mahajan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Condie</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Sellamanickam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Keerthi</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">NIPS 2013 BigLearn Workshop</title>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<monogr>
+		<title level="m" type="main">Scaling Memcache at Facebook</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nishtala</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Fugal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Grimm</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Kwiatkowski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">C</forename><surname>Mcelroy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Paleczny</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Peek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Saab</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Stafford</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Tung</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Venkataramani</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2013" />
+			<biblScope unit="page">13</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Putnam</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Caulfield</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Chung</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Chiou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Con-Stantinides</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Demme</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Esmaeilzadeh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Fowers</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Gopal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">P</forename><surname>Gray</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Haselman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Hauck</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Heil</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Hormati</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J.-Y</forename><surname>Lanka</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Larus</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Peterson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Pope</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Smith</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Thong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Xiao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">Y</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Burger</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">A Reconfigurable Fabric for Accelerating Large-Scale Datacenter Services. In ISCA</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<analytic>
+		<title level="a" type="main">Gps: A graph processing system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Salihoglu</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Widom</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SSDBM</title>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">Design and Implementation of a Consolidated Middlebox Architecture</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sekar</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Egi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Ratnasamy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Reiter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">K</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shi</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">NSDI</title>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<analytic>
+		<title level="a" type="main">An Architecture for Parallel Topic Models</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Smola</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Narayanamurthy</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">VLDB</title>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<analytic>
+		<title level="a" type="main">Minerva: A scalable and highly efficient training platform for deep learning</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Xiao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Hong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">NIPS Workshop, Distributed Machine Learning and Matrix Computations</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<analytic>
+		<title level="a" type="main">Better Never Than Late: Meeting Deadlines in Datacenter Networks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wilson</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Ballani</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Karagiannis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rowtron</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGCOMM</title>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b36">
+	<analytic>
+		<title level="a" type="main">DimmWitted: A Study of MainMemory Statistical Analytics</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>And Re</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">VLDB</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b37">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Apache</forename><surname>Hadoop</surname></persName>
+		</author>
+		<ptr target="https://hadoop.apache.org" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b38">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Apache</forename><surname>Spark</surname></persName>
+		</author>
+		<ptr target="https://spark.apache.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b39">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eos+</forename><surname>Arista</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Platform For Network</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Programmability</surname></persName>
+		</author>
+		<ptr target="http://www.arista.com/en/solutions/eos-platform" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b40">
+	<analytic>
+		<title/>
+		<ptr target="http://bit.ly/1mZD4yJ" />
+	</analytic>
+	<monogr>
+		<title level="j">HP Moonshot System</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b41">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Netfpga</surname></persName>
+		</author>
+		<ptr target="http://netfpga.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b42">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Netronome</forename><surname>Flownics</surname></persName>
+		</author>
+		<ptr target="http://netronome.com/product/flownics/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b43">
+	<analytic>
+		<title/>
+		<ptr target="https://omnetpp.org" />
+	</analytic>
+	<monogr>
+		<title level="j">OmNET++ Discrete Event Simulator</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

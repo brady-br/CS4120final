@@ -1,0 +1,516 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:50+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">DAL: A Locality-Optimizing Distributed Shared Memory System</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gábor</forename><surname>Németh</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Ericsson Research</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dániel</forename><surname>Géhberger</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Ericsson Research</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Péter</forename><surname>Mátray</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Ericsson Research</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">DAL: A Locality-Optimizing Distributed Shared Memory System</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Latency-sensitive applications like virtualized telecom and industrial IoT systems require a service for ultra-fast state externalization to become cloud-native. In this paper we propose a distributed shared memory system, called DAL, which achieves the lowest possible latency by transparently co-locating individual data items with applications working on them. Upon changes in data access patterns, the system automatically adapts data locations to keep the number of remote operations at a minimum. By avoiding the costs of network transport and using shared memory communication, the system can achieve 1 µs data access latency. We envision DAL as a platform component which enables latency-sensitive applications to take advantage of the cloud.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>A key requirement for a wide range of cloud compute domains is to process a continuous influx of input data with ultra low latency. Virtualized telecom systems need to handle millions of signaling events every second while providing fluent user experience, even for delay-sensitive applications. The emerging field of Industrial IoT and cloud controlled collaborative systems pose even tougher challenges with respect to latency <ref type="bibr" target="#b2">[3]</ref>. For instance, imagine a cloud controlled factory floor where the various fixed and mobile robots are without a precisely prescribed plan for activity and movement. Instead, they collaborate dynamically as dictated from their cloudbased control logic to fulfill a complex production task <ref type="bibr" target="#b3">[4]</ref>. In order to appropriately drive these robots the cloud has to process the various sensor readings and video streams, and provide control feedback within strict delay bounds, e.g., within 10 ms <ref type="bibr" target="#b6">[8]</ref>.</p><p>Typical cloud-ready solutions involve a backing data store where application states are externalized. This stateless worker programming model improves the resiliency and scalability of virtual functions. However, in case of low latency &amp; high reliability systems-such as the ones mentioned above-it is challenging to provide a data backend that is fast enough for state accesses to not severely degrade the end-to-end performance.</p><p>As distributed main-memory data stores have gained a lot of momentum in the recent years, there appeared specialized systems that are eagerly optimized towards latency performance, such as RAMCloud <ref type="bibr" target="#b8">[10]</ref> and Pilaf <ref type="bibr" target="#b7">[9]</ref>. These solutions concentrate on eliminating the various sources of delay in a data access transaction, such as buffering in protocols, context switches and blocking induced by thread and process synchronization. Their efforts were so successful that essentially LAN transport costs became the dominant factor in overall response times. To illustrate this, we tested RAMCloud in our lab equipped with commodity 10 GbE networking hardware, and found that requests spend 90% (19 µs) of their time on transport, leaving only 10% (2.15 µs) to end-host processing. <ref type="bibr" target="#b0">1</ref> In this paper we propose DAL, a distributed shared memory system which goes beyond the known latency optimization techniques, and tries to eliminate transport costs by taking data sharding to the extreme. Instead of applying traditional hash-or range-based schemes to map keys to data servers, we handle the location of each data element separately. Using this single-key sharding approach it becomes possible to migrate data elements between server instances one-by-one. We facilitate local data access by co-locating data with client applications whenever possible.</p><p>By exploiting local data storage and shared memory communication, we achieve the lowest possible data access latency for applications where incoming events can be routed consistently to stateless worker instances, e.g., on a per subscriber basis in telecom core networks, or per-device in collaborative robot control systems. For such stateless applications DAL can move externalized states to the worker process' physical location. Upon any change in event routing, due to e.g., a session mobility event or the failure or scaling of worker instances, relevant states are seamlessly moved to the node hosting the new worker, effectively minimizing data access costs.</p><p>In the rest of the paper we first describe the concepts behind DAL, then evaluate our prototype implementation through a simplified use-case, and finally discuss fault tolerance, applicability and security aspects.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Concept and design</head><p>DAL is a purely RAM-based solution consisting of two main components: a server process and a client library. To enable local data access, each physical server that runs client processes should also host a server instance. The ensemble of these server processes forms a DAL cluster. Every server instance maintains an indexed memory area, the pool for storing data items read and written by clients. The union of all pools comprises the distributed memory of the service.</p><p>Separation of keys and values. One of the key design goals of DAL is to allow individual data elements to be moved physically close to the applications accessing them-preferably to the same machine. To achieve this, we apply a layered approach for addressing data. In the lower (internal) layer data elements are addressed directly by the target server's IP address and a pool index. The upper layer employs key-based addressing, essentially providing a key-value interface to the clients.</p><p>To establish the binding between the two layers, we differentiate two server roles: the key-server is responsible for managing key operations, such as creating or deleting keys, and resolving key to direct location queries. Data servers, on the other hand, process data manipulation commands with direct addresses. A single DAL server instance can and typically does combine both roles to simplify the deployment.</p><p>To access a certain key, we apply a two-phase lookup mechanism. To route key operations, DAL uses a traditional hash-based sharding scheme: the client takes the hash of the key modulo the number of key servers, and then queries the responsible server for the data location. Hereafter, the client can issue direct data manipulation commands to the designated data server. To avoid the overhead of unnecessary key operations, the client can store the direct address for the key in a handle, e.g., in a variable or a cache.</p><p>Data move. For each data item, the data server keeps track of the number and origin of accesses. When the server detects that an item is mostly accessed from a specific remote location, it proposes a data move. Then, as it is depicted in <ref type="figure" target="#fig_0">Fig. 1</ref>, the client initiates a data move transaction at the responsible key server. Next, the data is copied over to the new data server, the key-to-location mapping is updated, and finally the original value is removed. If the key server is co-located with the new data server, the complete transaction between 1-8 takes two remote operations, and four otherwise.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Client</head><p>Key server New data server As a result, data items that are dominantly used by a single client will be accessed locally after a short transient time. When a client attempts to access an item that has been moved, the operation fails, and the key server is re-queried for the new location.</p><p>Access patterns. Besides locality optimization, another design goal of DAL is to support various access patterns according to which cloud applications can share data. Beyond the store-retrieve functionality, DAL servers can act as message brokers: clients can subscribe to keys and whenever a write happens to its data, the server pushes the new value to the subscribers. In essence, applications can turn traditional keys into publish-subscribe channels this way. A convenient aspect of this solution is that producers can use the same API to write data to a key, regardless of how consumers are reading it, i.e., whether they wish to receive every update or just read the value occasionally.</p><p>To facilitate the dynamic scaling of applications, consumers of a channel may be grouped. Within each group, messages are load-balanced among all receivers in a round-robin fashion or consistently, based on the highest random weight algorithm <ref type="bibr" target="#b11">[13]</ref>.</p><p>Moreover, DAL supports request-response communication between clients. This API is also built on top of the key-value abstraction, and as a result, the same load balancing mechanisms can be used for request routing as for messaging. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Prototype</head><p>To prove the viability of our concept and measure its performance we implemented the DAL server and client library in around 6000 lines of C++ code running on GNU/Linux. This section highlights critical decisions of the implementation we took to ensure lowest possible data access latency. <ref type="figure" target="#fig_1">Fig. 2</ref> shows the key elements of the architecture. The server-allocated memory pool stores both the keyto-location mapping and the value items, assuming that the key and data server roles are combined. Data items can have arbitrary sizes up to free pool capacity, and carry metadata fields, such as the auth field and version number. The auth field is a unique ID for the keyvalue-location triplet that guards against stale accesses via already invalidated data handles. Version numbers are atomically incremented on write operations to facilitate change detection by local clients.</p><p>Local operations. A client process interacts with its local DAL server via shared memory IPC, as shown in <ref type="figure" target="#fig_1">Fig. 2</ref>. We make local data reads as fast as possible by memory-mapping the storage pool of the server readonly in all client processes. Data items are then read from the pool directly without server involvement. The latency of this operation is only subject to the performance characteristics of underlying paging and scheduling mechanisms. To ensure that the returned data indeed corresponds to the intended key and that it was kept intact during the read operation, we employ a form of optimistic concurrency control. The client library compares the version number and auth fields right before and after the read, and re-reads the data if either of these fields have changed during the operation.</p><p>For local non-reads and all remote operations the server allocates a separate control block for each local client, in the form of another shared memory area denoted C k in <ref type="figure" target="#fig_1">Fig. 2</ref>. This area is writable both by the client and the server, and contains data structures for controlling concurrent access to its fields. Clients request specific data operations through their control blocks, which the server checks periodically in a busy loop and services requests immediately.</p><p>To eliminate extra latency costs from context switches and inter-thread synchronization, all client requests are handled on a single thread of execution. As a consequence, this design enforces serialization of data operations, ensuring consistent access to data elements. As the latency overhead of inter-process signaling is high (≈ 7 µs), for local operations the client library polls the control structure until completion by default. Remote operations. For remote data manipulation the local DAL server serializes and proxies the requests, thus hiding the details of network transport from its clients. One of those details is the use of DPDK to bypass the kernel network stack, providing low latency network access <ref type="bibr">[5]</ref>.</p><p>Clients can configure an operation timeout, the time they are willing to wait for the response. To balance between latency and CPU usage, clients can also set the wait strategy, telling the library whether it should use polling or the signaling functionality of the OS to get notified when the reply arrives.</p><p>To avoid uncontrollable buffer growth, the transport layer uses connectionless UDP transmissions. Reliability is provided by automatic retransmissions based on a transport timeout. Contrary to the operation timeout, the transport timeout is not set by the application but inferred from network delay statistics collected by the DAL server, and adjusted on a per request basis.</p><p>In the absence of a local server, the client library can still transmit via the standard kernel socket API-with considerably higher latencies. The data move algorithm. In order to optimize the locality of individual data items, servers continuously analyze recent access histories on a per data item basis, as described in Sec. 2. To decide when an item should be moved, the algorithm checks if the majority of the last N accesses came from a single remote host (N is configurable at item creation). At negligible extra compute cost, this simple algorithm achieves significant gain for applications where data elements have a single dominant process accessing them, such as the state externalization model outlined in Sec. 1. A more sophisticated method would require resiliency against ping-pong effects and locality optimization for applications with heavy state sharing among processes, which are topics we plan to investigate in the future. The latter would require the combination of our data movement capabilities with an advanced orchestration system, so that both processes and  <ref type="figure" target="#fig_2">Fig. 3</ref>. data can be moved to their optimal location based on observed access patterns.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Evaluation</head><p>In this section, we evaluate the performance of our prototype via a stateless worker application. For the tests we use three physical machines equipped with Intel Xeon E5-2670 v3 CPUs, 64 GB RAM and Intel X540-AT2 10 GbE NICs connected through a commodity 10 Gb switch. We deploy both the DAL servers and the application components as Docker containers. Each machine hosts a single DAL server container sharing its IPC namespace with the application containers to enable shared memory communication. The upper part of <ref type="table">Table 1</ref> lists the performance figures for the elementary data operations. To obtain these results, we measured 1 million randomized reads and writes with 100 byte values. As shown in the table, we can achieve sub-microsecond access times with local reads, while a remote data operation costs 22 µs, of which 19 µs is spent on network transport.</p><p>A single server instance was measured to serve 1.6 M local writes, or 0.9 M remote read or write operations per second. As noted earlier, local reads are executed by the client processes without server involvement, so the total data access rate can exceed these numbers.</p><p>A stateless application. In order to evaluate our system in a dynamic setting, we simplified an existing DAL use case to emulate a stateless application with geographic partitioning. The latter is an inherent property of spatially distributed applications, such as session controllers in mobile networks, for which DAL can provide seamless handover of session states during mobility events. In an edge cloud setting this means that relevant states are spatially following the mobile entity and context transfer is provided as a reusable service. The test application receives input events via DAL messaging, with each event carrying a session identifier. Sessions have their corresponding states stored in DAL, and whenever the application receives a new event it reads the matching state from DAL, updates it, and writes it back.</p><p>The application is scaled out to run in multiple instances, and we use a two-tier mechanism to route events to instances. First, to imitate the spatial partitioning present in many mobile systems, we organize instances into groups, each group being responsible for a certain area. We route events to groups based on an emulated location for the session. Second, we use the session ID to route messages to instances within a group in a sticky fashion, cf. the paragraph on access patterns in Sec. 2.</p><p>DAL seamlessly adapts the location of each externalized session state, so that data gets co-located with the corresponding worker instance. Changes in input event routing may happen due to various reasons, of which we exemplify two cases in our experiments. The first is the scaling of applications upon changing load. During a scaling event, a large set of sessions is redirected instantaneously to a different worker instance. The second case is session mobility, i.e., when the source of input events moves from one pre-defined area to another. This induces individual state transfers between application groups.</p><p>Tracing a single session. In this experiment, we run the test application and emulate frequent mobility events for each session. To examine the impact on performance, in <ref type="figure" target="#fig_2">Fig. 3</ref> we plot the data access times for a single randomly chosen session state. The time-series indicates that initially the data item is remote for the worker process. After a few accesses DAL migrates the item at t = 1 s, and subsequent accesses are executed much faster. <ref type="bibr" target="#b1">2</ref> As routing changes kick in every few seconds, data access times jump to the remote regime again, and then get reoptimized by DAL.</p><p>The transients can be further broken down into three stages. Right after a route change, the first data access by the new worker requires an extra key-to-location lookup. Depending on the location of the responsible key server, this step may (B) or may not (A) trigger an extra network round-trip. Then, we have a remote access regime, which is settled by a data move transaction (detailed in <ref type="figure" target="#fig_0">Fig. 1</ref>). This last step involves either two (C) or four (D) network round-trips-again, depending on the location of the key server-and appears as a spike reaching up to 47 µs or 87 µs, respectively. The lower part of <ref type="table">Table 1</ref> lists statistics for the A-D cases. It can be seen that all categories exhibit low variability.</p><p>Mass evaluation. In order to demonstrate the behavior of a DAL cluster under heavy load, we repeat the previous experiment, and execute scaling events to trigger mass state migrations. <ref type="figure" target="#fig_3">Fig. 4</ref> shows how the share of various data operations from <ref type="table">Table 1</ref> evolves during the experiment. Initially, we experience a high ratio of key lookups, and as the states are distributed randomly between the three DAL servers, most operations are remote. In the range 2 s t 10 s, states are automatically moved to their optimal location, and the system reaches a steady state. We can observe that the share of local accesses does not reach 1. This is because we continuously generate session mobility events, causing a small fraction of session states to always be dislocated.</p><p>The right side of the figure shows the effect of adding an extra worker to one of the application groups at t = 39 s. As events begin to be routed to the new instance, it starts to access states kept in remote DAL servers. As a result, there appears a sudden increase in the number of key lookups, and a drop in local data operations. This is relaxed during the period 40 s t 50 s, after which the system returns to the optimized steady state.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Related work</head><p>Data partitioning and placement methods in key-value stores are typically strict, disallowing fine-grained data relocation. Furthermore, in most cases, the storage server cluster is physically separated from clients which makes local data access impossible. In recent years various competing solutions have been developed to address ultra-low latency data access <ref type="bibr" target="#b8">[10,</ref><ref type="bibr" target="#b1">2,</ref><ref type="bibr" target="#b4">6,</ref><ref type="bibr" target="#b7">9,</ref><ref type="bibr" target="#b12">14,</ref><ref type="bibr" target="#b5">7]</ref>. All of these systems use hash-based partitioning and separate servers and clients. FaRM <ref type="bibr" target="#b1">[2]</ref> accepts location hints when creating objects making co-location and single machine transactions possible. While RAMCloud <ref type="bibr" target="#b8">[10]</ref> achieves impressive results with 5 µs remote read operations over InfiniBand, without the possibility of local data access and flexible data movement, access times will still be dominated by transport delays.</p><p>The cluster mode of Redis <ref type="bibr" target="#b9">[11]</ref> supports local data access and it is also possible to enforce the static colocation of objects. However, even local communication goes through the kernel network stack, thus its latency is in the range of tens of microseconds.</p><p>Besides the above mentioned solutions, there are other non latency-oriented data systems which can apply finer control over the placement of data elements. Agarwal et al. proposed a spring force model to optimize web session data placement between datacenters. Their solution is based on the offline analysis of access logs <ref type="bibr" target="#b0">[1]</ref>. Swift [12] studies data placement methods for optimizing execution times of a transaction manager on top of HBase. The method is based on clustering related items of the data store to limit the number of nodes involved in each transaction.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Conclusions</head><p>In this paper we proposed DAL, a distributed shared memory system that achieves 1 µs data access by optimizing the physical location of each individual data element. Besides ultra-low latency, DAL provides seamless elasticity for scaling and session mobility events, making state externalization of latency sensitive applications possible.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Discussion</head><p>Although the paper does not address it, replication is important for many applications to ensure resilience against node failures. Asynchronous replication can be applied to our design without major impact on read/write latencies. Due to the weaker consistency guarantees of asynchronous replication, in corner cases node failures can lead to lost updates. However, some application types can simply recover from such events. For example, many telecom VNFs can either rebuild session states from other (significantly slower) data sources, or can simply drop the affected sessions, and wait for a reconnection. Similarly, certain robot control applications are designed to continuously adapt their states through tight feedback loops, thus a single lost state update does not break the control logic. Consequently, our design can provide low latency with fault tolerance, at the price of possibly dropping a small fraction of state updates in the event of a failure. We believe this is a viable trade-off for many soft real-time cloud applications.</p><p>The two-phase lookup mechanism produces singlekey shards, making the relocation of individual data elements possible. This comes with the cost of an extra location lookup (in most cases via the network), making the first data access slower than subsequent ones. As a result, our concept best suits applications where it is possible to reuse the results of location lookups. In cases when data handles cannot be effectively cached (e.g., due to the non-partitionable nature and excessive size of the key-space), the performance will lag behind that of existing systems.</p><p>Due to the key-location separation, data servers can be added to the system at any time-local clients, if any, will trigger data item relocations through the optimization normally. On the other hand, the scaling of key servers needs further work, most notably the handling of large batches of item location relocations during resharding of key ranges.</p><p>Finally, the prototype does not consider security and privacy aspects. If an application knows a key, it can perform operations on the corresponding value. This issue can be addressed with a more fine-grained access control, for instance by providing a separate memory pool for each tenant.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: The steps of the data move transaction.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: DAL architecture.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: Data access times for a randomly selected state, with handovers between workers. Transients indicate remote access regimes, repeatedly optimized by DAL.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: The mixture of elementary and compound operations during the mass experiment. Key lookups and data moves also include a remote data access.</figDesc></figure>
+
+			<note place="foot" n="1"> Even on high-end InfiniBand hardware, 66% of a RAMCloud request&apos;s time is spent on network transport [10].</note>
+
+			<note place="foot" n="2"> The test system would work even better if we auto-moved session states on the very first remote access. For the sake of presentation we configured the window size here to N = 8.</note>
+		</body>
+		<back>
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">Automated Data Placement for Geo-distributed Cloud Services</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Agarwal</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Dunagan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Jain</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Saroiu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Wol-Man</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bhogan</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Volley</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 7th USENIX Conference on Networked Systems Design and Implementation</title>
+		<meeting>the 7th USENIX Conference on Networked Systems Design and Implementation<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="2" to="2" />
+		</imprint>
+	</monogr>
+	<note>NSDI&apos;10, USENIX Association</note>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">FaRM: Fast Remote Memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dragojevi´cdragojevi´</forename><surname>Dragojevi´c</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Narayanan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Castro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hod-Son</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">11th USENIX Symposium on Networked Systems Design and Implementation</title>
+		<meeting><address><addrLine>Seattle, WA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="401" to="414" />
+		</imprint>
+	</monogr>
+	<note>USENIX Association</note>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">Wireless Communication for Factory Automation: an opportunity for LTE and 5G systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Holfeld</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Wieruch</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Wirth</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Thiele</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Ashraf</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">A</forename><surname>Huschke</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Aktas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ansari</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Communications Magazine</title>
+		<imprint>
+			<biblScope unit="volume">54</biblScope>
+			<biblScope unit="page" from="36" to="43" />
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Cloud robotics: architecture, challenges and applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">U</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Tay</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">P</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wen</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE network</title>
+		<imprint>
+			<biblScope unit="volume">26</biblScope>
+			<biblScope unit="page">3</biblScope>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Using RDMA Efficiently for Key-value Services</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kalia</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Kaminsky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andersen</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">G</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2014 ACM Conference on SIGCOMM</title>
+		<meeting>the 2014 ACM Conference on SIGCOMM<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="295" to="306" />
+		</imprint>
+	</monogr>
+	<note>SIGCOMM &apos;14, ACM</note>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">MICA: A Holistic Approach to Fast In-Memory Key-Value Storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lim</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Han</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Andersen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">G</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kaminsky</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">11th USENIX Symposium on Networked Systems Design and Implementation</title>
+		<meeting><address><addrLine>Seattle, WA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="429" to="444" />
+		</imprint>
+	</monogr>
+	<note>USENIX Association</note>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Evaluating industrial applicability of virtualization on a distributed multicore platform</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mahmud</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Sandstr¨omsandstr¨ Sandstr¨om</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vulgarakis</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Emerging Technology and Factory Automation (ETFA)</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="1" to="8" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Using One-Sided RDMA Reads to Build a Fast, CPU-Efficient Key-Value Store</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mitchell</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Geng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">I</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Presented as part of the 2013 USENIX Annual Technical Conference (USENIX ATC 13)</title>
+		<meeting><address><addrLine>San Jose, CA; USENIX</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2013" />
+			<biblScope unit="page" from="103" to="114" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ousterhout</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Gopalan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Gupta</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Kejriwal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Montazeri</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Ongaro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Park</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">J</forename><surname>Qin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Rosenblum</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Rumble</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Stutsman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">The RAMCloud Storage System. ACM Trans. Comput. Syst</title>
+		<imprint>
+			<biblScope unit="volume">33</biblScope>
+			<biblScope unit="page">55</biblScope>
+			<date type="published" when="2015-08" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanfilippo</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Noordhuis</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Redis</surname></persName>
+		</author>
+		<ptr target="https://redis.io/topics/cluster-tutorial" />
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<monogr>
+		<title level="m" type="main">Data Placement in a Scalable Transactional Data Store</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">P</forename><surname>Swift</surname></persName>
+		</author>
+		<ptr target="http://www.globule.org/publi/DPSTDS_master2012.pdf" />
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+	<note>Master&apos;s thesis</note>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Using name-based mappings to increase hit rates</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thaler</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">G</forename><surname>And Ravishankar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">V</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE/ACM Transactions on Networking (TON)</title>
+		<imprint>
+			<biblScope unit="volume">6</biblScope>
+			<biblScope unit="page" from="1" to="14" />
+			<date type="published" when="1998" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">A Resilient RDMAdriven Key-value Middleware for In-memory Cluster Computing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Tan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Gao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Guerin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Meng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Meng</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Hydradb</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the International Conference for High Performance Computing, Networking, Storage and Analysis</title>
+		<meeting>the International Conference for High Performance Computing, Networking, Storage and Analysis<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2015" />
+			<biblScope unit="volume">22</biblScope>
+			<biblScope unit="page">11</biblScope>
+		</imprint>
+	</monogr>
+	<note>SC &apos;15, ACM</note>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

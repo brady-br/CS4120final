@@ -1,0 +1,933 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:52+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Towards General-Purpose Resource Management in Shared Cloud Services</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jonathan</forename><surname>Mace</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">Brown University ‡ Microso Research</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Peter</forename><surname>Bodik</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">Brown University ‡ Microso Research</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rodrigo</forename><surname>Fonseca</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">Brown University ‡ Microso Research</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Madanlal</forename><surname>Musuvathi</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">Brown University ‡ Microso Research</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Towards General-Purpose Resource Management in Shared Cloud Services</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>In distributed services shared by multiple tenants, managing resource allocation is an important prerequisite to providing dependability and quality of service guarantees. Many systems deployed today experience contention, slowdown , and even system outages due to aggressive tenants and a lack of resource management. Improperly throttled background tasks, such as data replication, can overwhelm a system; conversely, high-priority background tasks, such as heartbeats, can be subject to resource starvation. In this paper, we outline ve design principles necessary for eeec-tive and eecient resource management policies that could provide guaranteed performance, fairness, or isolation. We present Retro, a resource instrumentation framework that is guided by these principles. Retro instruments all system resources and exposes detailed, real-time statistics of per-tenant resource consumption, and could serve as a base for the implementation of such policies.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Introduction</head><p>Today, many distributed services are shared by multiple tenants, both on private and public clouds and datacenters. Ideally, multi-tenant service providers should be able to implement resource management policies with various high-level goals -e.g., admission control, fairness, guaranteed performance, or usage limits. ese policies enable the provider to guarantee service-level objectives (SLOs) to a client, while simultaneously supporting other clients with diiering workload characteristics. Equally important, these policies can ensure that a client does not trigger a system-wide outage by adversarially or inadvertently starving essential background tasks of required resources.</p><p>Traditionally, resource isolation has been enforced using OS-level primitives at the granularity of processes or users (e.g., cgroups []) or using hypervisors that provide similar isolation among virtual machines. ere is also some progress in providing network performance guarantees to groups of VMs <ref type="bibr">[, ]</ref>.</p><p>However, in distributed systems there is a mismatch in granularity between resource management and the existing mechanisms: on the one hand tenants share the same processes, thus using the same data structures, thread pools, and locks; on the other hand, several processes spanning machines work on behalf of the same tenant, requiring coordinated management. Prior approaches rely on ad-hoc enforcement techniques that are diicult to apply to other systems <ref type="bibr">[, ]</ref>.</p><p>In this paper, we consider some of the challenges faced by resource management policies, which we observed in practice: ) due to extensive APIs, a system can bottleneck on any hardware (e.g., disk) or soware resource (e.g., locks); ) because users share resources at the application level, it may not be apparent which user is responsible for system load; ) tenants interfere not only among themselves but with potentially expensive internal system tasks; ) the resource requirements for each request issued by a client can vary substantially based on its type, arguments, and the system state; and ) it can be unpredictable on which machines a request will execute and for how long.</p><p>While ignoring some of these challenges can lead to resource management policies that work in restricted scenarios ( §), we argue that one has to consider all of them to build resource management policies that are eeective, i.e., that work in a general setting, and eecient, i.e., that achieve their objectives without being overly aggressive and wasting resources. ese observations motivate ve design principles necessary to implement such policies ( §), and the design of Retro ( §), our prototype framework for resource tracking and enforcement in distributed systems. Retro tracks the tenants of a system across a comprehensive set of resources, exposes usage statistics in realtime, and provides hooks back into the system to eeect resource management decisions. Retro's design is guided by the principles we outline, and our preliminary evaluation ( §) shows evidence that it could be used by policies to properly manage resources in a shared distributed system.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Resource Management Design Principles</head><p>is section describes design principles that are necessary for a resource management policy to be eeective and efcient. e principles are motivated by our experiences and observations from multiple data, compute, and communication oriented systems. For concreteness we present our observations in the context of HDFS. Observation: Multiple request types can contend on unexpected resources. For our purposes, it suuces to say that an HDFS cluster has a single NameNode (NN) that manages the metadata for the lesystem, and many DataNodes (DNs) that store replicated le blocks. Since the core functionality of HDFS involves reading and writing les from DNs, one could consider disk and network as the primary resources that require explicit resource management. On the other hand, HDFS contains many other request types -in fact, there are over API calls [] -such as listing les in a directory, creating directories, creating symbolic links, or renaming les.</p><p>Figure demonstrates how the latency of an HDFS client can be adversely aected by other clients executing very different types of requests, contending at diierent resources such as queues and locks. at experiment was run in a very simple setup with one NN and one DN, running on two machines. However, the ability of a single tenant to adversely aect other tenants' performance generalizes beyond this simple scenario. For instance, a Hadoop job that reads many small les can stress the storage system with disk seeks, like workload A in the gure, and impact all other tenants using the disks. Similarly, a tenant that repeatedly resubmits a job that fails quickly puts a large load on the NN, like workload B, as it has to list les in the job input directories. In communication with Cloudera [], they acknowledge several instances of aggressive tenants impacting the whole cluster, saying "anything you can imagine has probably been done by a user". e bottleneck resource in each of these instances varies from locks, thread pool queues, to the storage and the network. While it might be tempting to design throttling and scheduling policies based only on the primary APIs and resources, our experiments show that this would be incomplete. us, robust resource management requires a comprehensive accounting of all resources that clients can potentially bottleneck on, and consideration of all possible API calls. Our rst principle comes from this.</p><p>Principle: Consider all request types and all resources in the system Observation: Contention may be caused by only a subset of tenants. Distributed systems comprise multiple time <ref type="bibr">[sec]</ref> hp latency t1 thr'put t2 thr'put <ref type="figure">Figure :</ref> e gures show the impact of manually throttling two background tenants (tt,tt), demonstrating that only tt impacts the high priority tenant (hp) processes across many machines, and diierent tenants contribute diierent load to the system. Resource contention may be localized to a subset of machines or resources. Some tenants may not be accessing these machines or resources, while other tenants may be consuming more than their fair share. If a goal of the system was to reduce contention on these resources, it would be ineecient and unfair to penalize all tenants equally when only a subset may be culpable.</p><p>Figure demonstrates the eeect in HDFS on the latency of a high priority tenant, when we manually throttle the request rates of two other tenants. e gure shows a high-priority tenant, t h p , sending MB write requests, sharing the service with two low-priority tenants. Tenant t submits kB random reads, while tenant t lists les in a directory. When we separately throttle the request rates of the background tenants, we observe an eeect on the latency of t h p only when throttling t .</p><p>In the above example, if our goal was to decrease the latency of t h p , we would only beneet from reducing t 's request. A non-trivial system should be capable of targeting the cause of contention -the tenants, machines, and resources responsible. is motivates our second principle. From these observations we derive our second principle. Resource management policies should treat both systemand client-generated tasks as rst class entities.</p><p>Principle: Treat foreground and background tasks uniformly.</p><p>Observation: Resource demands are very hard to predict. Many schedulers <ref type="bibr">[, , ]</ref> need the cost of a request to be speciied a priori, oen in a multidimensional space representing the diierent resources.</p><p>We argue that resource requirements estimated oine would be insuucient for a number of reasons; a) the resources requested by a task could be innuenced by one or more of the arguments of the API call; b) a model would need to encode both the total cost and the rate of resource consumption; c) the presence of other tenants could innuence the behavior of a request (eg, by evicting cache entries); d) in order to handle localized congestion a model would need to know which machines will execute a request; and e) the state of the system can aect the success of operations (eg, renaming a non-existent le).</p><p>Principle: Estimate resource usage at runtime.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Observation: Requests can be long or lose importance.</head><p>Admission control is a common example of resource management, whereby requests are admitted or rejected at entry to the system based on their perceived impact. However, in systems with partitioned data, a large set of requests might be directed to the same disk holding a popular piece of data, creating a hot spot. While at the entry point, the overall load of the requests might seem small in comparison to the system's total capacity, the localized load introduced by the requests could be substantial if all directed to a single machine (e.g., if all read from a single DN). Additionally, the duration of one API call or background task can vary substantially; an HDFS rename call executes in a matter of milliseconds, but writing a MB data block takes many seconds even in an uncontended system. Once admitted, a long request will continue to consume resources until completion. If a tenant of higher priority were to suddenly start competing for resources, the lower priority requests already admitted to the system would contend with the high priority tenant for a potentially long period of time. In this case, the system should be able to intervene to throttle, pause or cancel the lower priority requests if necessary.</p><p>Our last principle stems from this: a resource management policy should be able to act on requests while they are in--ight.</p><p>Principle: Schedule early, schedule oen.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Retro Instrumentation Platform</head><p>Based on the challenges and principles outlined in the previous section, we argue that an eecient resource management system will require detailed and timely tracking of the resources used by each tenant and each request. is motivates the design of Retro, a prototype framework for resource tracking and throttling in distributed systems. At a high level, Retro collects per-tenant, per-request resource usage at diierent points as the system executes, both within processes and across nodes. It then aggregates these in near real time. Tenants in Retro can be both foreground clients and background tasks. Finally, Retro provides hooks to throttle particular tenants or requests. While Retro does not currently perform any action automatically, it is the rst step towards a complete system that implements resource management policies that are robust and eecient. We describe Retro in more detail below, and some early results in § suggest that Retro can inform and help enforce such policies with acceptably low overhead.</p><p>Tenant abstraction Retro uniformly abstracts foreground clients and background tasks as tenants. A tenant is a collection of tasks that serve some common purpose, such as tasks from a speciic user account, heartbeat requests to detect failed nodes, or data replication tasks. In Retro, a tenant is the granularity of resource attribution and management, and is identiied by a unique ID.</p><p>End-to-End ID Propagation Borrowing from end-toend causal tracing <ref type="bibr">[, , , ]</ref>, Retro propagates tenant IDs along the execution path of a request, such that at any point in time, the instrumentation knows on behalf of which tenant an operation is executing. At the beginning of a request, Retro associates the thread executing the request with a tenant by storing the tenant ID in a thread local variable, removing this association when the request completes. e resource instrumentation queries this variable to charge the resource usage to a speciic tenant.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Automatic Resource Instrumentation using AspectJ</head><p>Retro uses AspectJ [] to automatically instrument all hardware resources and resources exposed through the Java standard library. It captures disk and network usage by intercepting constructor and method calls on le and network streams; it tracks CPU usage by the time a thread is associated with a tenant using QueryThreadCycleTime in Windows or clock_gettime in Linux. To capture locking we instrumented Java monitor locks and all implementers of the Lock interface, while we instrumented thread pools using Java's Executors framework. e only manual instrumentation required is for applicationlevel resources created by the developer, such as custom queues, thread pools, or pipeline processing stages.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Aggregation and Reporting</head><p>When a resource is intercepted, Retro determines the tenant associated with the current thread, and increments in-memory counters that track the per-tenant resource use. ese counters include the number of resource operations started and ended, total latency spent executing in the resource and any operationspeciic statistics such as bytes read or queue time. A separate thread reads the counters and reports the values to any subscribed clients at a regular interval.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Entry and rottling Points</head><p>Retro exposes hooks for a developer to specify entry and throttling points in their application. An entry point establishes the tenant initiating the execution. For example, in our HDFS instrumentation we added entry points in the HDFS client API, and in code that initiates background tasks. A throttling point can impose a scheduler on queues in the system, rate-limit a tenant by pausing threads, or take advantage of more sophisticated mechanisms such as distributed rate limiters []. For example, in our HDFS instrumentation we added throttling points at the high-level system entry points, the NameNode RPC queue, and in the DataNode block transfer threads. Retro satisses each of the design principles outlined in §: by measuring resource consumption at runtime, it exposes the resources actually being consumed by a tenant, eschewing the need for a priori models of request types. Retro tracks multiple resources (it is extensible to new types of resource), and end-to-end tracing allows it to distinguish the tenant responsible for resource usage within and across processes. e entry point mechanism allows Retro to treat foreground and background tasks uniformly, and throttling points allow it to impose scheduling decisions in multiple places on the execution path.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Evaluation on HDFS</head><p>We instrumented HDFS with Retro prototype, and show early evidence that it can be useful for resource management policies, while keeping low overhead. We also show integrating Retro presents a low burden for developers. Experiments e experiments outlined in § give examples of how Retro could be useful to resource management policies, showing how it exposes granular information to identify bottlenecks, how the cause of a bottleneck can then be targeted, and how both foreground and background tasks can be acted upon. <ref type="figure">Figure demonstrates</ref> per-tenant and per-resource statistics that Retro can record in real-time. A policy could easily identify the bottleneck resource for each of the three diierent background workloads, and which tenants are contending on that resource. Figure shows two diierent manual interventions using Retro's throttling points, and demonstrates how an eecient resource management policy could target only the tenant responsible for congestion in order to achieve some high level goal. Figure demonstrates that policies could act on client requests, or on internal system tasks, taking advantage of how Retro treats both as rst-class entities. Overhead of Retro. Retro propagates a tenant ID (( bytes) along the execution path of a request, incurring up to ns of overhead (see <ref type="table">Table )</ref> to serialize and deserialize when making network calls. e overhead to record a single resource operation is approximately ns, which includes intercepting the thread, recording timing, CPU cycle count (before and aer the operation), and operation latency, and aggregating these into a per-tenant report. To estimate the impact of Retro on throughput and end-to-end latency, we benchmark HDFS and HDFS instrumented with Retro using three diierent request types (rename, and reads of kB and MB), see minute runs. Per-request latency increases the most for the rename API, by ..%, because it performs in-memory operations on the NameNode with a comparatively high number of trace points; its throughput drops by ..%. e read operations slow down by ..% and ..%, respectively, because they spend most of their time reading from disk. e average throughput of read MB increases with Retro, most likely due to the large variance observed.</p><p>Developer Eort While Retro requires manual developer intervention to propagate tenant IDs across network boundaries and to verify correct behavior of Retro's automatic instrumentation, our experience shows that this requires little work. Instrumenting resource operations for HDFS was handled automatically using AspectJ. To instrument HDFS we only added about lines of code. We manually instrumented HDFS's Protocol Buuer [] messages, and data transfer packets, to include Retro metadata. We speciied entry points at the client RPC server on the NN, and in the source code where heartbeats, block replication, and block invalidation was initiated. We also placed throttling points at these entry points.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Related Work</head><p>Many shared distributed systems implement some variant of performance isolation, such as fair sharing <ref type="bibr">[, , ]</ref>, throttling aggressive tenants <ref type="bibr">[, ]</ref>, and providing latency or throughput guarantees <ref type="bibr">[, , , ]</ref> Cake [] breaks HDFS requests into equal-sized chunks, then assumes disk as a bottleneck and uniform cost for each chunk. In our communication with operators running planet-scale cloud services at Microso, unexpectedly long-running requests in new workloads oen force adjustments to admission control rules and mechanisms.</p><p>In some cases, careful system design or restricted operating environments can obviate some of our observations. For example, some approaches beneet from having xedor bounded-sized requests; IOFlow [] provides guarantees for networked storage, and enforces them at the network packet level; Cake [] explicitly sub-divides large HDFS reads into smaller, equal-sized chunks. Amazon's DynamoDB [] hedges that uniform load distribution and exible durability guarantees are suucient to satisfy client latency requirements.</p><p>In all cases we observed, the enforcement mechanisms for high-level policies were manually implemented. For example, Cake [] manually instruments the RPC entry points of HDFS and HBase to add queues and associates tenants based on an identiier from the HDFS RPC headers; IOFlow [] modiies queues in key resources (e.g., NIC, disk driver) on the data path; and Pisces [] modiies the scheduling and queueing code of Membase and directly updates tenant weights at these queues.</p><p>Banga and Druschel addressed the mismatch between OS abstractions and the needs of resource accounting with resource containers [], which, albeit in a single machine, aggregate resource usage orthogonally to processes, threads, or users. Retro achieves per-tenant, distributed resource accounting by combining previous results in resource monitoring [], automatic source code instrumentation [], and end-to-end metadata propagation <ref type="bibr">[, , ]</ref>. Retro extends the notion of a resource to arbitrarily include hardware and soware resources and its throttling point abstraction can automatically insert mechanisms such as distributed rate limiters at resources.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Conclusion</head><p>In this work we presented Retro, a framework for eeecting resource management decisions in distributed systems. Retro tackles important challenges in this direction: it addresses the requirements of a robust and eecient resource management mechanism in shared distributed systems, and is a practical approach with low overheads. We view Retro as a step to developing broader resource management policies that are applicable to a variety of systems. It oers a platform for future work to develop such policies, and guidance to designers of alternative mechanisms.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head></head><label></label><figDesc>ese include common storage, data analytics, database, queuing, or coordination services like Azure Storage [], Amazon SQS [], HDFS [], or Hive []. While sharing these services across tenants has clear advantages in terms of cost, managing the underlying resources is challenging.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head></head><label></label><figDesc>Figure : i) Request latency for a tenant reading KB les from HDFS [] with intermittent background workloads A) replicating HDFS data, B) listing large directories, and C) making new directories; ii) latency of DataNode disk operations, iii) latency at NameNode RPC Queue, iv) latency to acquire NameNode "NameSystem" lock.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure :</head><label></label><figDesc>Figure : Retro architecture with the execution path of a tenant's request highlighted. Metadata is propagated alongside requests as they traverse the system. Resources are intercepted during execution and statistics reported via Retro. Retro exposes throttling points for developers to impose schedulers on the system.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure shows Retro's architecture.</head><label></label><figDesc></figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_4"><head>Figure</head><label></label><figDesc>Figure : Normalized latency (lee) and throughput (right) for rename and read operations comparing HDFS to HDFS instrumented with Retro, along with error bars showing one standard deviation across four runs. Standard deviation in both read kB experiments is about ...</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_1" validated="false"><head></head><label></label><figDesc>a cascading failure resulting from overloaded servers not responding to heartbeats, triggering further data replication and overload. Figure shows how HDFS DN heartbeat latency increases from ms to nearly ms when a tenant overloads the shared NN thread pool.</figDesc><table>Principle: Distinguish between tenants. 
+
+Observation: Foreground requests are only part of the 
+story. Many distributed systems perform background 
+tasks that are not directly triggered by tenant requests, but 
+compete for the same resources. For instance, HDFS per-
+forms data replication aer failures, asynchronous garbage 
+collection aer le deletion, periodic DN heartbeats, and 
+more. ese background tasks can adversely aect the 
+performance of foreground tasks. Jira HDFS-[] de-
+scribes an example of NN overload when a large number of 
+les are abandoned without closing, which triggers a storm 
+
+0 
+
+2000 
+
+0 
+
+0.6 
+
+0 
+4 
+8 
+12 
+
+tput 
+
+[req/s] 
+
+lat 
+
+[sec] 
+
+time [min] 
+
+heartbeat latency 
+t1 thr'put 
+tenant throughput 
+
+Figure : Heartbeat latency is initially ms. Heartbeat latency 
+jumps to ms when the tenant's workload is introduced. 
+
+of block recovery operations aer the lease expiration in-
+terval one hour later. Guo et al. [] describe a failure in 
+Microso's datacenter where a background task spawned 
+a large number of threads, overloading the servers. 
+On the other hand, critical system-generated tasks need 
+to be protected from foreground tasks. Guo et al. [] 
+describe </table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_3" validated="false"><head>.visibility of actual resource bottlenecks leads to the ad-hoc selection of the metrics used for performance isolation. For example, Azure Storage [] and Pisces [] select only request rate and operation size as metrics. SQLVM [] uses CPU, I/O, and memory as key resources.</head><label></label><figDesc></figDesc><table>Some systems 
+drop or queue requests at client-facing entry points or at 
+machine boundaries, though with great variation in the 
+granularity of decisions. High-level schedulers such as 
+Mesos [], Yarn [], or Sparrow [] centrally allocate 
+tasks to machines. Some cloud storage systems, e.g., SS [] 
+or Azure Storage [], make admission decisions for each 
+individual API call. Others have proposed distributed rate 
+limiters, at the network [, ] and disk [] layers, to 
+enforce global reservations, limits and shares on IO. 
+
+Lack of </table></figure>
+		</body>
+		<back>
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title level="m" type="main">Amazon web services</title>
+		<ptr target="http://aws.amazon.com/.AccessedJuly" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Resource containers: a new facility for resource management in server systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Banga</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Druschel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">C</forename><surname>Mogul</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI &apos;&apos;</title>
+		<meeting><address><addrLine>Berkeley, CA, USA, . USENIX Association</addrLine></address></meeting>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">Using Magpie for Request Extraction and Workload Modeling</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Barham</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Donnelly</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Isaacs</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Mortier</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. USENIX OSDI</title>
+		<meeting>USENIX OSDI</meeting>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+		<title level="m" type="main">Windows azure storage: a highly available cloud storage service with strong consistency</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Calder</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Ogus</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Nilakantan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Skjolsvold</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Mckelvie</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Srivastav</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Wu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Simitci</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Jres: A resource accounting interface for java</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Czajkowski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Von Eicken</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM SIGPLAN</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amazon</forename><surname>Dynamodb</surname></persName>
+		</author>
+		<ptr target="http://aws.amazon.com/dynamodb.Accessed" />
+		<imprint>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<monogr>
+		<title level="m" type="main">X-trace: A pervasive network tracing framework</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Fonseca</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Porter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">H</forename><surname>Katz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Shenker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Stoica</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Multiresource fair queueing for packet processing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Ghodsi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Sekar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Zaharia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Stoica</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM SIGCOMM Conference on Applications, Technologies, Architectures, and Protocols for Computer Communication, SIGCOMM &apos;&apos;</title>
+		<meeting>the ACM SIGCOMM Conference on Applications, Technologies, Architectures, and Protocols for Computer Communication, SIGCOMM &apos;&apos;<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Dominant resource fairness: fair allocation of multiple resource types</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Ghodsi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Zaharia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Hindman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Konwinski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Shenker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Stoica</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX NSDI</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Google Protocol Buuers</surname></persName>
+		</author>
+		<ptr target="http://code.google.com/p/protobuf/.AccessedJuly" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<monogr>
+		<title level="m" type="main">mclock: Handling throughput variability for hypervisor io scheduling</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Gulati</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Merchant</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">J</forename><surname>Varman</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Failure recovery: When the cure is worse than the disease</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Guo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Mcdirmid</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Zhuang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Luo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Bergan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Musuvathi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Zhou</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Presented as part of the th Workshop on Hot Topics in Operating Systems</title>
+		<meeting><address><addrLine>Berkeley, CA</addrLine></address></meeting>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hdfs</forename><surname>Api</surname></persName>
+		</author>
+		<ptr target="http://bit.ly/1cxFTD9.Accessed" />
+		<imprint>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<monogr>
+		<title level="m" type="main">Mesos: A platform for ne-grained resource sharing in the data center</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Hindman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Konwinski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Zaharia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Ghodsi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">D</forename><surname>Joseph</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Katz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Shenker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Stoica</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">An overview of aspectj</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Kiczales</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Hilsdale</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Hugunin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Kersten</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Palm</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">G</forename><surname>Griswold</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the th European Conference on Object-Oriented Programming, ECOOP &apos;&apos;</title>
+		<meeting>the th European Conference on Object-Oriented Programming, ECOOP &apos;&apos;<address><addrLine>London, UK, UK</addrLine></address></meeting>
+		<imprint>
+			<publisher>Springer-Verlag</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Sqlvm: Performance isolation in multi-tenant relational database-as-a-service</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><forename type="middle">R</forename><surname>Narasayya</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Das</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Syamala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Chandramouli</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Chaudhuri</surname></persName>
+		</author>
+		<ptr target="www.cidrdb.org" />
+	</analytic>
+	<monogr>
+		<title level="m">CIDR&apos;&apos;&apos;</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">Sparrow: Distributed, low latency scheduling</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Ousterhout</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Wendell</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Zaharia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Stoica</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Twenty-Fourth ACM Symposium on Operating Systems Principles, SOSP &apos;&apos;&apos;</title>
+		<meeting>the Twenty-Fourth ACM Symposium on Operating Systems Principles, SOSP &apos;&apos;&apos;<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Faircloud: Sharing the network in cloud computing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Popa</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Kumar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Chowdhury</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Krishnamurthy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Ratnasamy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Stoica</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGCOMM</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Cloud control with distributed rate limiting</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Raghavan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Vishwanath</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Ramabhadran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Yocum</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">C</forename><surname>Snoeren</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM SIGCOMM</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Pip: detecting the unexpected in distributed systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Reynolds</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Killian</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">L</forename><surname>Wiener</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">C</forename><surname>Mogul</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">A</forename><surname>Shah</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Vahdat</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX Association</title>
+		<meeting><address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title/>
+		<ptr target="http://aws.amazon.com/s3.Accessed" />
+	</analytic>
+	<monogr>
+		<title level="j">Amazon Simple Storage Service</title>
+		<imprint>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<monogr>
+		<title level="m" type="main">Seawall: Performance isolation for cloud datacenter networks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Shieh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Kandula</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Greenberg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Kim</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<monogr>
+		<title level="m" type="main">Performance isolation and fairness for multi-tenant cloud storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Shue</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">J</forename><surname>Freedman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Shaikh</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">e hadoop distributed le system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Shvachko</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Kuang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Radia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Chansler</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Mass Storage Systems and Technologies (MSST), IEEE th Symposium on</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<monogr>
+		<title level="m" type="main">Dapper, a large-scale distributed systems tracing infrastructure</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">H</forename><surname>Sigelman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">A</forename><surname>Barroso</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Burrows</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Stephenson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Plakal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Beaver</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Jaspan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Shanbhag</surname></persName>
+		</author>
+		<imprint>
+			<publisher>Google, Inc</publisher>
+		</imprint>
+	</monogr>
+<note type="report_type">Technical report</note>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<monogr>
+		<title level="m" type="main">Ioow: A sowaredeened storage architecture</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Ereska</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Ballani</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>O&amp;apos;shea</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Karagiannis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Rowstron</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Talpey</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Black</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Zhu</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Ereska</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Salmon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Strunk</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Wachs</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Abd-Elmalek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Lopez</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">R</forename><surname>Ganger</surname></persName>
+		</author>
+		<title level="m">Stardust: Tracking activity in a distributed storage system. SIGMETRICS &apos;&apos;</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<monogr>
+		<title level="m" type="main">Hive -a petabyte scale data warehouse using Hadoop</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Usoo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Sarma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Jain</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Shao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Chakka</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Antony</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Murthy</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Apache hadoop yarn: Yet another resource negotiator</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><forename type="middle">K</forename><surname>Vavilapalli</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">C</forename><surname>Murthy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Douglas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Agarwal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Konar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Evans</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Graves</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Lowe</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Shah</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Seth</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Saha</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Curino</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O</forename><surname>O&amp;apos;malley</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Radia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Reed</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Baldeschwieler</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. SoCC</title>
+		<meeting>SoCC</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Wang</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+	<note>personal communication</note>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<monogr>
+		<title level="m" type="main">Cake: Enabling High-level SLOs on Shared Storage Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Venkataraman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Alspaugh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Katz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Stoica</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<monogr>
+		<title level="m" type="main">Sweet Storage SLOs with Frosting</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Venkataraman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Alspaugh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Stoica</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Katz</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

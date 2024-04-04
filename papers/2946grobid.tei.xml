@@ -1,0 +1,654 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:55+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Lazy Analytics: Let Other Queries Do the Work For You</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">William</forename><surname>Jannen</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">Stony Brook University, †Rutgers University</orgName>
+								<orgName type="institution" key="instit2">‡Massachusetts Institute of Technology</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><forename type="middle">A</forename><surname>Bender</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">Stony Brook University, †Rutgers University</orgName>
+								<orgName type="institution" key="instit2">‡Massachusetts Institute of Technology</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Martin</forename><surname>Farach-Colton</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">Stony Brook University, †Rutgers University</orgName>
+								<orgName type="institution" key="instit2">‡Massachusetts Institute of Technology</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rob</forename><surname>Johnson</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">Stony Brook University, †Rutgers University</orgName>
+								<orgName type="institution" key="instit2">‡Massachusetts Institute of Technology</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bradley</forename><forename type="middle">C</forename><surname>Kuszmaul</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">Stony Brook University, †Rutgers University</orgName>
+								<orgName type="institution" key="instit2">‡Massachusetts Institute of Technology</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Donald</forename><forename type="middle">E</forename><surname>Porter</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution" key="instit1">Stony Brook University, †Rutgers University</orgName>
+								<orgName type="institution" key="instit2">‡Massachusetts Institute of Technology</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Lazy Analytics: Let Other Queries Do the Work For You</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>We propose a class of query, called a derange query, that maps a function over a set of records and lazily aggregates the results. Derange queries defer work until it is either convenient or necessary, and, as a result, can reduce total I/O costs of the system. Derange queries operate on a view of the data that is consistent with the point in time that they are issued, regardless of when the computation completes. They are most useful for performing calculations where the results are not needed until some future deadline. When necessary, derange queries can also execute immediately. Users can view partial results of in-progress queries at low cost.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Queries on production databases have varying requirements for response time and data timeliness. Some transactions service end-user requests, and must minimize latency in order to minimize user-perceived delays. Other queries are not urgent, and hence can be scheduled opportunistically, but nonetheless need a specific point-intime-consistent view of the data. Examples of the second class of queries include periodic reports and summary computations, such as issuing monthly bills, identifying patterns in online purchases, and monitoring trends in social media.</p><p>Long-running summary computations can starve other high-priority, latency-sensitive tasks, if both classes of operations are run on the same machine. To alleviate resource contention on production databases, it is common to maintain replicas or additional databases where summary computations are performed <ref type="bibr">[2]</ref>. This may require additional physical resources, management effort, and/or licenses, and requires keeping multiple databases in sync.</p><p>We propose a new class of query for summary computations that can minimally impact other operations. A derange query maps a function over a range of records, and incrementally aggregates the result. Derange queries defer work until it is necessary (e.g., the result of the query is needed), or convenient (e.g., other necessary work has read the required data into memory). Thus, derange queries are most useful for calculations whose results are needed at some future deadline. However, once issued, derange queries can be scheduled immediately.</p><p>A key idea underlying the derange query model is to integrate background work with I/O scheduling. The goal of a derange query is to make maximum use of all I/Os in the system; when any query executes, we want to amortize the I/O cost of that query across as many active queries as possible. At the same time, we do not want background tasks to impact latency-sensitive operations negatively. The derange query model allows one to integrate these goals into one I/O scheduler.</p><p>Derange queries can be easily implemented as messages in a write-optimized dictionary (WOD), such as a B ε -tree <ref type="bibr" target="#b5">[7]</ref>, a log-structured merge tree <ref type="bibr" target="#b13">[15]</ref>, or a logstructured merge tree variant <ref type="bibr" target="#b3">[5,</ref><ref type="bibr" target="#b16">18,</ref><ref type="bibr" target="#b17">19,</ref><ref type="bibr" target="#b19">21]</ref>. As the name implies, WODs are popular for high-performance databases and file systems <ref type="bibr" target="#b2">[4,</ref><ref type="bibr" target="#b7">9,</ref><ref type="bibr" target="#b8">10,</ref><ref type="bibr" target="#b9">11,</ref><ref type="bibr" target="#b10">12,</ref><ref type="bibr" target="#b11">13,</ref><ref type="bibr" target="#b12">14,</ref><ref type="bibr" target="#b14">16,</ref><ref type="bibr" target="#b15">17,</ref><ref type="bibr" target="#b17">19,</ref><ref type="bibr" target="#b18">20]</ref> because of the very high insertion performancetypically less than 1 I/O per insertion or deletion. WODs are so fast because they buffer and batch writes. The primary focus of write-optimization has been on improving the efficiency of writes through batching.</p><p>This paper identifies an opportunity to integrate write batching in a WOD with background queries that access the same data. There are several benefits to implementing a derange query as a message in a WOD:</p><p>• Derange queries on overlapping input ranges can be transparently batched and processed together, requiring each input value be read only once.</p><p>• Repeated derange queries at multiple points in time on the same input range may complete by reading every version of the data exactly once.</p><p>• I/O required to ingest new data can contribute to completing a derange query, and I/O required to process a derange query can accelerate ingesting new data.</p><p>Derange queries can significantly reduce the cost of summary computations on highly volatile data sets, and could make data analytics possible on high performance production databases without harming update performance. In fact, the higher a data set's update rate, the faster a derange query would complete.</p><p>The remainder of this paper is organized as follows. Section 2 discusses WODs, and explains how the properties of B ε -trees apply to derange query design. Section 3 outlines the proposed derange query implementation using a concrete example. Section 4 reasons about derange query performance. Section 5 presents scenarios where derange queries are particularly beneficial. Section 6 summarizes related work, and Section 7 discusses opportunities for future exploration.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Write-Optimized Dictionaries</head><p>This section explains B ε -trees <ref type="bibr" target="#b5">[7]</ref>, an example of a writeoptimized dictionary (WOD). Derange queries could be implemented in other WODs, including LSM-trees <ref type="bibr" target="#b13">[15]</ref> and their variants <ref type="bibr" target="#b16">[18,</ref><ref type="bibr" target="#b17">19,</ref><ref type="bibr" target="#b19">21]</ref>. However, our proposed implementation relies heavily on upsert operations, and B ε -trees have asymptotically superior upsert performance.</p><p>We limit our discussion to the features of B ε -trees that are most relevant to derange query design. Bender et al. <ref type="bibr" target="#b4">[6]</ref> offer a more complete description of B ε -trees, including comparisons with other WODs.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">B ε -Trees</head><p>A B ε -tree, like a B-tree, is a search tree for organizing persistent data. Internal nodes store pivot keys and child pointers, and leaf nodes store key-value pairs. What sets a B ε -tree apart from a standard B-tree is that internal B ε -tree nodes also allocate a buffer to store messages. The structure of a B ε -tree is illustrated in <ref type="figure">Figure 1</ref>.</p><p>Messages encode updates to key-value pairs. All messages are inserted into the B ε -tree root, and when the message buffer fills in a root or other non-leaf node, messages in the full buffer are flushed to one or more children. Flushing moves messages from a parent to a child's buffer; flushes may cascade down the tree; and messages are ultimately applied to key-value pairs at a leaf. The flushing process estimates the children that would receive enough messages to amortize the cost of rewriting the parent and child buffers. Thus, messages make their way down a root-to-leaf path in batches, until they are eventually applied at a B ε -tree leaf.</p><p>Upserts. B ε -trees can effectively implement blind operations-operations on a key-value pair without first reading it-using upsert messages. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>񮽙(log N) B ε</head><p>Figure 1: A B ε -tree. Internal nodes store pivot keys and child pointers, and leaf nodes store key-value pairs. Internal nodes also allocate a buffer to store messages, which are flushed down the tree in batches.</p><p>An upsert message specifies a key, a function, and a set of function arguments. When a key-value pair is queried, all upsert messages along the pair's root-to-leaf path are gathered, and their functions are applied in order.</p><p>Upserts can be used to compactly encode updates to ranges of bytes within a object, modifications to fields of structured data, or data-dependent computations. The flexibility of upsert messages is essential to the implementation of derange queries; as described in Section 3, upserts allow derange queries to incrementally and lazily aggregate the results of deferred work.</p><p>Temporal ordering. The relative position of messages within buffers of a B ε -tree preserves the temporal order of updates. At any point in time, multiple versions of a key-value pair may exist in the tree (e.g. an insert message overwrites an existing key-value pair), and multiple in-flight messages may contain updates to a given value (e.g. two upserts target the same key-value pair). Node flushing preserves the message ordering until messages are applied to key-value pairs at B ε -tree leaves.</p><p>Queries. All messages needed to answer a query reside in buffers on the root-to-leaf search path. Because nonleaf messages may contain outstanding updates, all messages along the root-to-leaf path must be searched, and updates are applied in reverse chronological order.</p><p>Message targets. A single message may apply to one key-value pair, all key-value pairs (broadcast), or a range of key-value pairs (rangecast). A rangecast message <ref type="bibr" target="#b20">[22]</ref> is addressed to a contiguous range of keys, specified by a beginning and ending key, inclusive.</p><p>Since broadcast and rangecast messages may apply to many key-value pairs, these messages may split during a node flush. When a message splits, the original message is discarded, and new messages with appropriate subranges are created in its place.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Derange Query Design</head><p>A derange query can be implemented as a rangecast upsert message. A derange query has the form DERANGE(R, FILTER, MAP, FOLD, k) where 1. R is an input range.</p><p>2. FILTER is a predicate to remove records that do not meet appropriate criteria. 3. MAP is a function to apply to each record in the input range that meets the filter criteria. 4. FOLD is a function to propagate the results. 5. k is a key specifying where results are accumulated. The aggregation record associated with key k is incrementally updated as a derange query lazily completes. After each application of MAP to an input record, outputs are accumulated by inserting a message of the form:</p><formula xml:id="formula_0">UPSERT(k, FOLD, result MAP )</formula><p>Upsert messages offer a flexible means to propagate MAP results. Upserts can encode complex datadependent operations as well as simple operations like incrementing a counter. Inserting small upsert messages into the root of a B ε -tree imposes little I/O overhead.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Derange Query Example</head><p>To get a feel for how a derange query works, we will show how a fictional online retailer, called "Marketplace", could use derange queries for data analytics.</p><p>Suppose Marketplace manages its inventory using a product database with records of the form:</p><p>Item { productId : num warehouse : address quantity : num value : num price : num } Every hour, Marketplace would like to calculate the cumulative value of all products in its New York warehouses in order to identify trends and make inventory decisions. Marketplace could perform these calculations with a derange query where: Marketplace would first start by initializing its aggregation record, k. In this example, the value of k is a simple integer, totalValue, initialized to 0.</p><formula xml:id="formula_1">R = (−∞, ∞) FILTER = return</formula><p>The range R = (−∞, ∞) means that this query will examine every record in the database. But since the query should only track items in warehouses located in NY, the FILTER function is used to exclude records that do not match this criteria. Note that, if the primary index for the database used geography, the range could select for only records in NY warehouses and avoid reading irrelevant data; the FILTER function can select data based on criteria that is not included in the indexing schema.</p><p>When a derange query message reaches a leaf of the tree, the value of each record it observes is the value that existed when the derange query was first issued. At that point, the MAP function is called on all records that fall within R and satisfy the FILTER function. The output of each MAP function-here the total value of a single product in the warehouse's inventory-is propagated to the aggregation record, k, using an upsert where the FOLD function updates k's running total.</p><p>This simple example demonstrates the utility that derange queries provide. Marketplace's inventory calculations are performed on views of the data at fixed timestamps, but query results are not needed right away. If a particular region of the tree remains unchanged between two derange queries, then a single I/O will satisfy both operations. However, even when the tree is updated frequently, all derange queries see a point-in-timeconsistent view of the data, regardless of when the actual calculation is performed.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Query Completion</head><p>One challenge that arises when lazily executing independent, distributed computations is determining what fraction of the total work has completed. To solve this problem, we add a small amount of bookkeeping to the aggregation record: one required field, outstandingMessages, and one optional field, recordsProcessed.</p><p>The outstandingMessages field is a simple counter. A derange query message may apply to many records in the tree, and as explained in Subsection 2.1, a node flush may cause a rangecast message to split. Each time a derange query message splits, we issue an upsert message to the derange query's aggregation record to increment the outstandingMessages counter. To complete the bookkeeping, we issue an upsert message that decrements the counter when a derange query message reaches a B ε -tree leaf. The outstandingMessages counter is initialized to 1 in order to account for the initial derange query message inserted at the root of the B ε -tree.</p><p>The recordsProcessed field counts the number of keyvalue pairs that have folded their MAP results to the aggregation record. Due to the laziness of flushing and the opacity of the internal B ε -tree structure, an application has no control over the progress of a derange query without manually triggering message flushes. By querying the recordsProcessed field, an application can reason about the meaningfulness of a partially completed result.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Derange Query Cost</head><p>This section explains how derange queries improve the performance of summary computations in much the same way that WODs improve the performance of inserts and updates.</p><p>As explained in Subsection 2.1, a B ε -tree node is only dirtied when a substantial amount of new data is written-enough to amortize the cost of rewriting the parent and child nodes. For a tree with a node size of B, a branching factor of B ε , and a buffer size of B − B ε , the amount of new data written during each node flush is at least B−B ε B ε = B 1−ε . We call this the batching factor. Batching is why inserts and upserts in a B ε -tree are B 1−ε times faster than in a B-tree.</p><p>Derange queries bring the benefits of batching to queries. A derange query spanning a range of items touches O( </p><formula xml:id="formula_2">log B N εB 1−ε + B 2−ε )</formula><p>. In contrast, a normal range query spanning items requires O( log B N ε + B ) I/Os. The batching factor divides the cost; as a result, derange queries have the potential to provide as much speedup for queries as write optimization provides for inserts.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Derange Query Opportunities</head><p>In this section, we discuss the types of environments where derange queries would be particularly useful.</p><p>Mixed workload environments. A typical web-scale database serves at least two kinds of queries: small random queries that must be answered quickly, and large analytic queries that might take several hours in the best case but can be delayed by many more hours without hurting their value to the business. An example might be a credit-card database where customer purchases create many high-priority inserts, and large queries are performed overnight to find new fraud patterns.</p><p>If most of the I/O's needed by the big query can be piggybacked onto the small queries, then both types of queries can be performed without increasing the cost of the database or slowing down the small queries.</p><p>Point-in-time computations. In the common case, instances of the same derange query, repeated at multiple points in time, would be satisfied by reading each version of the data exactly once. Thus, derange queries can be used to increase the granularity of reporting.</p><p>Queries on overlapping ranges. Derange queries can make it easy to batch otherwise unrelated queries. For example, consider a system that performs one summary computation every 24 hours, and another summary computation ever 12 hours. Manually batching these computations would essentially require writing two versions of the 12-hour computation-one that runs on its own and another that runs as part of the 24-hour computation. With derange queries, developers need to write only one version of each computation, and the system will batch them automatically when possible.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Related Work</head><p>Amvrosiadis et al. observed that common file system maintenance tasks (e.g. backup, defragmentation, virus scanning, etc.) are frequently executed independently despite their largely overlapping working sets. The Duet <ref type="bibr" target="#b1">[3]</ref> framework places hooks in the page cache to notify processes when requested data is available. This lets background tasks leverage the I/O performed by foreground work. Derange queries similarly leverage the internal work done by the B ε -tree when it flushes messages to apply updates, piggybacking on I/O.</p><p>In the MapReduce <ref type="bibr" target="#b6">[8]</ref> programming model, users filter and sort input data, independently process the filtered data, and combine the computations' outputs into a final result. MapReduce makes these types of operations easy to program for distributed data sets. Derange queries provide a similar programming model, but can optionally defer execution. The motivating use cases of this paper have been single-node, high performance, production databases, but derange queries could also be extended to work on a distributed storage system. LINQ <ref type="bibr" target="#b0">[1]</ref> features deferred execution, which delays the evaluation of an expression until its value is required. However, from the time an expression tree is created to the time the query is executed, the database may change. A derange query defers execution until the message is applied, but the message is always applied to the value of the data at the time the message is inserted.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Future Work</head><p>Even when derange queries cannot be delayed arbitrarily, they can provide significant speedups. Part of our future work is to analyze and empirically evaluate the performance opportunities created by derange queries.</p><p>When executing a derange query with a fixed deadline, the ability to systematically execute portions of the query would be useful. Otherwise, a burst of deferred work might need to be scheduled at the query deadline, eroding the benefits of batching. Derange queries create opportunities for I/O scheduling and workload management.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head></head><label></label><figDesc>񮽙(B ε ) children ... elements … 񮽙(N/B) leaves ... B-B ε B ε B . . .</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head></head><label></label><figDesc>log B N ε + B ) nodes during its execution. De- range query messages are flushed along with other mes- sages in batches of size at least B 1−ε . Hence the amor- tized I/O cost of a derange query spanning items is O(</figDesc></figure>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgments</head><p>We thank the anonymous reviewers and our shepherd, Cindy Rubio Gonzalez, for their insightful comments on earlier drafts of the work. This research was supported in part by NSF grants CNS-1409238, CNS-1408782, CNS-1408695, CNS-1405641, CNS-1149229, CNS-1161541, CNS-1228839, IIS-1247750, CCF-1314547, CNS-1526707, Sandia National Laboratories, and VMware.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Linq</surname></persName>
+		</author>
+		<ptr target="https://blogs.msdn.microsoft.com/charlie/2007/12/10/linq-and-deferred-execution/" />
+		<imprint>
+			<date type="published" when="2007-03-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Opportunistic storage maintenance</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Amvrosiadis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">D</forename><surname>Brown</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Goel</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP</title>
+		<imprint>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="457" to="473" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Apache</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Hbase</surname></persName>
+		</author>
+		<ptr target="http://hbase.apache.org" />
+		<imprint>
+			<date type="published" when="2015-05-16" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Cache-oblivious streaming B-trees</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">A</forename><surname>Bender</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Farach-Colton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">T</forename><surname>Fineman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><forename type="middle">R</forename><surname>Fogel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">C</forename><surname>Kuszmaul</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Nelson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SPAA</title>
+		<imprint>
+			<date type="published" when="2007" />
+			<biblScope unit="page" from="81" to="92" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+		<title level="m" type="main">An introduction to B e -trees and write-optimization. ;login: Magazine</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">A</forename><surname>Bender</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Farach-Colton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Jannen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Johnson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">C</forename><surname>Kuszmaul</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">E</forename><surname>Porter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Yuan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhan</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2015-10" />
+			<biblScope unit="volume">40</biblScope>
+			<biblScope unit="page" from="22" to="28" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Lower bounds for external memory dictionaries</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">S</forename><surname>Brodal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Fagerberg</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SODA</title>
+		<imprint>
+			<date type="published" when="2003" />
+			<biblScope unit="page" from="546" to="554" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Mapreduce: Simplified data processing on large clusters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Dean</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Ghemawat</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI</title>
+		<imprint>
+			<date type="published" when="2004" />
+			<biblScope unit="page" from="137" to="150" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">The TokuFS streaming file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Esmet</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">A</forename><surname>Bender</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Farach-Colton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">C</forename><surname>Kuszmaul</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">HotStorage</title>
+		<imprint>
+			<date type="published" when="2012" />
+			<biblScope unit="page">14</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<monogr>
+		<title level="m" type="main">LevelDB: A fast and lightweight key/value database library by Google</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Inc</forename><surname>Google</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">BetrFS: A right-optimized write-optimized file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Jannen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Yuan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Akshintala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Esmet</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Jiao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Mittal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Pandey</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Reddy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Walsh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Bender</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Farach-Colton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Johnson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">C</forename><surname>Kuszmaul</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">E</forename><surname>Porter</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FAST</title>
+		<imprint>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="301" to="315" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">BetrFS: Write-optimization in a kernel file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Jannen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Yuan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Akshintala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Esmet</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Jiao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Mittal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Pandey</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Reddy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Walsh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Bender</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Farach-Colton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Johnson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">C</forename><surname>Kuszmaul</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">E</forename><surname>Porter</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM TOS</title>
+		<imprint>
+			<biblScope unit="volume">11</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<date type="published" when="2015-11" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Cassandra -a decentralized structured storage system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Lakshman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Malik</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">OS Rev</title>
+		<imprint>
+			<biblScope unit="volume">44</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="35" to="40" />
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<monogr>
+		<title level="m" type="main">The MongoDB 2.6 Manual</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Mongodb</surname></persName>
+		</author>
+		<ptr target="http://docs.mongodb.org/manual/" />
+		<imprint>
+			<date type="published" when="2014-05-27" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">The log-structured merge-tree (LSM-tree)</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>O&amp;apos;neil</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Cheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Gawlic</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>O&amp;apos;neil</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Acta Informatica</title>
+		<imprint>
+			<biblScope unit="volume">33</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="351" to="385" />
+			<date type="published" when="1996" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">TABLEFS: Enhancing metadata efficiency in the local file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Ren</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">A</forename><surname>Gibson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX ATC</title>
+		<imprint>
+			<date type="published" when="2013" />
+			<biblScope unit="page" from="145" to="156" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="middle">Rocksdb</forename><surname>Rocksdb</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Org</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2014-04-19" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">bLSM: a general purpose log structured merge tree</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Sears</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Ramakrishnan</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGMOD</title>
+		<imprint>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="217" to="228" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Building workload-independent storage with VT-trees</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Shetty</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">P</forename><surname>Spillane</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Malpani</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Andrews</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Seyster</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Zadok</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FAST</title>
+		<imprint>
+			<date type="published" when="2013" />
+			<biblScope unit="page" from="17" to="30" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<monogr>
+				<ptr target="https://web.archive.org/web/20121011120047/http://www.tokutek.com/products/tokudb-for-mysql/" />
+		<title level="m">Tokutek, Inc. TokuDB v6.5 for MySQL and MariaDB</title>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">LSM-trie: An LSM-tree-based ultra-large key-value store for small data items</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Wu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Shao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Jiang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX ATC</title>
+		<imprint>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="71" to="82" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Optimizing every operation in a write-optimized file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Yuan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Jannen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Pandey</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Akshintala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Chandnani</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Deo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Kasheff</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Walsh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Bender</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Farach-Colton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Johnson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">C</forename><surname>Kuszmaul</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">E</forename><surname>Porter</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FAST</title>
+		<imprint>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="1" to="14" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

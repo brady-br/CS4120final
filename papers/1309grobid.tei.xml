@@ -1,0 +1,1471 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T01:53+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Stable Deterministic Multithreading through Schedule Memoization</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Heming</forename><surname>Cui</surname></persName>
+							<email>heming@cs.columbia.edu</email>
+							<affiliation key="aff0">
+								<orgName type="department">Computer Science Department</orgName>
+								<orgName type="institution">Columbia University New York</orgName>
+								<address>
+									<postCode>10027</postCode>
+									<region>NY</region>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jingyue</forename><surname>Wu</surname></persName>
+							<email>jingyue@cs.columbia.edu</email>
+							<affiliation key="aff0">
+								<orgName type="department">Computer Science Department</orgName>
+								<orgName type="institution">Columbia University New York</orgName>
+								<address>
+									<postCode>10027</postCode>
+									<region>NY</region>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chia-Che</forename><surname>Tsai</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Computer Science Department</orgName>
+								<orgName type="institution">Columbia University New York</orgName>
+								<address>
+									<postCode>10027</postCode>
+									<region>NY</region>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Junfeng</forename><surname>Yang</surname></persName>
+							<email>junfeng@cs.columbia.edu</email>
+							<affiliation key="aff0">
+								<orgName type="department">Computer Science Department</orgName>
+								<orgName type="institution">Columbia University New York</orgName>
+								<address>
+									<postCode>10027</postCode>
+									<region>NY</region>
+								</address>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Stable Deterministic Multithreading through Schedule Memoization</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>A deterministic multithreading (DMT) system eliminates nondeterminism in thread scheduling, simplifying the development of multithreaded programs. However, existing DMT systems are unstable; they may force a program to (ad)venture into vastly different schedules even for slightly different inputs or execution environments, defeating many benefits of determinism. Moreover, few existing DMT systems work with server programs whose inputs arrive continuously and nondeterministically. TERN is a stable DMT system. The key novelty in TERN is the idea of schedule memoization that memo-izes past working schedules and reuses them on future inputs, making program behaviors stable across different inputs. A second novelty in TERN is the idea of win-dowing that extends schedule memoization to server programs by splitting continuous request streams into windows of requests. Our TERN implementation runs on Linux. It operates as user-space schedulers, requiring no changes to the OS and only a few lines of changes to the application programs. We evaluated TERN on a diverse set of 14 programs (e.g., Apache and MySQL) with real and synthetic workloads. Our results show that TERN is easy to use, makes programs more deterministic and stable, and has reasonable overhead.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Multithreaded programs are difficult to write, test, and debug. A key reason is nondeterminism: different runs of a multithreaded program may show different behaviors, depending on how the threads interleave <ref type="bibr" target="#b33">[35]</ref>.</p><p>Two main factors make threads interleave nondeterministically. The first is scheduling, how the OS and hardware schedule threads. Scheduling nondeterminism is not essential and can be eliminated without affecting correctness for most programs. The second is input, what data (input data) arrives at what time (input timing). Input nondeterminism sometimes is essential because major changes in inputs require different schedules. However, frequently input nondeterminism is not essential and the same schedule can be used to process many different inputs ( §2.2). We believe nonessential nondeterminism should be eliminated in favor of determinism.</p><p>Deterministic multithreading (DMT) systems <ref type="bibr" target="#b11">[13,</ref><ref type="bibr" target="#b20">22,</ref><ref type="bibr" target="#b39">41]</ref> make threads more deterministic by eliminating scheduling nondeterminism. Specifically, they constrain a multithreaded program such that it always uses the same thread schedule for the same input. By doing so, these systems make program behaviors repeatable, increase testing confidence, and ease bug reproduction.</p><p>Unfortunately, though existing DMT systems eliminate scheduling nondeterminism, they do not reduce input nondeterminism. In fact, they may aggravate the effects of input nondeterminism because of their design limitation: when scheduling the threads to process an input, they consider only this input and ignore previous similar inputs. This stateless design makes schedules over-dependent on inputs, so that a slight change to inputs may force a program to (ad)venture into a vastly different, potentially buggy schedule, defeating many benefits of determinism. We call this the instability problem. This problem is confirmed by our results ( §8.2.1) from an existing DMT system <ref type="bibr" target="#b11">[13]</ref>.</p><p>In fact, even with the same input, existing DMT systems may still force a program into different schedules for minor changes in the execution environment such as processor type and shared library. Thus, developers may no longer be able to reproduce bugs by running their program on the bug-inducing input, because their machine may differ from the machine where the bug occurred. This paper presents TERN, a schedule-centric, stateful DMT system. It addresses the instability problem using an idea called schedule memoization that memoizes past working schedules and reuses them for future inputs. Specifically, TERN maintains a cache of past schedules and the input constraints required to reuse these schedules. When an input arrives, TERN checks the input against the memoized constraints for a compatible sched- ule. If it finds one, it simply runs the program while enforcing this schedule. Otherwise, it runs the program to memoize a schedule and the input constraints of this schedule for future reuse. By reusing schedules, TERN avoids potential errors in unknown schedules. This advantage is illustrated in <ref type="figure" target="#fig_0">Figure 1</ref>. A real-world analogy to schedule memoization is the natural tendencies in humans and animals to follow familiar routes to avoid possible hazards along unknown routes. Migrant birds, for example, often migrate along fixed "flyways." We thus name our system after the Arctic Tern, a bird species that migrates the farthest among all migrants <ref type="bibr" target="#b1">[2]</ref>.</p><p>A second advantage of schedule memoization is that it makes schedules explicit, providing flexibility in deciding when to memoize certain schedules. For instance, TERN allows developers to populate a schedule cache offline, to avoid the overhead of doing so online. Moreover, TERN can check for errors (e.g., races) in schedules and memoize only the correct ones, thus avoiding the buggy schedules and amortizing the cost of checking for errors.</p><p>To make TERN practical, it must handle server programs which frequently use threads for performance. These programs present two challenges for TERN: (1) they often process client inputs (requests) as they arrive, thus suffering from input timing nondeterminism, which existing DMT systems do not handle and (2) they may run continuously, making their schedules effectively infinite and too specific to reuse.</p><p>TERN addresses these challenges using a simple idea called windowing. Our insight is that server programs tend to return to the same quiescent states. Thus, TERN splits the continuous request stream of a server into windows and lets the server quiesce in between, so that TERN can memoize and reuse schedules across windows. Within a window, it admits requests only at fixed schedule points, reducing timing nondeterminism.</p><p>We implemented TERN in Linux. It runs as "parasitic" user-space schedulers within the application's address space, overseeing the decisions of the OS scheduler and synchronization library. It memoizes and reuses synchronization orders as schedules to increase performance and reuse rates. It tracks input constraints using KLEE <ref type="bibr" target="#b15">[17]</ref>, a symbolic execution engine. Our implementation is software-only, works with general C/C++ programs using threads, and requires no kernel modifications and only a few lines of modification to applications, thus simplifying deployment.</p><p>We evaluated TERN on a diverse set of 14 programs, including two server programs Apache <ref type="bibr" target="#b8">[10]</ref> and MySQL <ref type="bibr">[4]</ref>, a parallel compression utility PBZip2 <ref type="bibr" target="#b3">[5]</ref>, and 11 scientific programs in SPLASH2 <ref type="bibr" target="#b4">[6]</ref>. Our workload included a Columbia CS web trace and benchmarks used by Apache and MySQL developers. Our results show that 1. TERN is easy to use. For most programs, we modified only a few lines to adapt them to TERN. 2. TERN enforces stability across different inputs. In particular, it reused 100 schedules to process 90.3% of a 4-day Columbia CS web trace. Moreover, while an existing DMT system <ref type="bibr" target="#b11">[13]</ref> made three bugs inconsistently occur or disappear depending on minor input changes, TERN always avoided these bugs. 3. TERN has reasonable overhead. For nine out of fourteen evaluated programs, TERN has negligible overhead or improves performance; for the other programs, TERN has up to 39.1% overhead. 4. TERN makes threads deterministic. For twelve out of fourteen evaluated programs, the schedules TERN memoized can be deterministically reused barring the assumption discussed in §7. Our main conceptual contributions are that we identified the instability problem in existing DMT systems and proposed two ideas, schedule memoization and windowing, to mitigate input nondeterminism. Our engineering contributions include the TERN system and its evaluation of real programs. To the best of our knowledge, TERN is the first stable DMT system, the first to mitigate input timing nondeterminism, and the first shown to work on programs as large, complex, and nondeterministic as Apache and MySQL. TERN demonstrates that DMT has the potential to be deployed today.</p><p>This paper is organized as follows. We first present a background ( §2) and an overview of TERN ( §3). We then describe TERN's interface ( §4), schedule memoization for batch programs ( §5), and windowing to extend TERN to server programs ( §6). We then present refinements we made to optimize TERN ( §7). Lastly, we show our experimental results ( §8), discuss related work ( §9), and conclude ( §10).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Background</head><p>This section presents a background of TERN. We explain the instability problem of existing DMT systems ( §2.1), our choice of schedule representation in TERN ( §2.2), and why we can reuse schedules across inputs ( §2.3).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">The Instability Problem</head><p>A DMT system is, conceptually, a function that maps an input I to a schedule S. The properties of this function are that the same I should map to the same S and that S is a feasible schedule for processing I. A stable DMT system such as TERN has an additional property: it maps similar inputs to the same schedule. Existing DMT systems, however, tend to map similar inputs to different schedules, thus suffering from the instability problem.</p><p>We argue that this problem is inherent in existing DMT systems because they are stateless. They must provide the same schedule for an input across different runs, using information only from the current run. To force threads to communicate (e.g., acquire locks or access shared memory) deterministically, existing DMT systems cannot rely on physical clocks. Instead, they maintain a logical clock per thread that ticks deterministically based on the code this thread has run. Moreover, threads may communicate only when their logical clocks have deterministic values (e.g., smallest across the logical clocks of all threads <ref type="bibr" target="#b39">[41]</ref>). By induction, logical clocks make threads deterministic.</p><p>However, the problem with logical clocks is that for efficiency, they must tick at roughly the same rate to prevent a thread with a slower clock from starving others. Thus, existing DMT systems have to tie their logical clocks to low-level instructions executed (e.g., completed loads <ref type="bibr" target="#b39">[41]</ref>). Consequently, a small change to the input or execution environment may alter a few instructions executed, in turn altering the logical clocks and subsequent thread communications. That is, a small change to the input or execution environment may cascade into a much different (e.g., correct vs. buggy) schedule.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">Schedule Representation and Determinism</head><p>Previous DMT systems have considered two types of schedules: (1) a deterministic order of shared memory accesses <ref type="bibr" target="#b11">[13,</ref><ref type="bibr" target="#b20">22]</ref> and (2) a synchronization order (i.e., a total order of synchronization operations) <ref type="bibr" target="#b39">[41]</ref>. The first type of schedules are truly deterministic even if there are races, but they are costly to enforce on commodity hardware (e.g., up to 10 times overhead <ref type="bibr" target="#b11">[13]</ref>). The second type can be efficiently enforced (e.g., 16% overhead <ref type="bibr" target="#b39">[41]</ref>) because most code is not synchronization code and can run in parallel; however, they are deterministic only for inputs that lead to race-free runs <ref type="bibr" target="#b39">[41,</ref><ref type="bibr" target="#b44">46]</ref>.</p><p>TERN represents schedules as synchronization orders for efficiency. An additional benefit is that synchronization orders can be reused more frequently than memory access orders (cf next subsection). Moreover, researchers have found that many concurrency errors are not data</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Program Input Constraints for Schedule Reuse PBZip2</head><p>Same number of file blocks (NumBlocks or -b) and threads (-p) Apache</p><p>For groups of typical HTTP GET requests, same cache status and response sizes fft Same number of threads (-p) lu</p><p>Same number of threads (-p), size of the matrix (-n), and block size (-b) barnes</p><p>Same number of threads (NPROC) and values of variables dtime and tstop <ref type="table">Table 1</ref>: Input constraints of five programs to reuse schedules.</p><p>Identifiers without a dash are configuration variables, and those with a dash are command line options.</p><p>races, but atomicity and order violations <ref type="bibr" target="#b37">[39]</ref>. These errors can be deterministically reproduced or avoided using only synchronization orders. Although data races may still make runs which reuse schedules nondeterministic, TERN is less prone to this problem than existing DMT systems <ref type="bibr" target="#b39">[41]</ref> because it has the flexibility to select schedules. If it detects a race in a memoized schedule, it can simply discard this schedule and memoize another. This selection task is often easy because most schedules are race-free. In rare cases, TERN may be unable to find a race-free schedule, resulting in nondeterministic runs. However, we argue that input nondeterminism cannot be fully eliminated anyway, so we may as well tolerate some scheduling nondeterminism, following the end-to-end argument.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.3">Why Can We Reuse Schedules?</head><p>This subsection presents an intuitive and an empirical argument to support our insight that we can frequently reuse schedules for many programs/workloads. Intuitively, synchronization operations map to developer intents of inter-thread control flow. By enforcing the same synchronization order, we fix the same inter-thread "path," but still allow many different inputs to flow down this path. (This observation is similarly made for sequential paths <ref type="bibr" target="#b9">[11,</ref><ref type="bibr" target="#b10">12,</ref><ref type="bibr" target="#b24">26]</ref>.)</p><p>To empirically validate our insight, we studied the input constraints to reuse schedules for five programs, including a parallel compression utility PBZip2; the Apache web server; and three scientific programs fft, lu, and barnes in SPLASH2. <ref type="table">Table 1</ref> shows the results for all programs studied. We found that the input constraints were often general, allowing frequent reuses of schedules. For instance, PBZip2 can use the same schedule to compress many different files, as long as the number of threads and the number of file blocks remain the same.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Overview</head><p>Our design of TERN adheres to the following goals: 1. Backward compatibility. We design TERN for general multithreaded programs because of their dominance in parallel programs today and likely tomorrow. We design TERN to run in user-space and on commodity hardware to ease deployment. 2. Stability. We design TERN to bias multithreaded programs toward repeating their past, familiar schedules, instead of venturing into unfamiliar ones. 3. Efficiency. We design TERN to be efficient because it operates during the normal executions of programs, not replayed executions. 4. Best-effort determinism. We design TERN to make threads deterministic, but we sacrifice determinism when it contradicts the preceding goals. The remaining of this section presents TERN's architecture ( §3.1), workflow ( §3.2), deployment scenarios ( §3.3), and limitations ( §3.4). <ref type="figure" target="#fig_1">Figure 2</ref> shows the architecture of TERN and its five components: instrumentor, schedule cache, proxy, replayer, and memoizer. To use TERN, developers first annotates their application by marking the input data that may affect synchronization operations. They then compile their program with the instrumentor, which intercepts standard synchronization operations such as pthread mutex lock() so that at runtime TERN can control these operations. (We describe additional annotations and instrumentations that TERN needs in §4). The instrumentor runs as a plugin to LLVM <ref type="bibr" target="#b2">[3]</ref>, requiring no modifications to the compiler.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Architecture</head><p>The schedule cache stores all memoized schedules and their input constraints. This cache can be marshalled to disk and read back upon program start, so that it need not be repopulated. Each memoized schedule is conceptually a tuple C, S, where S is a synchronization order and C is the set of input constraints required to reuse S. (We explain the actual representation in §5.2).</p><p>At runtime, once an input I arrives, the proxy intercepts the input and queries the schedule cache for a constraint-schedule tuple C i , S i such that I satisfies</p><formula xml:id="formula_0">1 : main(int argc, char *argv[ ]) { 2 : int i, nthread = argv[1], nblock = argv[2]; 3 :</formula><p>symbolic(&amp;nthread, sizeof(int)); // mark input data 4 : symbolic(&amp;nblock, sizeof(int)); // that affects schedules 5 :</p><p>for(i=0; i&lt;nthread; ++i) 6 : pthread create(worker); // create worker threads 7 :</p><p>for <ref type="formula">(</ref> C i . On a cache hit, the proxy lets the replayer run the program on input I and enforce schedule S i . On a cache miss, it lets the memoizer run the program on input I to memoize a new schedule.</p><p>During a memoization run, the memoizer records all synchronization operations into a schedule S. It also computes C, the input constraints for reusing S, via symbolic execution <ref type="bibr" target="#b15">[17]</ref>. The basic idea of symbolic execution is to track the outcomes of branches that observe symbolic data, in our case, the data marked by developers as affecting synchronizations. Once the memoization run ends, the set of branch outcomes we collected describes the input constraints needed to reuse the memoized schedule.</p><p>For determinism, the memoizer can optionally check a memoization run for data races. If it detects no races, it simply stores C, S into the schedule cache. Otherwise, it can discard the memoized schedule and rerun the program with a different scheduling algorithm to memoize another schedule.</p><p>The proxy performs an additional task for server programs to reduce input timing nondeterminism and to reuse schedules for these programs. Specifically, it buffers the requests of a server into a window with a fixed size. When the window becomes full, or remains partial for a predefined timeout, TERN runs the server to process the window as if the server were a batch program. It then lets the server quiesce before moving to the next window to avoid interference between windows.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Workflow and An Example</head><p>We illustrate how TERN works using PBZip2 as an example. <ref type="figure">Figure 3</ref> shows the simplified code of PBZip2. Variables nthread and nblock affect synchronizations, so developers mark them by calling the TERNprovided method symbolic() (line 3 and line 4). This code spawns nthread worker threads, splits the file // main worker 1 worker 2 9: worklist.add();</p><p>14: worklist.get(); 9: worklist.add();</p><p>14: worklist.get(); <ref type="figure">Figure 4</ref>: Synchronization order of a PBZip2 run.</p><p>5: 0 &lt; nthread ? true 5: 1 &lt; nthread ? true 5: 2 &lt; nthread ? false 7: 0 &lt; nblock ? true 7: 1 &lt; nblock ? true 7: 2 &lt; nblock ? false into nblock blocks, and compresses them in parallel by calling compress(). To coordinate the worker threads, it uses a synchronized work list. (Note TERN tracks low-level synchronizations such as pthread primitives; we use a work list here only for clarity.) Suppose we run PBZip2 with two threads on a twoblock file. Suppose the schedule cache is empty and TERN runs the memoizer to memoize a new schedule. As PBZip2 runs, TERN controls and records the synchronization operations (line 9 and line 14). It also tracks the outcomes of branch statements that observe symbolic data (line 5 and line 7). At the end of the run, TERN records a schedule as shown in <ref type="figure">Figure 4</ref>. It also collects constraints as shown in <ref type="figure" target="#fig_3">Figure 5</ref>, which simplify to nthread = 2 ∧ nblock = 2. 1 It stores the schedule and the input constraints into the schedule cache.</p><p>If we run PBZip2 again with two threads on a different two-block file, TERN will check if variable nthread and nblock satisfy any set of constraints in the schedule cache. In this case, TERN will succeed. It will then reuse the schedule <ref type="figure">(Figure 4</ref>) to compress the file, even though the file data may differ completely.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">Deployment Scenarios</head><p>We anticipate three ways users may deploy TERN to make their programs stable and deterministic. Schedule-carrying code. Developers pre-populate a cache of correct, representative schedules on typical workloads, then ship their program with the cache hardwired and marked read-only. Online memoization. Users can turn on memoization at their local sites so that TERN can memoize schedules as the programs run on real inputs. Shadow memoization. Since tracking input constraints is slow, users can configure TERN to memoize schedules asynchronously. Specifically, for an input that misses the schedule cache, the proxy runs the program as is, while forwarding a copy of the input to the memoizer.</p><p>Each deployment mode has pros and cons. The first mode makes a program stable and deterministic across different sites, but may react poorly to site-specific workloads. The second mode updates the schedule cache based on site-specific workloads, but may be slow because memoization runs tend to be slow. The last approach avoids the slowdown, but allows a program to run nondeterministically when an input misses the schedule cache. For server programs with high performance requirements, we recommend the first and the third modes.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.4">Limitations</head><p>Determinism. TERN aims for best-effort determinism for reasons discussed in §2.2. If TERN is unable to find a race-free schedule for an input, the run may be nondeterministic. We foresee several strategies to handle this corner case while adhering to the other goals of TERN. For instance, we can instrument the program to fix the detected races or apply one of the existing DMT algorithms to resolve the races deterministically. The advantage of combining these techniques with TERN is that we apply these expensive techniques only to a small portion of schedules, and use TERN to efficiently handle the common case. We leave these ideas for future work. Applicability. We anticipate our approach will work well for many programs/workloads as long as (1) they can benefit from determinism and stability, (2) their constraints can be tracked by TERN, (3) their schedules can be frequently reused, and (4) if windowing is needed, their inputs can be buffered. For programs/workloads that violate these assumptions, TERN may work poorly. These programs/workloads may include parallel simulators that require nondeterminism for statistical results, GUI programs that cannot buffer user actions for latency reasons, randomly generated workloads that prevent schedule reuses, and programs whose schedules depend on floating point inputs (which cannot be tracked by TERN's underlying symbolic execution engine). Manual annotation. TERN requires manual annotations. However, this annotation overhead tends to be small. (See §7.4 for how TERN reduces this overhead and §8.1 for an evaluation of this overhead). This overhead may be further reduced using simple static analysis. <ref type="table">Table 2</ref> shows TERN's annotation interface which developers and the instrumentor use to annotate multithreaded programs. The annotations fall into four categories: (1) symbolic() for marking data that may affect schedules; (2) task boundary annotations for marking the beginning and end of logical tasks, in case threads get reused for different logical tasks ( §6); <ref type="formula">(3)</ref>   <ref type="table">Table 2</ref>: TERN interface. Some annotations are inserted by developers, and others are inserted by the instrumentor, indicated by Column Inserted By. Both the memoizer and the replayer use this interface, but they implement this interface differently ( §5).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Interface</head><p>pers to synchronization operations (more examples in the next paragraph); and (4) hook functions inserted around blocking system calls, which TERN memoizes because blocking systems calls are natural scheduling points.</p><p>Currently TERN hooks 28 pthread operations (e.g., pthread mutex lock(), pthread create(), and pthread cond wait()). It also handles common atomic operations such as atomic dec() and atomic inc(). It hooks eight blocking system calls (e.g., sleep(), accept(), recv(), select(), and read()). These hooks are sufficient to run the programs evaluated, and we can easily add more.</p><p>Developers manually insert annotations in the first two categories. They also annotate custom synchronizations (e.g., custom spin locks). TERN's instrumentor automatically hooks standard synchronization and blocking system calls. These annotations allow TERN's memoizer and replayer to run as "parasitic" user-space schedulers that oversee the scheduling decisions of the OS and synchronization library, requiring no modifications to either.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Schedule Memoization</head><p>This section presents the idea of schedule memoization in the context of batch programs. We describe how TERN memoizes schedules ( §5.1), tracks input constraints ( §5.2), merges a schedule into the schedule cache ( §5.3), and reuses schedules ( §5.4).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1">Memoizing Schedules</head><p>To memoize schedules, the memoizer controls and logs synchronization operations. By default, it uses a simple round-robin (RR) algorithm that forces each thread to do synchronizations in turn. One advantage of this algorithm is that independent sites may memoize the same schedules, making program behaviors deterministic and stable across sites.</p><p>The memoizer implements this algorithm by implementing the wrapper functions in <ref type="table">Table 2</ref>. <ref type="figure" target="#fig_4">Figure 6</ref> shows the wrappers to pthread mutex lock() and pthread mutex unlock(). The memoizer maintains a queue of active threads. Only the thread at the head of the queue "has the turn" (line 4 and 14). Once the thread is done with the operation, it gives up the turn by moving itself to the tail of the queue (line 7 and 18).</p><p>We explain three subtleties of the code. First, to avoid the deadlock scenario when the head of the queue attempts to grab an unavailable mutex, we call the nonblocking lock operation instead of the blocking one (line 5). If the mutex is not available, the thread gives up its turn and waits on a TERN-maintained wait queue (line 10). TERN uses its own wait queues to avoid nondeterministic wakeup orders in pthread library. Second, we log synchronizations (line 6 and line 17) only when the thread has the turn, so that the log faithfully reflects the actual order of synchronizations. Lastly, we maintain our internal thread IDs to avoid nondeterminism in the OS thread IDs across runs. Function self() returns this internal ID for the current thread (line 6 and line 17).</p><p>The memoizer allows a thread to break out of the round-robin when the thread has waited for its turn for over a second. The rationale is that if a thread has waited too long, the current schedule will likely perform poorly in reuse runs. However, such timeouts do not affect nondeterminism, because the memoizer still logs the order of the occurred operations and the replayer simply enforces the same order. In our experiments, we never observed such timeouts because most threads synchronize or call blocking system calls frequently.</p><p>Unlike previous DMT systems, TERN has the flexibility to select scheduling algorithms. In addition to the RR algorithm, it implements a first-come first-served (FCFS) algorithm that lets threads run as is. If the memoizer detects a race using RR, it can restart the run and switch to FCFS. Implementing FCFS requires only minor modifications to the algorithm presented in <ref type="figure" target="#fig_4">Figure 6</ref>. Specifically, we replace line 4 and line 14 with a lock operation; line 7, line 10, and line 18 with an unlock operation; and line 16 a NOP.</p><p>In addition to synchronizations, the memoizer includes the hooks around blocking system calls ( §4) in the schedule it memoizes because blocking system calls are natural scheduling points. However, the replayer will only opportunistically replay these hooks when reusing a schedule because the returns from blocking system calls are driven by the program's environment.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2">Tracking Input Constraints</head><p>Given the symbolic data marked by developers, the memoizer tracks the constraints on this data by tracking <ref type="formula">(1)</ref> what data is derived from the symbolic data and (2) the outcomes of the branch statements that observe this symbolic and derived data. At the end of this memoization run, the set of branch outcomes together describe the constraints to place on the symbolic data required to reuse the memoized schedule. That is, if an input satisfies these constraints, we can re-run the program in the same way as the memoization run. The constraints collected this way may be over-constraining if developers annotate too much data as symbolic. We describe a technique to address this problem in §7.4.</p><p>TERN leverages KLEE <ref type="bibr" target="#b15">[17]</ref>, an open-source symbolic execution engine to track input constraints. To adapt KLEE to TERN, we made two key modifications. First, KLEE works only with sequential programs, thus we extended it to support threads. Specifically, we modified KLEE to spawn a new KLEE instance for each new thread. At the end of the run, we unify the constraints collected from each thread as the input constraints of the schedule. Second, we simplified KLEE to only collect constraints without solving them, because unlike KLEE, TERN need not explore different execution paths.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.3">Merging Schedules into the Schedule Cache</head><p>Once TERN memoized a schedule S and its constraints C, TERN stores the tuple into the schedule cache. Although the schedule cache is conceptually a set of C, S tuples, its actual structure is a decision tree because a program may incrementally read inputs from its environ- ment, calling symbolic() multiple times. For example, the code in <ref type="figure">Figure 3</ref> calls symbolic() twice. <ref type="figure" target="#fig_5">Figure 7</ref> illustrates how TERN constructs the decision tree of the schedule cache. Given a C, S tuple, TERN breaks it down to sub-tuples C i , S i separated by symbolic() calls, where S i contains the synchronization operations logged and C i contains the constraints collected between the i th and (i + 1) th symbolic() calls. It then merges the sub-tuples into the i th level of the decision tree.</p><p>TERN avoids merging redundant tuples into the cache. That is, if the cache contains a tuple with less restrictive constraints that the tuple being merged, TERN simply discards the new tuple. Note that the tuples may overlap (i.e., one input satisfies more than one set of constraints), and TERN simply returns the first match if there are multiple matches.</p><p>To speed up cache lookup, TERN sorts all C i , S i tuples within the same decision node based on their reuse rates, defined as the number of successful reuses of S i over the number of inputs that have satisfied C i . Reusing a schedule may fail even if the input satisfies the schedule's input constraints (cf next subsection). However, by sorting the tuples based on reuse rates, we automatically prefer good schedules over bad ones that have many failed reuse attempts. To bound the size of the schedule cache, TERN can throw away bad schedules based on reuse rates. However, we have not found the need to do so because the schedule cache is often small.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.4">Reusing Schedules</head><p>To reuse a schedule, TERN must check that the input satisfies the input constraints of the schedule. To do so, it maintains an iterator to the decision tree of the schedule cache. The iterator starts from the root. As the program runs and calls symbolic(), TERN moves the iterator down the tree. It checks if the data passed into a symbolic() call satisfies any set of constraints stored at the corresponding decision tree node and, if so, enforces the corresponding schedule. The performance of the replayer is crucial because it runs during a program's normal executions. To efficiently enforce a synchronization order, the replayer uses a technique we call semaphore relay. Specifically, the replayer assigns each thread a semaphore. Before doing a synchronization operation, a thread has to wait on its semaphore for its turn. Once it is done with the operation, it passes the turn to the next thread in the schedule by signaling the semaphore of the next thread. Compared to an approach using locks or condition variables, semaphore relay avoids unnecessary lock contentions. <ref type="figure" target="#fig_6">Figure 8</ref> illustrates semaphore relay using the replayer's pthread mutex lock() wrapper.</p><p>We note several subtleties of the pseudo code in <ref type="figure" target="#fig_6">Fig- ure 8</ref>. First, we do not use non-blocking lock operations (line 3) as in <ref type="figure" target="#fig_4">Figure 6</ref> because the memoizer only logs successful lock acquisitions. Second, the replayer maintains internal thread IDs the same way as the memoizer to avoid mismatches. Lastly, the down() (line 2) is actually a timed wait (with a default 0.1ms timeout), so that a thread can break out of a schedule when the dynamic load mismatches the schedule's assumptions. Note that these timeouts merely cause delays and do not affect correctness. They rarely occurred in our experiments.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Windowing</head><p>Server programs present two challenges for TERN. First, they are more exposed to timing nondeterminism than batch programs because their inputs (client requests) arrive nondeterministically. Second, they often run continuously, making their schedules too specific to reuse. TERN addresses these challenges using a simple idea called windowing. Our insight is that server programs tend to return to the same quiescent states. Thus, instead of processing requests as they arrive, TERN breaks a continuous request stream down to windows of requests. Within each window, it admits requests only at fixed points in the current schedule. If no requests arrive at an admission point for a predefined timeout, TERN simply proceeds with the partial window. While a window is running, TERN buffers newly arrived requests so that they do not interfere with the running window. With this approach, TERN can memoize and reuse schedules across (possibly partial) windows. The cost of windowing is that it may reduce concurrency and degrade server throughput and speed. However, our experiments show that this cost is reasonable and justified by the gain in determinism and stability.</p><p>To buffer requests, TERN needs to know when a server receives a request and when it is done processing the request. Inferring these task boundaries based on thread creation and exit is unreliable because server programs frequently use thread pools. Thus, TERN currently lets developers annotate these boundaries using begin task() and end task(). Manually locating task boundaries is often easy: a request tends to begin after an accept() of a client connection and ends after the server sends out a reply. Exposing hidden states. The assumption of windowing is that a server program returns to the same state when it quiesces. However, in practice, server states evolve over time. For instance, when Apache first serves a page, it may load the page from disk and cache it in memory. When this page is requested again, Apache can serve it directly from its cache.</p><p>These state changes may affect schedules. In the example above, Apache will perform different synchronizations for the two runs. Thus, for TERN to accurately select a schedule to reuse, it must know the hidden states that affect schedules. Currently TERN lets developers annotate such hidden states using symbolic(). Doing so is often straightforward. For instance, we inserted a symbolic() call to mark the return of Apache's cache find() as symbolic.</p><p>Exposing hidden states may not always be easy. We thus created a technique to tolerate missed symbolic() annotations. The basic idea is to store backup schedules under the same set of input constraints to tolerate annotation inaccuracy. For instance, suppose a symbolic() had not been missed, TERN would have memoized two different constraint-schedule tuples C 1 , S 1 and C 2 , S 2 . However, because of the missed annotation, TERN missed the corresponding constraints, wrongly collapsing C 1 and C 2 into the same set C. Now the two original tuples become C, S 1 and C, S 2 , which appear redundant. Instead of discarding one of these seemingly redundant schedules, TERN will store both schedules with the same set of constraints. To select between these schedules, TERN can select the one with higher reuse rate, which likely matches the hidden state of the program.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Refinements</head><p>This section describes four refinements we made, one for determinism ( §7.1) and three for speed ( §7.2- §7.4).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7.1">Detecting Data Races</head><p>As discussed in §2.2, if a memoized schedule allows data races, runs reusing this schedule may become nondeterministic. Thus, for determinism, we would like to de- tect races in memoized schedules and discard them from the schedule cache. A general race detector would flag too many races for TERN because it detects conventional races with respect to the original synchronization constraints of the program, whereas we want to detect races with respect to the order constraints of a schedule <ref type="bibr" target="#b44">[46]</ref> (call them schedule races). <ref type="figure">Figure 9</ref> shows a conventional race, but not a schedule race because the synchronization order shown "kills" the race. Thus, we built a simple race detector to detect schedule races. It runs with the memoizer and is happensbefore based. It considers one memory access happens before another with respect to the synchronization order the memoizer records. Sometimes a pair of instructions may appear to be a race, when in fact their relative order does not alter a run. For instance, a write-write race is benign if both instructions write the same value. Similarly, a read-write race is benign if the value written by one instruction does not affect the value read by another. Our race detector prunes these benign races.</p><p>Our detector also flags symbolic races, the races that are data-dependent on inputs. <ref type="figure" target="#fig_0">Figure 10</ref> shows an example. Both variables i and j are inputs, and the race occurs only when i = j. The risk of a symbolic races is that it may be absent in a memoization run and thus skip detection, but show up nondeterministically in a reuse run. To detect symbolic races, our race detector queries the underlying symbolic execution engine for pointer equality. For example, to detect the race in <ref type="figure" target="#fig_0">Figure 10</ref>, it would query the underlying symbolic execution engine for the satisfiability of &amp;a[i] = &amp;a <ref type="bibr">[j]</ref>. It flags a symbolic race if this constraint is satisfiable. Once a symbolic race is flagged, TERN adds additional input constraints to ensure that the race does not occur in reuse runs. For <ref type="figure" target="#fig_0">Figure 10</ref>, we would add &amp;a[i] 񮽙 = &amp;a <ref type="bibr">[j]</ref>, which simplifies to i 񮽙 = j.</p><p>Our race detector can detect all schedule races in a memoization run. It can also detect all symbolic races if developers correctly annotate all data that affect synchronization operations and memory locations accessed. If this assumption holds and our race detector reports no races in a memoization run, TERN ensures that the memoized schedule can be deterministically reused.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7.2">Skipping Unnecessary Synchronizations</head><p>When reusing a schedule, TERN enforces a total synchronization order according to the schedule. These TERN-enforced execution order constraints are more stringent than the constraints enforced by the original synchronizations in the program. Thus, for speed, TERN can actually skip these unnecessary synchronizations. In our current implementation, we skip sleep(), usleep(), and pthread barrier wait() because they are frequently used. We found that this optimization was quite effective and even made programs run faster than nondeterministic execution ( §8.3).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7.3">Simplifying Constraints</head><p>To reuse a schedule, TERN must check if the current input satisfies the constraints of the schedule. The overhead of this check depends on the number of constraints, yet the set of constraints TERN collects may not always be in simplified form. That is, a subset of the constraints may imply the entire set. For example, consider a loop "for(int i=0;i!=n;++i)" with a symbolic bound n. When running this code with n = 10, we will collect a set of constraints {0 񮽙 = n, 1 񮽙 = n, ..., 10 = n}, but the last constraint alone implies the entire set.</p><p>To simplify constraints, TERN uses a greedy algorithm. Given a set of constraints C, it iterates through each constraint c, and checks if C/{c} implies {c}. If so, it simply discards c. Our observation is that constraints collected later in a run tend to be more compact than the earlier ones. Thus, when pruning constraints, we start from the ones collected earlier. Although we could have used the underlying symbolic execution engine to simplify constraints, it lacks this domain knowledge and may perform poorly.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7.4">Slicing Out Irrelevant Branches</head><p>A branch statement may observe a piece of symbolic data but perform no synchronization operation in either branch. The constraints collected from this branch are unlikely to affect schedules. If we include irrelevant constraints in the input constraints of a schedule, we not only increase constraint checking time, but also preclude legal reuses of the schedule.</p><p>To address this problem, TERN employs a simple static analysis to automatically prune likely irrelevant constraints. At the heart of this technique is a slicing analysis that identifies branch statements unlikely to affect synchronization operations. Specifically, given a branch statement s, this analysis computes s d , the immediate post-dominator <ref type="bibr" target="#b6">[8]</ref> of s, and marks s as irrelevant if no synchronization operations are between s and s d . Although simple, this technique reduced constraint checking time significantly ( §8.3). However, we note that our analysis is unsound because it ignores data dependencies. Thus, we plan to implement a sound slicing algorithm <ref type="bibr" target="#b19">[21]</ref> in our future work.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Nondet</head><p>COREDET TERN -p2 -p4 -p8 Args. -m10 12 14 -m10 12 14 -m10 12 14 <ref type="table">Table 4</ref>: Bug stability results on SPLASH2 fft. The leftmost column and the bottommost row show the command line arguments. Option -p specifies the number of threads, and -m the amount of computation (matrix size). Symbol indicates that the bug occured, and the bug never occured. the return of cache find() as symbolic ( §6). For MySQL, we marked the SQL query. For PBZip2, we marked the number of threads and file blocks. (The number of file blocks is set in two places, contributing two symbolic annotations.) For all these scientific programs, we marked all input arguments as symbolic except those configuring output verbosity. <ref type="bibr" target="#b2">3</ref> We marked three custom synchronization operations in three SPLASH2 programs. We made two miscellaneous changes to Apache and MySQL. The line counts are shown in parenthesis under the Total column. For Apache, we had to fix an uninitialized memory read in ap signal server() to make it work with KLEE. For MySQL, we wrote a 28-line function to mark the numbers in each SQL query as concrete (i.e., not affecting schedules) to avoid making the input constraints too specific.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="8.2">Stability</head><p>We evaluated TERN's stability via two sets of experiments. The first set compares it to an existing DMT system ( §8.2.1), the second quantifies how frequently it can reuse schedules on real and synthetic workloads ( §8.2.2).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="8.2.1">Bug Stability</head><p>We compared TERN to COREDET <ref type="bibr" target="#b11">[13]</ref> in terms of bug stability: does a bug occur in one run but disappear in another when the input varies slightly? We ran three buggy SPLASH2 programs, fft, lu, and barnes, in three modes: nondeterministic execution (Nondet), with COREDET, and with TERN. We varied their inputs by varying the number of threads and the amount of computation. For each program, execution mode, and input combination, we ran the program 100 times, and recorded whether the corresponding bug occurred.</p><p>We present only the fft results; the results of the other programs are similar. <ref type="table">Table 4</ref> shows the buggy behaviors of fft. In nondeterministic mode, the bug never occurred, despite that each run almost always yielded a new synchronization order. With COREDET, slight changes  in computation made the bug occur or disappear. With TERN, the bug never occurred, and TERN reused only three schedules for all runs, one for each thread count.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="8.2.2">Reuse Rates</head><p>We also quantified how frequently TERN could reuse schedules. Specifically, we measured the overall reuse rate, defined as the number of inputs processed using memoized schedules over the total number of inputs. The higher the reuse rates, the more stable the programs become. TERN had nearly 100% overall reuse rates for the scientific programs after a small number of memoization runs. Thus, we focused on Apache, MySQL, and PBZip2 in out experiments. We used four workloads to evaluate overall reuse rates: Apache-CS: a real 4-day trace from the Columbia CS website with 122,000 HTTP requests. We wrote a script to replay this trace at a rate of 100 concurrent requests per second. SysBench-simple: SysBench <ref type="bibr" target="#b5">[7]</ref> in simple mode. This synthetic workload consists of random select queries. SysBench-tx: SysBench in transaction mode. This synthetic workload consists of random select, update, delete, and insert queries. PBZip2-usr: a random selection of 10,000 files from /usr on our evaluation machine. For each workload, we first randomly selected 1%-3% of the workload and ran the memoizer to populate the schedule cache. We then ran the entire workload with the replayer and measured the overall reuse rates. We ran eight worker threads for each program because they performed best (with or without TERN) with this setting. <ref type="table" target="#tab_2">Table 5</ref> shows the results. For three out of the four workloads, TERN could reuse a small number of schedules to process over 90% of the inputs. For MySQLtx, TERN had a lower overall reuse rate. The reasons are two fold. First, this workload makes it unlikely to reuse schedules because it mixes many randomly generated queries with different types and parameters. Second, we annotated only the SQL command as symbolic without exposing the hidden states of MySQL ( §6) so that we could measure TERN's performance in an adversarial setting. Nonetheless, TERN managed to process 44.2% of inputs with a small number of schedules.  </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="8.3">Overhead</head><p>We used the following workloads to evaluate TERN's overhead. For Apache, we used ApacheBench <ref type="bibr" target="#b0">[1]</ref> to repeatedly download a 50KB webpage. For MySQL, we used the SysBench-simple workload from the previous subsection. Both ApacheBench and SysBench are used by the server developers themselves. We made these benchmarks CPU bound by fitting the web or database in memory and by connecting the server and client via a 1 Gbps LAN. For PBZip2, we decompressed a 10 MB file. For SPLASH2 programs, we ran them typically for 10-100 ms. We measured the execution time for batch programs and the throughput (TPUT) and response time (RESP) for server programs. All numbers reported in this section were averaged over 50 runs. The most performance-critical component is the replayer because it operates during the normal execution of a program. <ref type="figure" target="#fig_0">Figure 11</ref> shows the relative overhead of the replayer over nondeterministic execution, the smaller the better. For seven out of the fourteen programs, the replayer performed almost identically to nondeterministic execution. For PBZip2 and barnes, TERN performed better. This speedup came partially from the optimization to remove unnecessary synchronizations, discussed in the next paragraph. TERN's overhead for MySQL, volrend, raytrace, water-nsquared, and choleskey is relatively large because these programs performed many synchronization operations over a short period of time. For instance, water-nsquared and cholesky both call pthread mutex lock() and pthread mutex unlock() in a tight loop.</p><p>We also measured the effects of skipping unnecessary synchronizations ( §7.2). <ref type="figure" target="#fig_0">Figure 12</ref> shows the results. This optimization significantly reduced the replayer's overhead for four programs. Specifically, it Note the y-axis is broken. "no opt" indicates the baseline constraint checking time. "simplify" refers to the optimization in §7.3. "slice" refers to the optimization in §7.4.</p><p>made PBZip2 and barnes run faster than nondeterministic execution, and reduced the overhead of waternsquared from 172.4% to 39.1%. Its effects on the other programs are negligible and thus not shown. To reuse a schedule on an input, TERN must check the input against memoized constraints. Constraint checking can be costly, and TERN provides two optimizations to speed it up ( §7.3 and §7.4). <ref type="figure" target="#fig_0">Figure 13</ref> shows these optimizations can effectively speed up constraint checking for Apache, fft, lu, and radix. In particular, they reduced the constraint checking time for lu by 16x.</p><p>Compared to the replayer, the memoizer can run offline, thus its performance is not as critical.   instrumentation-based approach can greatly reduce this slowdown <ref type="bibr" target="#b14">[16]</ref>, which we plan to implement in our future work.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="8.4">Determinism</head><p>We evaluated TERN's determinism via three sets of experiments. The first set checked the memoized schedules for races ( §8.4.1). The second evaluated TERN's ability to deterministically reproduce or avoid bugs ( §8.4.2). The third measured how deterministic memory accesses are with and without TERN ( §8.4.3).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="8.4.1">Race Detection Results</head><p>When memoizing schedules for each of the 14 programs, we turned on TERN's race detector. We found that except for radix and cholesky, the schedules TERN memoized for all other programs were free of schedule races and symbolic races with respect to the symbolic data we annotated ( §7.1). Our race detection result is not surprising because most schedules are indeed race free. It implies that, for runs that reuse the memoized schedules of all programs but radix and cholesky, TERN ensures determinism, barring the assumption discussed in §7.1.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="8.4.2">Bug Determinism</head><p>We also evaluated how deterministically TERN could reproduce or avoid bugs. <ref type="table" target="#tab_6">Table 7</ref> lists five real concurrency bugs we used. We selected them because they were frequently used in previous studies <ref type="bibr" target="#b35">[37,</ref><ref type="bibr" target="#b37">39,</ref><ref type="bibr" target="#b41">43,</ref><ref type="bibr" target="#b42">44]</ref> and we could reproduce them on our evaluation machine. To measure bug determinism, we first memoized schedules for programs listed in <ref type="table" target="#tab_6">Table 7</ref>. We then manually inserted usleep() to these programs to get alternate schedules.  We then ran the buggy programs again, reusing the memoized schedules. We also injected random delays into the reuse runs to perturb timing. We found that, TERN consistently reproduced or avoided all five bugs. We verified this result by inspecting the memoized schedules.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Program Length Nondet</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>TERN</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Ratio</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="8.4.3">Memory Access Determinism</head><p>TERN enforces synchronization orders, which should make memory access orders more deterministic. We quantified this effect over Apache and PBZip2. Specifically, we instrumented Apache with LLVM to trace accesses to global variables and the heap, a crude approximation of shared memory. We ran Apache with TERN to serve five HTTP requests and collected a trace of memory accesses. We then repeated this experiment 20 times to collect 20 traces, and computed the average pairwise edit distance <ref type="bibr" target="#b49">[52]</ref>. We then measured the same edit distance for Apache in nondeterministic execution mode and compared the two. We did the same comparison for PBZip2 with a decompression workload of 2MB. <ref type="table" target="#tab_8">Ta- ble 8</ref> shows the result. For Apache, runs with TERN were 7.97 times more deterministic than those without. For PBZip2, TERN was 2.33 times more deterministic, but the memory trace had only 1,234 accesses on average.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="9">Related Work</head><p>Deterministic Execution TERN differs from existing DMT systems <ref type="bibr" target="#b11">[13,</ref><ref type="bibr" target="#b20">22,</ref><ref type="bibr" target="#b39">41]</ref> by making threads stable, i.e., repeating familiar behaviors across different inputs. Another difference is that TERN reduces timing nondeterminism for server programs through windowing. The closest system to TERN in this category is <ref type="bibr">Kendo [41]</ref>, a software-only DMT system that also enforces synchronization orders instead of memory access orders for efficiency. COREDET <ref type="bibr" target="#b11">[13]</ref> is another software-only DMT system that enforces deterministic memory access orders. Both systems are based on logical clocks and have been shown to work on scientific benchmarks, such as SPLASH2. The authors of COREDET have noted that a small modification to the original program leads to a much different COREDETinstrumented program, which the idea of schedule memoization may address. COREDET is a software implementation (with extensions) of DMP <ref type="bibr" target="#b20">[22]</ref>, a hardware DMT system .</p><p>Grace <ref type="bibr" target="#b12">[14]</ref> proposes a novel approach to making C and C++ programs with fork-join parallelism behave like sequential programs. It runs each thread within a process and commits memory writes atomically and deterministically. It detects memory access conflicts efficiently using hardware page protection. Grace has been shown to perform and scale well on Phoenix benchmarks <ref type="bibr" target="#b43">[45]</ref> and a Cilk <ref type="bibr" target="#b13">[15]</ref> benchmark. Unlike Grace, TERN aims to make general multithreaded programs, not just fork-join programs, deterministic and stable. Deterministic Replay Deterministic replay <ref type="bibr" target="#b7">[9,</ref><ref type="bibr" target="#b21">23,</ref><ref type="bibr" target="#b22">24,</ref><ref type="bibr" target="#b25">27,</ref><ref type="bibr" target="#b29">31,</ref><ref type="bibr" target="#b31">33,</ref><ref type="bibr" target="#b32">34,</ref><ref type="bibr" target="#b38">40,</ref><ref type="bibr" target="#b42">44,</ref><ref type="bibr" target="#b48">50,</ref><ref type="bibr">51]</ref> aims to replay the exact recorded executions, whereas TERN "replays" memoized schedules on different inputs. Some recent deterministic replay systems include Scribe, which tracks page ownership to enforce deterministic memory access <ref type="bibr" target="#b32">[34]</ref>; Capo, which defines a novel software-hardware interface and a set of abstractions for efficient replay <ref type="bibr" target="#b38">[40]</ref>; PRES and ODR, which systematically search for a complete execution based on a partial one <ref type="bibr" target="#b7">[9,</ref><ref type="bibr" target="#b42">44]</ref>; and SMP-ReVirt, which uses clever page protection trick for recording the order of conflicting memory accesses <ref type="bibr" target="#b22">[24]</ref>. Concurrency Errors The complexity in developing multithreaded programs has led to many concurrency errors <ref type="bibr" target="#b37">[39]</ref>. A significant number of them are not data races, but atomicity and order errors <ref type="bibr" target="#b37">[39]</ref>, which can be deterministically reproduced or avoided using only synchronization orders.</p><p>Much work exists on concurrency error detection <ref type="bibr" target="#b23">[25,</ref><ref type="bibr" target="#b35">37,</ref><ref type="bibr" target="#b36">38,</ref><ref type="bibr" target="#b45">47,</ref><ref type="bibr" target="#b52">55,</ref><ref type="bibr" target="#b53">56]</ref>, diagnosis <ref type="bibr" target="#b40">[42,</ref><ref type="bibr" target="#b41">43,</ref><ref type="bibr" target="#b46">48]</ref>, and correction <ref type="bibr" target="#b30">[32,</ref><ref type="bibr" target="#b50">53]</ref>. TERN aims to make the executions of multithreaded programs deterministic and stable, and is complementary to existing work on concurrency errors. Specifically, TERN can use existing work to detect and fix the errors in the schedules it selects. Moreover, even for programs free of concurrency errors, TERN still provides value by making their behaviors repeatable. Symbolic Execution The combination of symbolic and concrete executions has been a hot research topic. Researchers have built scalable and effective symbolic execution systems to detect errors <ref type="bibr">[16-18, 20, 28-30, 49, 54]</ref>, block malicious inputs <ref type="bibr" target="#b19">[21]</ref>, and preserve privacy in error reports <ref type="bibr" target="#b17">[19]</ref>. Compared to these systems, TERN applies symbolic execution to a new domain: tracking input constraints to reuse schedules.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="10">Conclusion</head><p>We have presented TERN, the first DMT system that makes general multithreaded programs stable by repeating the same schedules on different inputs. TERN does so using schedule memoization: if a schedule is shown to work on an input, TERN memoizes the schedule; if a similar input arrives later, TERN simply reuses the memoized schedule. TERN is also the first DMT system to mitigate input timing nondeterminism for server programs.</p><p>Our TERN implementation runs on Linux. It requires no new hardware, no modifications to the underlying OS or synchronization library, and only a few lines of modifications to the multithreaded programs. We evaluated TERN on a diverse set of real programs, including two server programs, one desktop program, and 11 scientific programs. Our results show that TERN is easy to use, makes programs more deterministic and stable, and has reasonable overhead. TERN is the first DMT system shown to work on applications as large, complex, and nondeterministic as MySQL and Apache. It demonstrates that DMT has the potential to be deployed today.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: Advantage of schedule memoization. Each solid shape represents an input, and each curved line a schedule. Schedule memoization reuses schedules when possible, avoiding bugs in unknown schedules and making program behaviors repeatable across similar inputs.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: TERN architecture. Its components are shaded.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head></head><label></label><figDesc>Figure 3: Simplified PBZip2 code.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 5 :</head><label>5</label><figDesc>Figure 5: Input constraints of a PBZip2 run.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_4"><head>while(self()!=activeq.head);: while(self()!=activeq.head);Figure 6 :</head><label>6</label><figDesc>Figure 6: The memoizer's round-robin scheduling algorithm.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_5"><head>Figure 7 :</head><label>7</label><figDesc>Figure 7: Decision tree of TERN's schedule cache.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_6"><head>1Figure 8 :</head><label>8</label><figDesc>Figure 8: Pseudo code of the replayer.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_7"><head>Figure 9 :Figure 10 :</head><label>910</label><figDesc>Figure 9: A conventional race, not a schedule race.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_9"><head>Figure 12 :Figure 13 :</head><label>1213</label><figDesc>Figure 12: Overhead reduction by skipping unnecessary synchronizations. "no opt" indicates the baseline overhead.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="false"><head>wrap- Annotations Inserted by Semantics symbolic(data, len) Developer Marks data that may affect schedules. The memoizer tracks constraints on this data. The replayer checks this data against the memoized constraints</head><label></label><figDesc></figDesc><table>. 
+begin task() 
+Developer 
+Mark the beginning and end of a logical task. Often used to divide the executions 
+of threads in a pool into separate tasks ( §6). 
+end task() 
+lock wrapper(l) 
+Developer 
+Synchronization wrappers. The memoizer intercepts these operations for 
+memoizing schedules, and the replayer intercepts them for reusing schedules. 
+unlock wrapper(l) 
+or TERN 
+before blocking() 
+TERN 
+Inserted before and after blocking system calls. The memoizer logs the order of 
+these calls. The replayer opportunistically enforces the same order of these calls. 
+after blocking() 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_2" validated="false"><head>Table 5 : TERN stability. Column Schedules indicates the</head><label>5</label><figDesc></figDesc><table>number of schedules in the schedule cache. 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_4" validated="false"><head>Table 6 shows</head><label>6</label><figDesc>that this slowdown can sometimes exceed 200x. The main reason is that KLEE, the symbolic engine used, interprets programs instead of running them natively. An</figDesc><table>Program 
+Nondet 
+Memoization Overhead (times) 
+Apache-TPUT 
+462.2 req/s 
+2.1 req/s 
+219.1 
+Apache-RESP 
+0.22 s 
+3.96 s 
+17.0 
+MySQL-TPUT 
+13779.3 req/s 
+172.2 req/s 
+79.0 
+MySQL-RESP 
+0.6 ms 
+61 ms 
+100.6 
+PBZip2 
+0.18 s 
+15.19 s 
+83.4 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_5" validated="false"><head>Table 6 :</head><label>6</label><figDesc></figDesc><table>Overhead of the memoizer. 
+
+Program Error Description 
+Apache 
+Reference count decrement and check against 
+0 are not atomic. 
+PBZip2 
+Variable fifo is used in one thread after be-
+ing freed by another. 
+fft 
+initdonetime and finishtime are read 
+before assigned the correct values. 
+lu 
+Variable rf is read before assigned the correct 
+value. 
+barnes 
+Variable tracktime is read before assigned 
+the correct value. 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_6" validated="false"><head>Table 7 :</head><label>7</label><figDesc>Concurrency errors used in evaluation.</figDesc><table></table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_8" validated="false"><head>Table 8 : Memory access determinism. We traced memory ac- cessed only from PBZip2, not the external BZip2 library.</head><label>8</label><figDesc></figDesc><table></table></figure>
+
+			<note place="foot" n="1"> Although in this example the constraints are collected from one thread, TERN can actually collect constraints from multiple threads.</note>
+
+			<note place="foot" n="2"> The version of the SPLASH2 [36] we acquired has 12 programs, one of which does not compile on our evaluation machine.</note>
+
+			<note place="foot" n="3"> Note that we could have used a two-line loop to mark these arguments as symbolic. Instead, we report the total number of symbolic variables to avoid masking real data.</note>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgement</head><p>We thank Cristian Cadar, John Gallagher, Michael Kester, Emery Berger (our shepherd), and the anonymous reviewers for their tremendous feedback and comments, which have substantially improved the content and presentation of this paper. We thank Shan Lu for providing some of the concurrency errors used in our evaluation. We thank Jane-Ellen Long for time management. Michael Kester wrote the script for replaying the HTTP trace from the Columbia CS website. This work was supported by the National Science Foundation (NSF) through Contract CNS-1012633 and CNS-0905246 and the Air Force Research Laboratory (AFRL) through Contract FA8650-10-C-7024 and FA8750-10-2-0253. Opinions, findings, conclusions, and recommendations expressed in this material are those of the authors and do not necessarily reflect the views of the US Government.</p></div>
+			</div>
+
+			<div type="annex">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="8">Evaluation</head><p>Our TERN implementation consists of 8,934 lines of C++ code, including 827 lines for the instrumentor implemented as an LLVM pass; 5,451 lines for the proxy, schedule cache, memoizer, and replayer; and 2,656 lines for modifications to KLEE. We evaluated TERN on a diverse set of 14 programs, ranging from two server programs, Apache and MySQL, to one parallel compression utility, PBZip2, to 11 scientific programs in SPLASH2. <ref type="bibr" target="#b1">2</ref> Our main evaluation machine is a 2.66 GHz quad-core Intel machine with 4 GB memory running Linux 2.6.24. When evaluating TERN on server programs, we ran the server on this machine and the client on another to avoid unnecessary contention. These machines are connected via 1Gbps LAN. We compiled all programs down to machine code using llvm-gcc -O2 and LLVM's bitcode compiler llc.</p><p>We focused our evaluation on four key questions: 1. Is TERN easy to use ( §8.1)? 2. Does TERN make multithreaded programs stable across different inputs ( §8.2)? 3. Does TERN incur high overhead ( §8.3)? 4. Does TERN make multithreaded programs deterministic on the same input ( §8.4)? <ref type="table">Table 3</ref> summarizes the modifications we made to make the programs work with TERN. For each program but MySQL, we modified only 3-10 lines. For Apache, we marked the HTTP command, URL, HTTP version, and</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="8.1">Ease of Use</head></div>			</div>
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+				<ptr target="http://httpd.apache.org/docs/2.2/programs/ab.html" />
+		<title level="m">ab -Apache HTTP server benchmarking tool</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Artici</forename><surname>Terns -Wikipedia</surname></persName>
+		</author>
+		<ptr target="http://en.wikipedia.org/wiki/Arctic_Tern" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>The Llvm Compiler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Framework</surname></persName>
+		</author>
+		<ptr target="http://llvm.org" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bzip2</forename><surname>Parallel</surname></persName>
+		</author>
+		<ptr target="http://compression.ca/pbzip2/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+				<ptr target="http://www-flash.stanford.edu/apps/SPLASH/" />
+		<title level="m">Stanford Parallel Applications for Shared Memory (SPLASH</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Sysbench</surname></persName>
+		</author>
+		<ptr target="http://sysbench.sourceforge.net" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">V</forename><surname>Aho</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">S</forename><surname>Lam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Sethi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">D</forename><surname>Ullman</surname></persName>
+		</author>
+		<title level="m">Compilers: Principles, Techniques, and Tools</title>
+		<imprint>
+			<publisher>AddisonWesley</publisher>
+			<date type="published" when="2006" />
+		</imprint>
+	</monogr>
+	<note>2nd Edition</note>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">ODR: output-deterministic replay for multicore debugging</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Altekar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Stoica</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 22nd ACM Symposium on Operating Systems Principles (SOSP &apos;09)</title>
+		<meeting>the 22nd ACM Symposium on Operating Systems Principles (SOSP &apos;09)</meeting>
+		<imprint>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="193" to="206" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Apache Web</forename><surname>Server</surname></persName>
+		</author>
+		<ptr target="http://www.apache.org" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Branch prediction for free</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Ball</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">R</forename><surname>Larus</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">PLDI &apos;93: Proceedings of the ACM SIGPLAN 1993 conference on Programming language design and implementation</title>
+		<imprint>
+			<date type="published" when="1993" />
+			<biblScope unit="page" from="300" to="313" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Efficient path profiling</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Ball</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">R</forename><surname>Larus</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">MICRO 29: Proceedings of the 29th annual ACM/IEEE international symposium on Microarchitecture</title>
+		<imprint>
+			<date type="published" when="1996" />
+			<biblScope unit="page" from="46" to="57" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Coredet: a compiler and runtime system for deterministic multithreaded execution</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Bergan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O</forename><surname>Anderson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Devietti</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Ceze</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Grossman</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Fifteenth International Conference on Architecture Support for Programming Languages and Operating Systems (ASPLOS &apos;10&apos;)</title>
+		<imprint>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="53" to="64" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Grace: Safe and efficient concurrent programming</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Berger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Krishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Novark</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Conference on Object-Oriented Programming Systems, Languages, and Applications (OOPSLA)</title>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Cilk: an efficient multithreaded runtime system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">D</forename><surname>Blumofe</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">F</forename><surname>Joerg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">C</forename><surname>Kuszmaul</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">E</forename><surname>Leiserson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><forename type="middle">H</forename><surname>Randall</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhou</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">J. Parallel Distrib. Comput</title>
+		<imprint>
+			<biblScope unit="volume">37</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="55" to="69" />
+			<date type="published" when="1996" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">EXE: automatically generating inputs of death</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Cadar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Ganesh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">M</forename><surname>Pawlowski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">L</forename><surname>Dill</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">R</forename><surname>Engler</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 13th ACM conference on Computer and communications security (CCS &apos;06)</title>
+		<meeting>the 13th ACM conference on Computer and communications security (CCS &apos;06)</meeting>
+		<imprint>
+			<date type="published" when="2006-11" />
+			<biblScope unit="page" from="322" to="335" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Unassisted and automatic generation of high-coverage tests for complex systems programs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Cadar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Dunbar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Engler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Klee</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Eighth Symposium on Operating Systems Design and Implementation (OSDI &apos;08)</title>
+		<meeting>the Eighth Symposium on Operating Systems Design and Implementation (OSDI &apos;08)</meeting>
+		<imprint>
+			<date type="published" when="2008-12" />
+			<biblScope unit="page" from="209" to="224" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">Automated software testing as a service</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Candea</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Bucur</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Zamfir</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 1st Symposium on Cloud Computing (SOCC &apos;10)</title>
+		<meeting>the 1st Symposium on Cloud Computing (SOCC &apos;10)</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Better bug reporting with better privacy</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Castro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Costa</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J.-P</forename><surname>Martin</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ASPLOS XIII: Proceedings of the 13th international conference on Architectural support for programming languages and operating systems</title>
+		<imprint>
+			<date type="published" when="2008" />
+			<biblScope unit="page" from="319" to="328" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Selective Symbolic Execution</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Chipounov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Georgescu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Zamfir</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Candea</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Fifth Workshop on Hot Topics in System Dependability (HotDep &apos;09)</title>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Bouncer: securing software by blocking bad input</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Costa</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Castro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Zhou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Peinado</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP &apos;07: Proceedings of twenty-first ACM SIGOPS symposium on Operating systems principles</title>
+		<imprint>
+			<date type="published" when="2007" />
+			<biblScope unit="page" from="117" to="130" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Dmp: deterministic shared memory multiprocessing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Devietti</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Lucia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Ceze</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Oskin</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Fourteenth International Conference on Architecture Support for Programming Languages and Operating Systems (ASPLOS &apos;09)</title>
+		<imprint>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="85" to="96" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">ReVirt: enabling intrusion analysis through virtual-machine logging and replay</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Dunlap</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">T</forename><surname>King</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Cinar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Basrat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Chen</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Fifth Symposium on Operating Systems Design and Implementation (OSDI &apos;02)</title>
+		<meeting>the Fifth Symposium on Operating Systems Design and Implementation (OSDI &apos;02)</meeting>
+		<imprint>
+			<date type="published" when="2002-12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Execution replay of multiprocessor virtual machines</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">W</forename><surname>Dunlap</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">G</forename><surname>Lucchetti</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">A</forename><surname>Fetterman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">M</forename><surname>Chen</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 4th International Conference on Virtual Execution Environments (VEE &apos;08)</title>
+		<meeting>the 4th International Conference on Virtual Execution Environments (VEE &apos;08)</meeting>
+		<imprint>
+			<date type="published" when="2008" />
+			<biblScope unit="page" from="121" to="130" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Racerx: Effective, static detection of race conditions and deadlocks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Engler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Ashcraft</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 19th ACM Symposium on Operating Systems Principles (SOSP &apos;03)</title>
+		<meeting>the 19th ACM Symposium on Operating Systems Principles (SOSP &apos;03)</meeting>
+		<imprint>
+			<date type="published" when="2003-10" />
+			<biblScope unit="page" from="237" to="252" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">Predicting conditional branch directions from previous runs of a program</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">A</forename><surname>Fisher</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">M</forename><surname>Freudenberger</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ASPLOS-V: Proceedings of the fifth international conference on Architectural support for programming languages and operating systems</title>
+		<imprint>
+			<date type="published" when="1992" />
+			<biblScope unit="page" from="85" to="95" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">Friday: Global comprehension for distributed replay</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Geels</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Altekarz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Maniatis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Roscoey</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Stoicaz</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Fourth Symposium on Networked Systems Design and Implementation (NSDI &apos;07)</title>
+		<meeting>the Fourth Symposium on Networked Systems Design and Implementation (NSDI &apos;07)</meeting>
+		<imprint>
+			<date type="published" when="2007-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">Dart: Directed automated random testing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Godefroid</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Klarlund</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Sen</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM SIGPLAN 2005 Conference on Programming Language Design and Implementation (PLDI &apos;05)</title>
+		<meeting>the ACM SIGPLAN 2005 Conference on Programming Language Design and Implementation (PLDI &apos;05)</meeting>
+		<imprint>
+			<date type="published" when="2005-06" />
+			<biblScope unit="page" from="213" to="223" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<analytic>
+		<title level="a" type="main">Grammar-based whitebox fuzzing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Godefroid</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Kiezun</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">Y</forename><surname>Levin</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">PLDI &apos;08: Proceedings of the 2008 ACM SIG-PLAN conference on Programming language design and implementation</title>
+		<imprint>
+			<date type="published" when="2008" />
+			<biblScope unit="page" from="206" to="215" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Automated whitebox fuzz testing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Godefroid</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Levin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Molnar</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">NDSS &apos;08: Proceedings of 15th Network and Distributed System Security Symposium</title>
+		<imprint>
+			<date type="published" when="2008-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<analytic>
+		<title level="a" type="main">R2: An application-level kernel for record and replay</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Guo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Tang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Wu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">F</forename><surname>Kaashoek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Zhang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Eighth Symposium on Operating Systems Design and Implementation (OSDI &apos;08)</title>
+		<meeting>the Eighth Symposium on Operating Systems Design and Implementation (OSDI &apos;08)</meeting>
+		<imprint>
+			<date type="published" when="2008-12" />
+			<biblScope unit="page" from="193" to="208" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">Deadlock immunity: Enabling systems to defend against deadlocks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Jula</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Tralamazza</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Cristian</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>George</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Eighth Symposium on Operating Systems Design and Implementation (OSDI &apos;08)</title>
+		<meeting>the Eighth Symposium on Operating Systems Design and Implementation (OSDI &apos;08)</meeting>
+		<imprint>
+			<date type="published" when="2008-12" />
+			<biblScope unit="page" from="295" to="308" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<analytic>
+		<title level="a" type="main">Deterministic replay of distributed Java applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Konuru</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Srinivasan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J.-D</forename><surname>Choi</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 14th International Symposium on Parallel and Distributed Processing (IPDPS &apos;00)</title>
+		<meeting>the 14th International Symposium on Parallel and Distributed Processing (IPDPS &apos;00)</meeting>
+		<imprint>
+			<date type="published" when="2000-05" />
+			<biblScope unit="page" from="219" to="228" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">Transparent, lightweight application execution replay on commodity multiprocessor operating systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O</forename><surname>Laadan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Viennot</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Nieh</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2010 ACM SIGMETRICS Conference on Measurement and Modeling of Computer Systems</title>
+		<meeting>the 2010 ACM SIGMETRICS Conference on Measurement and Modeling of Computer Systems</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<analytic>
+		<title level="a" type="main">The problem with threads</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">A</forename><surname>Lee</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Computer</title>
+		<imprint>
+			<biblScope unit="volume">39</biblScope>
+			<biblScope unit="issue">5</biblScope>
+			<biblScope unit="page" from="33" to="42" />
+			<date type="published" when="2006" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<analytic>
+		<title level="a" type="main">Bugbench: Benchmarks for evaluating bug detection tools</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Lu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Qin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Tan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Zhou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhou</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the first Workshop on the Evaluation of Software Defect Detection Tools (BUGS &apos;05)</title>
+		<meeting>the first Workshop on the Evaluation of Software Defect Detection Tools (BUGS &apos;05)</meeting>
+		<imprint>
+			<date type="published" when="2005-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<analytic>
+		<title level="a" type="main">Avio: Detecting atomicity violations via access interleaving invariants</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Lu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Tucek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Qin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhou</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Twelfth International Conference on Architecture Support for Programming Languages and Operating Systems (ASPLOS &apos;06)</title>
+		<imprint>
+			<date type="published" when="2006-10" />
+			<biblScope unit="page" from="37" to="48" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b36">
+	<analytic>
+		<title level="a" type="main">Muvi: automatically inferring multi-variable access correlations and detecting related semantic and concurrency bugs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Lu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Park</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Hu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Ma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Jiang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">A</forename><surname>Popa</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhou</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">SIGOPS Oper. Syst. Rev</title>
+		<imprint>
+			<biblScope unit="volume">41</biblScope>
+			<biblScope unit="issue">6</biblScope>
+			<biblScope unit="page" from="103" to="116" />
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b37">
+	<analytic>
+		<title level="a" type="main">Learning from mistakes: a comprehensive study on real world concurrency bug characteristics</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Lu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Park</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Seo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhou</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ASPLOS XIII: Proceedings of the 13th international conference on Architectural support for programming languages and operating systems</title>
+		<imprint>
+			<date type="published" when="2008" />
+			<biblScope unit="page" from="329" to="339" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b38">
+	<analytic>
+		<title level="a" type="main">Capo: a software-hardware interface for practical deterministic multiprocessor replay</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Montesinos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Hicks</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">T</forename><surname>King</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Torrellas</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Fourteenth International Conference on Architecture Support for Programming Languages and Operating Systems (ASPLOS &apos;09)</title>
+		<imprint>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="73" to="84" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b39">
+	<analytic>
+		<title level="a" type="main">Kendo: efficient deterministic multithreading in software</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Olszewski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Ansel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Amarasinghe</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Fourteenth International Conference on Architecture Support for Programming Languages and Operating Systems (ASPLOS &apos;09)</title>
+		<imprint>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="97" to="108" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b40">
+	<analytic>
+		<title level="a" type="main">Randomized active atomicity violation detection in concurrent programs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C.-S</forename><surname>Park</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Sen</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 16th ACM SIGSOFT International Symposium on Foundations of Software Engineering (SIGSOFT &apos;08/FSE-16)</title>
+		<meeting>the 16th ACM SIGSOFT International Symposium on Foundations of Software Engineering (SIGSOFT &apos;08/FSE-16)</meeting>
+		<imprint>
+			<date type="published" when="2008-11" />
+			<biblScope unit="page" from="135" to="145" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b41">
+	<analytic>
+		<title level="a" type="main">CTrigger: exposing atomicity violation bugs from their hiding places</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Park</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Lu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhou</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Fourteenth International Conference on Architecture Support for Programming Languages and Operating Systems (ASPLOS &apos;09)</title>
+		<imprint>
+			<date type="published" when="2009-03" />
+			<biblScope unit="page" from="25" to="36" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b42">
+	<analytic>
+		<title level="a" type="main">PRES: probabilistic replay with execution sketching on multiprocessors</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Park</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Xiong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Yin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Kaushik</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><forename type="middle">H</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Lu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 22nd ACM Symposium on Operating Systems Principles (SOSP &apos;09)</title>
+		<meeting>the 22nd ACM Symposium on Operating Systems Principles (SOSP &apos;09)</meeting>
+		<imprint>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="177" to="192" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b43">
+	<analytic>
+		<title level="a" type="main">Evaluating mapreduce for multi-core and multiprocessor systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Ranger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Raghuraman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Penmetsa</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Bradski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Kozyrakis</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">HPCA &apos;07: Proceedings of the 2007 IEEE 13th International Symposium on High Performance Computer Architecture</title>
+		<imprint>
+			<date type="published" when="2007" />
+			<biblScope unit="page" from="13" to="24" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b44">
+	<analytic>
+		<title level="a" type="main">Recplay: a fully integrated practical record/replay system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Ronsse</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>De Bosschere</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Trans. Comput. Syst</title>
+		<imprint>
+			<biblScope unit="volume">17</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="133" to="152" />
+			<date type="published" when="1999" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b45">
+	<analytic>
+		<title level="a" type="main">Anderson. Eraser: A dynamic data race detector for multithreaded programming</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Savage</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Burrows</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Nelson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Sobalvarro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">E</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Computer Systems</title>
+		<imprint>
+			<biblScope unit="page" from="391" to="411" />
+			<date type="published" when="1997-11" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b46">
+	<analytic>
+		<title level="a" type="main">Race directed random testing of concurrent programs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Sen</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM SIGPLAN 2008 Conference on Programming Language Design and Implementation (PLDI &apos;08)</title>
+		<meeting>the ACM SIGPLAN 2008 Conference on Programming Language Design and Implementation (PLDI &apos;08)</meeting>
+		<imprint>
+			<date type="published" when="2008-06" />
+			<biblScope unit="page" from="11" to="21" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b47">
+	<analytic>
+		<title level="a" type="main">CUTE: A concolic unit testing engine for C</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Sen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Marinov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Agha</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 10th European Software Engineering Conference held jointly with the 13th ACM SIGSOFT International Symposium on Foundations of Software Engineering (ESEC/FSE-13)</title>
+		<meeting>the 10th European Software Engineering Conference held jointly with the 13th ACM SIGSOFT International Symposium on Foundations of Software Engineering (ESEC/FSE-13)</meeting>
+		<imprint>
+			<date type="published" when="2005-09" />
+			<biblScope unit="page" from="263" to="272" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b48">
+	<analytic>
+		<title level="a" type="main">Flashback: A lightweight extension for rollback and deterministic replay for software debugging</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">M</forename><surname>Srinivasan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Kandula</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">R</forename><surname>Andrews</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhou</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Annual Technical Conference (USENIX &apos;04)</title>
+		<meeting>the USENIX Annual Technical Conference (USENIX &apos;04)</meeting>
+		<imprint>
+			<date type="published" when="2004-06" />
+			<biblScope unit="page" from="29" to="44" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b49">
+	<analytic>
+		<title level="a" type="main">The string-to-string correction problem</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">A</forename><surname>Wagner</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">J</forename><surname>Fischer</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">J. ACM</title>
+		<imprint>
+			<biblScope unit="volume">21</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="168" to="173" />
+			<date type="published" when="1974" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b50">
+	<analytic>
+		<title level="a" type="main">Gadara: Dynamic deadlock avoidance for multithreaded programs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Kelly</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Kudlur</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Lafortune</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Mahlke</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Eighth Symposium on Operating Systems Design and Implementation (OSDI &apos;08)</title>
+		<meeting>the Eighth Symposium on Operating Systems Design and Implementation (OSDI &apos;08)</meeting>
+		<imprint>
+			<date type="published" when="2008-12" />
+			<biblScope unit="page" from="281" to="294" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b51">
+	<analytic>
+		<title level="a" type="main">Automatically generating malicious disks using symbolic execution</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Sar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Twohey</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Cadar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Engler</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2006 IEEE Symposium on Security and Privacy (SP &apos;06)</title>
+		<meeting>the 2006 IEEE Symposium on Security and Privacy (SP &apos;06)</meeting>
+		<imprint>
+			<date type="published" when="2006-05" />
+			<biblScope unit="page" from="243" to="257" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b52">
+	<analytic>
+		<title level="a" type="main">RaceTrack: efficient detection of data race conditions via adaptive tracking</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Yu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Rodeheffer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Chen</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP &apos;05: Proceedings of the twentieth ACM symposium on Operating systems principles</title>
+		<imprint>
+			<date type="published" when="2005" />
+			<biblScope unit="page" from="221" to="234" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b53">
+	<analytic>
+		<title level="a" type="main">Conmem: detecting severe concurrency bugs through an effect-oriented approach</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Sun</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Lu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Fifteenth International Conference on Architecture Support for Programming Languages and Operating Systems (ASPLOS &apos;10&apos;)</title>
+		<imprint>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="179" to="192" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

@@ -1,0 +1,1477 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:35+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">HARDFS: Hardening HDFS with Selective and Lightweight Versioning</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thanh</forename><surname>Do</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tyler</forename><surname>Harter</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yingchao</forename><surname>Liu</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Haryadi</forename><forename type="middle">S</forename><surname>Gunawi</surname></persName>
+							<affiliation key="aff1">
+								<orgName type="institution">University of Chicago</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi</forename><forename type="middle">H</forename><surname>Arpaci-Dusseau</surname></persName>
+						</author>
+						<author>
+							<affiliation key="aff0">
+								<orgName type="institution">University of Wisconsin</orgName>
+								<address>
+									<settlement>Madison</settlement>
+								</address>
+							</affiliation>
+						</author>
+						<title level="a" type="main">HARDFS: Hardening HDFS with Selective and Lightweight Versioning</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>We harden the Hadoop Distributed File System (HDFS) against fail-silent (non fail-stop) behaviors that result from memory corruption and software bugs using a new approach: selective and lightweight version-ing (SLEEVE). With this approach, actions performed by important subsystems of HDFS (e.g., namespace management) are checked by a second implementation of the subsystem that uses lightweight, approximate data structures. We show that HARDFS detects and recovers from a wide range of fail-silent behaviors caused by random bit flips, targeted corruptions, and real software bugs. In particular, HARDFS handles 90% of the fail-silent faults that result from random memory corruption and correctly detects and recovers from 100% of 78 targeted corruptions and 5 real-world bugs. Moreover, it recovers orders of magnitude faster than full reboot by using micro-recovery. The extra protection in HARDFS incurs minimal performance and space overheads.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Large-scale distributed storage systems <ref type="bibr" target="#b25">[26,</ref><ref type="bibr" target="#b32">33,</ref><ref type="bibr" target="#b41">42,</ref><ref type="bibr" target="#b48">49]</ref> are becoming a dominant platform for a variety of applications and services. These complex "cloud" systems often run on clusters of thousands of unreliable commodity machines and must handle all kinds of failures, while preserving the integrity of user data and system metadata <ref type="bibr" target="#b17">[18,</ref><ref type="bibr" target="#b24">25,</ref><ref type="bibr" target="#b25">26,</ref><ref type="bibr" target="#b29">30,</ref><ref type="bibr" target="#b37">38,</ref><ref type="bibr" target="#b39">40]</ref>. Making these systems robust is challenging.</p><p>At the individual machine level, two common failure modes that these systems face are machine crashes and disk failures. To deal with these failures, there is a rich body of literature describing detection and recovery mechanisms such as journaling <ref type="bibr" target="#b33">[34]</ref>, RAID <ref type="bibr" target="#b26">[27,</ref><ref type="bibr" target="#b44">45]</ref>, and redundant hardware <ref type="bibr" target="#b16">[17]</ref>. With these advancements, failstop machine and disk failures are no longer considered a single point of failure in many of today's cloud systems.</p><p>Many cloud systems are able to handle fail-stop failures, but they do face new challenges. First, the systems run at large scale <ref type="bibr" target="#b29">[30,</ref><ref type="bibr" target="#b37">38,</ref><ref type="bibr" target="#b39">40]</ref>; thus, failures that used to be rare (e.g., memory corruption) become more frequent <ref type="bibr" target="#b11">[12,</ref><ref type="bibr" target="#b47">48]</ref>. Second, modern software is increasingly complex, and thus software bugs are becoming more common. If not handled properly, errors resulting from memory corruption and software bugs become a single point of failure in today's systems. Observations from real systems show that these failures can lead to transient, non-deterministic errors, and make the system exhibit fail-silent behaviors (e.g., send corrupt messages) rather than crashing; these fail-silent errors can lead to data loss, unavailability, and prolonged debugging effort <ref type="bibr" target="#b10">[11,</ref><ref type="bibr" target="#b11">12]</ref>.</p><p>To effectively handle fail-silent errors, we propose that distributed systems be built with selective and lightweight versioning (SLEEVE). The goal of SLEEVE is to detect silent faults in select subsystems of a target system and to do so in a lightweight manner (with little space and performance overhead). For example, a developer can pick some important functionality (e.g., file-system namespace management) and protect that functionality from fail-silent behaviors by developing a second lightweight implementation of the functionality. This approach essentially transforms a target system into an efficient two-version form that can detect (and recover from) fail-silent behaviors.</p><p>Using the SLEEVE approach, we harden the Hadoop file system (HDFS) <ref type="bibr" target="#b48">[49]</ref>, which is similar in structure to Google's file system, GFS <ref type="bibr" target="#b32">[33]</ref>. Although HDFS already contains some mechanisms for detecting and recovering from errors (e.g., replication and checksums), bugs have been found in these mechanisms, and our experiments show that HDFS is still susceptible to memory corruptions. Thus, additional hardening to prevent data loss is useful. We harden three pieces of HDFS functionality: namespace management, replica management, and the read/write protocol, creating three robust systems, called HARDFS-N, HARDFS-R, and HARDFS-D, respectively.</p><p>We evaluate the effectiveness of HARDFS by injecting random bit flips, corrupting targeted fields of important data structures, and by reintroducing known bugs. Our experimental results show that while HDFS silently misbehaves in many cases, HARDFS effectively isolates faulty behavior so that it remains within a single node. In particular, HARDFS handles 90% of the fail-silent faults that result from random memory corruption and correctly detects and recovers from 100% of 78 targeted corruptions and 5 real-world bugs that we reintroduce in our codebase. Since errors do not propagate to persistent storage or other nodes, previously fail-silent errors are transformed into fail-stop errors, enabling the</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Extended Motivation</head><p>Modern software systems such as HDFS must deal with memory corruption and software bugs that are becoming more common. Therefore, we address a failure model where in-memory data can contain wrong values due to memory corruption and software bugs. If not handled properly, these errors lead to fail-silent behaviors that are hard to detect and can cause severe problems like data loss and service unavailability. We assume that the system is not malicious and that persistent storage is trusted. <ref type="figure" target="#fig_0">Figure 1</ref> illustrates some problems caused by failsilent behaviors. <ref type="figure" target="#fig_0">Figure 1a</ref> shows a normal correct behavior of HDFS; a client writes a file F and the HDFS namenode replicates F's data block, D, to two datanodes (in 2-way replication). However, silent memory corruption such as a bit flip can take place (e.g., metadata F flips to G in <ref type="figure" target="#fig_0">Figure 1b)</ref>. In this case, the user will not be able to read the file in the future. Subtle software bugs in HDFS ( §5.1.3) could also lead to silent data loss or corruption. For example, in <ref type="figure" target="#fig_0">Figure 1c</ref>, a bug in the namenode silently deletes F's data blocks in a background task.</p><p>In this work, we attempt to address this question: How should distributed storage systems such as HDFS deal with fail-silent behaviors? Many approaches such as Byzantine fault tolerance (BFT) <ref type="bibr" target="#b42">[43]</ref>, N-version programming <ref type="bibr" target="#b13">[14,</ref><ref type="bibr" target="#b15">16]</ref>, and the use of ECC memory have been proposed. However, existing approaches either incur high performance overhead, hardware cost, or engineering effort ( §6). In this paper, we propose a new approach: selective and lightweight versioning (SLEEVE).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">Hardening HDFS with SLEEVE</head><p>The goal of the SLEEVE approach is to selectively protect some part of the target system against fail-silent behaviors and to do so in a lightweight manner (with little space and performance overhead). <ref type="figure" target="#fig_0">Figure 1d</ref> illustrates HARDFS, an HDFS system that employs the SLEEVE approach. The code of the HDFS system (which we call the main version) implements the complete functionality of the system. A developer can pick some important piece of functionality and create a "second version" of it, a variant of 2-version programming. This second, selective, and lightweight version models the state and logic of the main version. The model can detect misbehavior in the main version and trigger appropriate responses. We refer to systems that pair a complete main version with a modeled second version as sleeved systems. Sleeved systems watch inputs and outputs of the main version (as illustrated in <ref type="figure" target="#fig_0">Figure 1d</ref>) to detect incorrect behaviors that deviate from the model. For example, memory corruption and software bugs in <ref type="figure" target="#fig_0">Figure 1b</ref> and 1c can easily be detected; HARDFS will catch the read F error and incorrect background data removal (rm D) as faulty behaviors. After detecting faulty behaviors, a sleeved system can perform an appropriate action, such as microrecovery, to transform faulty states (e.g., corrupt metadata in the main-version memory) into consistent states. Thus, a sleeved system isolates faulty behavior within a single node; faults are not propagated to persistent storage or other nodes.</p><p>We have three requirements for hardening HDFS which the SLEEVE approach satisfies: HARDFS should be effective at detecting and handling faults ( §5.1), the additional protection should incur minimal performance and memory overhead ( §5.2), and hardening HDFS should require reasonable engineering effort ( §5.3).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1.1">Selective Versioning</head><p>While traditional N-versioning requires developers to reimplement all the functionality of the specification, selective versioning requires an additional version for only the most important functionality. The idea is that some functionality in the system is worth protecting more than other functionality, for several reasons.</p><p>First, some components are more sensitive to bugs and memory corruption. For instance, a bug in the HDFS namespace or replica management could cause irrecoverable data loss; a buggy transaction committed to the log can make the system crash permanently; corrupt internal state could make the system serve incorrect data. On the other hand, bugs in maintaining system statistics may be less harmful. Therefore, if one must prioritize, it is more appropriate to protect bug-sensitive functionalities first.</p><p>Other potential candidates for applying the SLEEVE approach are new or frequently-changed modules. Real-world cases have shown that code that does not change frequently is relatively stable, and hence less likely to contain bugs, while new or frequently-changed code is more likely to be buggy <ref type="bibr" target="#b34">[35,</ref><ref type="bibr" target="#b52">53,</ref><ref type="bibr" target="#b59">60]</ref>.</p><p>Finally, some software systems already contain protection machinery for some modules. For example, HDFS on-disk data is already protected with checksums and replication <ref type="bibr" target="#b44">[45,</ref><ref type="bibr" target="#b56">57]</ref>, and thus the second version could just protect the exposed in-memory system metadata.</p><p>HARDFS hardens namespace management, replica management, and the read/write protocol of HDFS.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1.2">Lightweight Versioning</head><p>With lightweight versioning, we avoid completely replicating the state maintained by the main version. This challenge particularly arises when a single node needs to store a large amount of state. For example, the HDFS namespace management could manage in-memory metadata of millions of files in one machine.</p><p>A naive approach for a 2-version system is to maintain the same amount of metadata in the second version as the main version. Although simple, this approach is unattractive because of its large memory overhead (potentially 100%). When memory is scarce, this design choice limits system scalability. For instance, doubling memory overhead could reduce the maximum number of files the system can manage <ref type="bibr" target="#b49">[50]</ref>. Moreover, many systems may run on the same cluster (e.g., Hadoop MapReduce <ref type="bibr" target="#b5">[6]</ref>, HBase <ref type="bibr" target="#b6">[7]</ref>, and HDFS), so doubling memory overhead is undesirable.</p><p>We exploit compact encoding techniques to minimize memory overheads. We have found that sleeved systems can be organized to ask boolean questions (e.g., "Does file F really exist?"); therefore, we can use efficient encodings that answer boolean questions. HARDFS uses a Bloom filter to efficiently encode the file hierarchy for our sleeved namespace management functionality ( §3.3).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1.3">Recovery</head><p>Detecting faults that are normally silent is the primary contribution of SLEEVE. Upon detection, a variety of standard recovery techniques or tools can be used, such as: restart, fsck, safemode or otherwise blocking dangerous actions, or failover.</p><p>In addition to simply detecting errors, SLEEVE can often pinpoint the problem, enabling sophisticated recovery options, such as micro-recovery, a fast alternative to full reboot. Fail-silent behaviors sometimes occur due to state corruption; with a second version of the internal state, the system can pinpoint and correct only the corrupt state. With the available redundancy, a sleeved system can initiate fast, fine-grained recovery as opposed to slow, coarse-grained recovery. HARDFS always attempts micro-recovery before resorting to full recovery ( §3.5).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1.4">Soundness and Completeness</head><p>HARDFS is not sound: we do not attempt to guarantee that HARDFS never triggers recovery action unnecessarily. Like the main version, the second version is also subject to anomalous bit flips and bugs. As long as recovery actions have a small cost, occasional false positives are acceptable. HARDFS is not complete: we do not attempt to catch all faults with HARDFS. Our premise is that faults are more dangerous in some subsystems than others, and complete checking is not possible without a formal specification of behavior regardless. Although HARDFS fault detection is neither sound nor complete, our experiments show that HARDFS is quite useful for handling memory corruption and real software bugs ( §5).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">HARDFS Design</head><p>In this section, we describe our general approach to designing HARDFS with SLEEVE. In §4, we describe in detail how we implement the design to harden the HDFS namespace management, replica management, and the read/write protocol of datanodes with HARDFS-N, HARDFS-R, and HARDFS-D respectively.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Node Models</head><p>Like GFS clusters <ref type="bibr" target="#b32">[33]</ref>, HDFS clusters consist of a single master node and multiple worker nodes. The master is responsible for file-system metadata, including the namespace structure and the locations of block replicas. File metadata is kept in memory for fast operation, but for persistence and crash recovery, the master writes every namespace update to an on-disk log. The workers store block replicas on their local disks and keep block information in memory. Metadata and data operations are decoupled: while the master serves metadata operations, the workers serve read and write requests. HDFS nodes can be described by a behavioral model: nodes perform actions in response to events. Events occur when a node receives input messages from other systems or when periodic threads trigger work. The actions a node performs include modifying the node's memory state, accessing persistent storage, and sending output messages based on the current state. In HARDFS, sleeved subsystems understand the behavioral model. A node is considered faulty if it performs incorrect actions (i.e., actions that deviate from the model).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Hardened Subsystem Architecture</head><p>To harden a distributed storage system against incorrect actions, we augment each node in the system with a lightweight version that verifies node behavior. More specifically, we "sleeve" each node by interposing on message and file I/O without significantly changing the core implementation. With this approach, faulty behaviors are also isolated within a single node and not propagated to persistent storage or other nodes. As depicted in <ref type="figure" target="#fig_1">Figure 2</ref>, we use four major modules for each sleeved subsystem: an interposition module, a state manager, an action verifier, and a recovery module. Interposition module: A sleeved system forwards all input messages to the main version, and forwards the messages relevant to the hardened functionality to the state manager. It also interposes on thread events to know when a periodic thread is triggered. This interposition is important because a periodic thread may trigger events that change the state of the main version; the second version must make equivalent changes to its own model. HARDFS uses AspectJ <ref type="bibr" target="#b1">[2]</ref> to interpose on events without making major changes to the main version.</p><p>State manager: The state-manager module of HARDFS does the bookkeeping necessary to describe and check the data maintained in the main version. To be lightweight, the state manager keeps the state of the hardened functionality in encoded states. HARDFS encodes states with Bloom filters, but a variety of data structures could be used for this purpose. Since encoding techniques can incur high computational overhead during updates, HARDFS employs a small "cache" of concrete states for objects being actively modified (e.g., the metadata for a currently open file). State management is further described in §3.3. Action verifier: The action-verifier module detects faulty actions of the main version with a set of microchecks. Using these checks, the sleeved system verifies every action of the hardened functionality before it impacts other components. We describe the challenges of verifying actions in §3.4. Recovery module: After a fault has been identified by a sleeved system, the recovery module is triggered. Since faulty behavior has been isolated within a single node, recovery can be as simple as crashing and rebooting the faulty node. However, rebooting can take a significant amount of time; therefore, a sleeved system may optionally perform micro-recovery by semantically comparing every state object in the main version with the secondary version to recover only the corrupt objects. Recovery is described further in §3.5.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">State Manager Module</head><p>We describe how the state manager operates, specifically how internal state is selected from the main version, derived from incoming messages and actions, and encoded in a lightweight manner.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3.1">Selective State Management</head><p>We selectively model a subset of the functionality and state of the main version. For instance, to verify namespace integrity (e.g., correct file hierarchy) and corresponding operations (e.g., file creation and deletion), HARDFS maintains directory entries without storing less important information such as access and modification times. State management is flexible: new information can be added incrementally to meet current needs (e.g., one could add permission information for security checks if desired). HARDFS uses the same file formats for on-disk structures as vanilla HDFS, so upgrading HDFS to HARDFS or adding new memory state only requires a restart; copying data to a new file system is unnecessary.</p><p>In addition to storing the selected state, HARDFS needs logic for how state should be updated based on interposed messages; this logic acts as the second version. In order to implement this logic, we needed to understand the semantics of various protocol messages. For instance, for namespace management, upon a successful file creation message, HARDFS adds the corresponding file name to the maintained state.</p><p>Properly handling thread events that are periodically triggered is also necessary to keep both versions synchronized; if the second version were not aware of the thread events, it could not verify actions triggered by the threads. For example, when a periodic thread in the master node wakes and detects dead workers, the master may perform a block-replication action. The second version must be aware of this transition in order to verify the resulting actions correctly.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3.2">Lightweight State with Bloom Filters</head><p>We now discuss how our sleeved systems can manage state in an efficient and lightweight manner. While there are many ways to do this, in HARDFS, we use counting Bloom filters <ref type="bibr" target="#b20">[21]</ref>. A Bloom filter is a probabilistic data structure that allows testing whether a data element is a member of a set. It is space efficient: the overhead does not depend on the state objects stored.</p><p>Our intuition for the use of Bloom filters is that sleeved systems typically only need to answer boolean questions (e.g., does file F exist?) rather than answering nonboolean questions (e.g., what are all files under directory D?). Thus, a Bloom filter is a fitting solution for compressing file-system metadata. The challenges that arise are dealing with non-boolean verification, excessive CPU overhead, and false positives.</p><p>Dealing with non-boolean verification: Although using a Bloom filter is space efficient, one challenge is to represent non-boolean information, in particular information that changes and must be updated. For example, consider the case where both the main and second versions agree that file F is 100 bytes long. If a client appends the file and the worker tells the master that F is now 200 bytes long, then the second version must update its state regarding F. However, the second version cannot overwrite the old entry {F,100} previously stored in the Bloom filter with a new entry {F,200}. Instead, it must perform two operations: delete the old entry {F,100}, and then insert the new entry {F,200}. To delete the old entry the second version must know the value of the old entry, but Bloom filters cannot answer non-boolean questions (in this example, what is the current length of F?).</p><p>To deal with this, we use an ask-then-check technique. That is, the secondary version asks a non-boolean question of the main version to determine the previous value for an entry before the main version's event handler executes. Because the returned result cannot be trusted, the second version then checks the previous value with a boolean question to the Bloom filter. In the above example, the secondary version first asks the main version for the length of F (which is 100) and then checks via the Bloom filter that F is indeed 100 bytes long. With this verified and correct information, the secondary version performs the deletion (we use a counting Bloom filter to support this operation) and hence the overwrite.</p><p>Dealing with excessive CPU overhead: While Bloom filters are space efficient, in some cases they can lead to excessive CPU overheads. To remedy this problem, HARDFS keeps a small "cache" of states being actively modified in concrete form (in contrast to the compressed form in the Bloom filter). In addition, HARDFS can optionally keep all data in concrete form, trading space efficiency for less CPU overhead. In the future, we plan to investigate policies for converting data between concrete and compressed forms based on run-time measurements.</p><p>Dealing with false positives: The last challenge is the presence of false positives from two sources: Bloom filters and corrupted state or bugs in the sleeved code itself. First, Bloom filters fundamentally can return false positives <ref type="bibr" target="#b19">[20]</ref>. A Bloom filter can "lie" that it contains file F, when in fact it does not. Fortunately, the false positive rate is relatively small and configurable. For instance, the probability of a false positive in a Bloom filter with 10 hash functions and 32 bits per data element is approximately 2 per million <ref type="bibr" target="#b30">[31]</ref>. Doubling the number of bits per data element to 64 leads to a false positive rate of 4 per billion; at this rate, a cluster processing 100 ops/second would experience about one false positive per month. Second, the state maintained by the sleeved version itself can be corrupt due to memory problems or bugs. Fortunately, in crash-tolerant systems, false positives are benign from a correctness perspective because they only result in unnecessary recovery. The only danger is the degenerate case where a Bloom filter always generates a false positive for a particular element, resulting in repeated recovery. A small cache of concrete states solves this problem; the recovery mechanism remembers troublesome elements and pins them in the cache.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.4">Action Verifier Module</head><p>The action verifier module detects incorrect actions performed by the main version that relate to the properties of interest. We classify incorrect actions into four types: corrupt, missing, orphan, and out-of-order. We believe it is important to detect all four types of incorrect actions. In our study of the HDFS bug reports, we find that all these types of incorrect actions occur <ref type="bibr" target="#b7">[8]</ref>.</p><p>The following sections describe the four types of incorrect actions that could occur after a file creation request as illustrated in <ref type="figure" target="#fig_2">Figure 3</ref>. <ref type="figure" target="#fig_2">Figure 3a</ref> represents the correct behavior of a file creation; here the file does not exist, and thus the master accepts the request and writes an appropriate transaction to its persistent operation log.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.4.1">Corrupt Actions</head><p>The first type of incorrect action is a corrupt action. Consider the scenario shown in <ref type="figure" target="#fig_2">Figure 3b</ref> where a client sends a request to create a file F; if the file did not previously exist, then the request should be accepted. However, if the main version of the master behaves incorrectly (e.g., the in-memory pathname is corrupted), then the main version will wrongly reject the request, while the second version accepts.</p><p>However, when there is disagreement between the secondary and main versions, the secondary version cannot be trusted to be the correct version. Thus, whenever disagreement occurs for any of the actions described below, the action verifier simply catches the incorrect action and takes additional steps to resolve the problem. These steps are described in more detail in §3.4.5.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.4.2">Missing Actions</head><p>Missing actions represent the case where the main version should generate a specific action but fails to do so. For example, in <ref type="figure" target="#fig_2">Figure 3c</ref>, the master accepts the file creation request but forgets to write the corresponding transaction to the operation log.</p><p>To check for missing actions, the action verifier maintains an expected action list and generates expected ac- tions for incoming requests or state changes that require a certain action. For example, a write to the operation log is expected to follow every accepted client-write. Expected-action entries describe both the action the main version should perform and when the action needs to be performed. Many actions are expected to occur before the main version's event handler returns, but in some cases, it is only possible to detect missing actions using timeouts. For example, replication in HDFS is throttled, so a namenode might not immediately send a replication command upon detecting an under-replicated block. Waiting too long, however, is incorrect behavior that could lead to data loss.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.4.3">Orphan Actions</head><p>Orphan actions represent the case where the main version performs unexpected actions. For instance, in <ref type="figure" target="#fig_2">Figure 3d</ref>, the master node writes to the operation log that file F is created although there is no origin for this request. To detect orphan actions, the action verifier leverages the expected action-list. Specifically, it signals an error when the action has no match in the expected-action list. Orphan actions also cover the case of duplicate actions. For example, consider the block re-replication procedure due to dead worker nodes. If the master sends too many block re-replication commands, then the first rereplication command will be considered correct, while the subsequent ones will be considered orphans.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.4.4">Out-of-order Actions</head><p>An action may depend on another one. For example, a transaction creating a new file F (op2) cannot precede the transaction making the parent directory D (op1). If the main version executes op2 before op1 (as in <ref type="figure" target="#fig_2">Figure 3e</ref>), the operation log will be corrupt, which may lead to severe consequences such as data loss or the master crashing permanently during checkpoint recovery. To address this challenge, action dependencies are tracked. Tracking action dependencies is challenging and domain specific. We present a specific solution in §4.1.1.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.4.5">Handling Disagreement</head><p>By detecting incorrect actions as explained above, the action verifier can identify disagreements, but with only two versions to compare, it cannot know which version is wrong; therefore, the action verifier resolves disagreements using domain-specific information and falls back on the safety of recovery from trusted state.</p><p>As an example, consider the request originally shown in <ref type="figure" target="#fig_2">Figure 3b</ref>, where the main and secondary versions disagree about the success of a file creation. It is entirely possible that the main version (correctly) rejected the request because a space quota was exceeded; if the second version does not incorporate knowledge about space quotas in its selective model, then it will (incorrectly) accept the request. Thus, the action verifier cannot conclude that the main version behaves incorrectly.</p><p>In several cases, we have found it much easier to implement a simplified secondary version that naively accepts requests that the complete main version rejects. To avoid false alarms in these cases, the action verifier examines the error code returned from the main version and ignores disagreements when the secondary version is not equipped to generate those cases. In the out-of-quota example, the action verifier agrees with the main version to reject the request and operation continues without recovery. Unfortunately, if the main version incorrectly reports "out-of-quota", HARDFS will not detect it. There is a tradeoff: writing logic for more cases improves reliability, but increases engineering effort.</p><p>For some situations, the action verifier needs a mechanism to detect repeated disagreement. If a transient fault causes disagreement, the same discrepancy will not reappear after recovery, and normal operation will resume. However, one of the versions may have a bug that causes permanent disagreement. In this case, the developer is notified, and policy determines how to proceed until the code is fixed; entering HDFS safemode is one option (safemode prevents all file and block modifications).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.5">Recovery Module</head><p>Once the action verifier detects a failure, the recovery module can apply many different techniques. One simple approach is crash and reboot (suitable for crash tolerant systems). A more fine-grained technique is microrecovery where the recovery module pinpoints and recovers only the corrupt state. In addition to doing repair, the recovery module can also thwart destructive actions to prevent fault propagation to other nodes. We discuss the three techniques used by HARDFS below.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.5.1">Reboot</head><p>Crash and reboot is a safe mechanism to prevent the propagation of corrupt state due to transient and nondeterministic failures. Upon reboot, the main version can safely reload its in-memory state from other trusted sources, such as persistent storage or other nodes across the network; the states of the secondary version are also reloaded since it interposes on these inputs.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.5.2">Micro-Recovery</head><p>When rebooting a node is expensive (e.g., rebooting a master node may take hours <ref type="bibr" target="#b21">[22]</ref>), a sleeved system can instead quickly identify and repair only the corrupted state. We call this technique micro-recovery (similar to micro-rebooting <ref type="bibr" target="#b22">[23]</ref>). In micro-recovery, when a fault is detected, the node is frozen to prevent changes to the system state. The recovery module then identifies the corrupted state by semantically comparing the secondary and main version state, and recovers it from a trusted source (e.g., persistent storage).</p><p>For example, if the two versions disagree about the length of a file F, then micro-recovery reconstructs just F's metadata from the checkpoint file and the operation log on disk. These sources can be trusted for two reasons: data is never written to them unless both versions agree, and solutions for preventing and detecting corruption to persistent storage are well known <ref type="bibr" target="#b14">[15,</ref><ref type="bibr" target="#b16">17,</ref><ref type="bibr" target="#b18">19,</ref><ref type="bibr" target="#b26">27,</ref><ref type="bibr" target="#b33">34,</ref><ref type="bibr" target="#b35">36,</ref><ref type="bibr" target="#b40">41,</ref><ref type="bibr" target="#b43">44,</ref><ref type="bibr" target="#b44">45,</ref><ref type="bibr" target="#b50">51,</ref><ref type="bibr" target="#b51">52]</ref>.</p><p>Disagreement can happen because of corruption in either secondary or main version state (or both). Repairing corrupt main version state is relatively easy because the recovery module can overwrite the corrupt state "in place". Repairing encoded state in a Bloom filter is more challenging. Consider a corrupted entry {F,374}, incorrectly indicating F is 374 bytes long. To repair the corrupted entry, the recovery module must delete the encoded entry and insert the correct entry, but it does not know that F's length has been corrupted to 374. The solution described in §3.3.2 does not work because there is no entity that knows the corrupt value. Therefore, our solution is to begin with an empty Bloom filter instance and add entries as they are verified, either from main-version state or persistent storage, without a full reboot.</p><p>If micro-recovery does not find any disagreement, it means the detected faults might involve corruption in non-hardened functionality or bugs in the software logic, and thus the recovery module falls back to full reboot. If recovery is continuously repeated, an error report is generated as discussed in §3.4.5.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.5.3">Thwarting Destructive Actions</head><p>Repairing a local node is of limited value if the faulty node causes permanent damage to other nodes before it recovers. HDFS workers send regular heartbeat messages to the master, and the master replies with messages directing workers to perform various actions. Some of these directives, such as "delete replica" or "decommission", can cause irrecoverable data loss if misguided.</p><p>Our sleeved subsystems drop messages containing destructive directives if there is any disagreement between the main version and the secondary model about the objects in question. Our policy here is conservative; it is safer to potentially waste storage space than to risk deleting data unintentionally.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Implementation</head><p>In this section, we describe the specific details of the three HARDFS subsystems, HARDFS-N, HARDFS-R, and HARDFS-D, which harden the HDFS namespace management, replica management, and the read/write protocol of datanodes, respectively.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">Namespace Management: HARDFS-N</head><p>Namespace management is a critical functionality in HDFS. The architecture of HDFS has a dedicated master, the namenode, which stores all file-system metadata in memory for fast operations. When the namenode executes a client request that changes the namespace, it writes an appropriate transaction to the on-disk operation log before responding back to the client. Periodically, the namenode replays this operation log to produce an on-disk checkpoint file that contains the complete namespace structure. HDFS splits files into 64MB blocks, which are replicated across datanodes.</p><p>To protect namespace integrity, HARDFS-N guards the in-memory namespace structures that are necessary for reaching data: the file-tree hierarchy, file-to-block mapping, and block-length information. With this protection, HARDFS-N detects namespace-related problems such as accidental file truncations, unreachable directories, and corrupt file-to-block mappings. When these problems are detected by HARDFS-N, faulty actions are not propagated to the client, persistent storage, or datanodes.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1.1">Maintaining State and Checking Actions</head><p>After interposing on incoming and outgoing messages, HARDFS-N can update its state (both Bloom filters and the expected-action list) and verify observed actions. Its logic for updating state from incoming messages is shown in <ref type="table" target="#tab_1">Table 1</ref>  APIs are needed: insert(x), delete(x), and exists(x), where x is a variable-length byte array.</p><p>To encode a file hierarchy, the most straight-forward approach would be to perform insert("d/f") to indicate that there exists a directory d with a child f. However, this scheme leads to inefficient performance if a directory has many entries and is frequently renamed <ref type="bibr" target="#b38">[39]</ref>. Imagine there exist many entries d/f1, d/f2, d/f3, and so on, and directory d is renamed to n; since Bloom filters do not support overwrite ( §3.3.2), the system would need to perform many ask-then-check operations to delete all d/* entries, and then insert all new n/* entries. Our solution is to introduce another level of indirection (e.g., keyOf(d)/f). If the main version maintained a unique inode number for each directory, we could just use that information directly. Unfortunately, there is no such information. Instead, we use the hash code of the memory address for the Java object that represents the directory.</p><p>To catch orphan, missing, and out-of-order actions, HARDFS-N maintains an expected-action list. For example, in the first row of <ref type="table" target="#tab_1">Table 1</ref>, upon an incoming create(F) request, a future action txCreate is expected. To detect out-of-order transactions, HARDFS-N uses domain-specific knowledge. Specifically, a completed transaction (a successful txCreate(D)) implies that the associated object (D) is committed to the on-disk log and that subsequent child additions to D are also allowed. With this knowledge, out-of-order transactions can be detected (e.g., if txCreate(D/F) is sent to the disk but txCreate(D) is still in the expected-action list).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1.2">Recovery</head><p>HARDFS-N could recover from detected errors by rebooting the namenode and reconstructing all state. For faster recovery, HARDFS-N attempts micro-recovery first. Here, we describe further how corrupt states can be recovered from persistent storage.</p><p>HARDFS-N repairs corrupted states in memory (e.g., bad F's metadata) using states stored in the namenode's checkpoint file. Since we assume persistent storage is trusted ( §3.5.2), the checkpoint file is expected to have "good" states. To obtain the latest checkpoint file, HARDFS-N forces the namenode to start a checkpointing process by replaying the operation log. However, HDFS checkpointing is relatively slow and I/O-intensive: it requires reading the old checkpoint file in its entirety, as well as the operation log, before it can write out a new checkpoint file. To optimize this, HARDFS-N avoids forcing a checkpoint when possible. HARDFS-N first scans the (relatively small) operation log to find the correct values for any of the relevant corrupted state (e.g., F's latest metadata). If no relevant transactions are found, HARDFS-N performs an efficient binary search on the checkpoint file for the needed information; the checkpoint file is already sorted based on pathname.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Replica Management: HARDFS-R</head><p>HDFS replica management involves the block-to-node mapping structure for tracking the node locations and number of replicas for every block. Since datanodes in a cluster may arrive and leave at any time, a block can be over-or under-replicated. Replica management ensures that each block has the intended number of replicas by sending deletion and regeneration commands to different datanodes. When a block is created/regenerated, the datanode sends a blkRcvd message to the namenode. Every datanode also sends periodic blockReport messages containing the list of blocks managed by that datanode.</p><p>HARDFS-R hardens the namenode replica management functionality by protecting the integrity of blockmapping states (e.g., no blocks will be accidentally deleted and no incorrect block locations will be returned to the client). Since many of the basics are similar to HARDFS-N, we focus on the differences.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2.1">Maintaining State and Checking Actions</head><p>HARDFS-R uses two Bloom filters to encode blockto-node mappings and replica-count information with simple formats such as insert(BlkID:NodeID) and insert(BlkID:Count).</p><p>For every block regeneration/deletion command sent by the main version, HARDFS-R performs various checks. For example, deleting a block replica should not make the block underreplicated; a regeneration command should only be performed on a valid block.</p><p>HDFS uses a periodic thread to detect dead nodes. When the thread is triggered, HARDFS-R is informed ( §3.3) so that it can replicate the functionality for block accounting and manage its expected-action list (e.g., HARDFS-R expects to observe a block regeneration command if the block is under-replicated).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2.2">Recovery</head><p>HDFS namenode does not maintain block-to-node maps in its persistent storage; therefore, full recovery is done by requesting block mappings from all the datanodes (specifically by requesting blockReport commands). However, to perform micro-recovery on a corrupt blockto-node mapping (either in the main or secondary version), HARDFS-R only requests a block report from the corresponding node. If micro-recovery fails ( §3.5.2), HARDFS-R falls back to full recovery.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.3">Read/Write: HARDFS-D</head><p>Our final subsystem, HARDFS-D, hardens the datanode's metadata for reading and writing blocks. HARDFS-D can detect data access problems such as returning incorrect data or appending data at a wrong offset.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.3.1">Managing State and Checking Actions</head><p>In each datanode, HARDFS-D protects two pieces of information: the list of blocks maintained by the datanode and the length of each block. In an append-only storage system such as HDFS, the block length is especially important since it defines the location of the next write; a corrupt length could lead to accidental overwrites. HARDFS-D uses two Bloom filters to protect the information (e.g., insert(B) and insert(B,100)).</p><p>HARDFS-D verifies both disk and network actions. First, HARDFS-D checks that all disk accesses performed by the datanode are to the correct files and to the correct offsets. Second, HARDFS-D checks all outgoing network messages to ensure that any local corruption does not propagate to another datanode; this network check is vital because writes are preformed in a pipelined fashion.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.3.2">Recovery</head><p>A corrupted and faulty datanode can be recovered with a simple reboot. Fortunately, because each block is typ-  </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Evaluation</head><p>We now evaluate HARDFS. Specifically, we present experimental results that answer the following questions:</p><p>• Is HARDFS effective at detecting and recovering from fail-silent faults caused by memory corruption and real-world bugs ( §5.1)? • How much time and space overhead does the additional bookkeeping incur? Does micro-recovery substantially improve recovery time ( §5.2)? • Does hardening HDFS require a reasonable amount of engineering effort ( §5.3)?</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1">Detection and Recovery</head><p>We evaluate the ability of HARDFS to detect faults and recover using three sets of experiments. We first randomly corrupt memory by injecting bit flips in the namenode's address space. To further understand the effect of such corruptions, we perform memory corruptions that target various fields in important data structures. Finally, we reintroduce real bugs to the codebase and measure how well HARDFS can prevent data loss.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1.1">Random Memory Corruption</head><p>We study how random memory corruptions affect the operation of vanilla HDFS and HARDFS by injecting random bit flips in the namenode's address space. Specifically, for each system we performed 1000 runs, each of which involved: (1) creating 10,000 files, (2) injecting random bit flips into the namenode's writable address space, and (3) recording if the system crashes or if stat() returns unexpected metadata (i.e., a silent failure has occurred). We focus on namenode corruptions because it is a single point of failure in the system and has more potential to propagate errors. Each bit has one chance in 50 million of being flipped. With our injection methodology, both the main implementation and the secondary model are subject to the random injections, so discrepancies can arise when state in either is corrupted. <ref type="table" target="#tab_3">Table 2</ref> summarizes the experimental results. With HARDFS, the number of silent failures is reduced by a factor of 10 (from 117 to 9) because the failures are mostly detected and recovered (140 reboots and 107 micro-recovery instances). However, the JVM crashes twice as often (because additional bookkeeping increases the chance of pointer corruptions that lead to crashes). All the crashes were due to dangling pointers, memory protection errors, or illegal instructions. HARDFS trades availability for correctness and data safety.</p><p>The breakdown of silent failures illustrates the result of selective protection. In HDFS, corrupt pathnames are most common (95 cases) followed by corrupt blocksizes (12 cases). In contrast, the most common silent failure for HARDFS is a corruption of the modification time (8 cases), which arises because we selectively chose not to protect this inode field. For HARDFS, there is only one dangerous failure, a corruption of blocksize; although HARDFS protects this field, it is possible that either our aggressive injections caused the logic checks to misbehave, or perhaps the same corruption happened to both the main version and secondary model, leading to this false negative. It is difficult to reproduce this case.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1.2">Targeted Memory Corruption</head><p>We also conduct targeted memory corruption because the random memory corruption experiment gives us little information about which part of memory is corrupted and its corresponding effect. To do this, we pick a field of the namespace data structure (e.g., pathname, block ID, etc.), change it to an unexpected value (e.g., from f0 to f1), and run a simple workload (e.g., file creation). <ref type="table">Table 3</ref> summarizes our experimental results. We see that, despite employing on-disk replication, vanilla HDFS is quite fragile to memory corruption (many × and � outcomes). For instance, a block ID corruption can cause the namenode to remove all replicas of a block; faulty transactions can be written to the on-disk operation log, eventually leading to unsuccessful checkpoints and reboots; corrupted states can propagate, leading to global corruption. HARDFS-N, on the other hand, correctly detects and recovers from all of the 54 injected faults without propagating the faults to the disk or other nodes.</p><p>We also investigate whether HARDFS-N can handle the secondary version behaving incorrectly. Specifically, we repeat the experiment in <ref type="table">Table 3</ref> where we corrupt the pathname and the file-to-block mapping, but this time within the Bloom filters. We find (not shown) that the recovery module successfully recreates HARDFS-N's internal state by reconstructing a new instance of the Bloom filter (as described in §3.5.2). The time to populate a new <ref type="table">Table 3</ref>: Namespace memory corruption experiments.  To measure the benefits of HARDFS-D, we corrupt replica metadata during block reads and writes (not shown). Although vanilla HDFS datanodes handle faults better than the namenode in our last experiment, half of the trials still resulted in data loss, corruption, or incorrect responses. The data replication in HDFS is useless if corruption can spread. HARDFS-D, however, detects faulty behaviors immediately and reboots the faulty node. In every trial, the fault is isolated, operations continue successfully, and no data is lost or corrupted.</p><formula xml:id="formula_0">HDFS HARDFS Message P C S R B I G L P C S R B I G L mkdir × � × � . . . . . . √√ . . . . . . create × � a × � b × × . . . . √√√√ . . . . append × � c × � c × � c × � × � c × � c × � b × � b √√√√√√√√ addBlk � � . � . . . . √√ . √ . . . . blkRcvd . . . . . × � b × � b . . . . . . √√ . fsync × � a . × � c × � × � c × � c × � b × � c √ . √√√√√√ complete × � a . × � c × � × � c × � c × � b × � c √ . √√√√√√ delete × � × � . . × � b × � b . . √√ . . √√ . . rename × � × � . . . . . . √√ . . . . . . setRep × � a . . × . . . . √ . . √ . . . . setTimes × � a . . . . . . . √ . . . . . . . getInfo � � � �. . . . √√√√ . . . . getListing � � . . . . . . √√ . . . . . . getBlks × � a × � . . � � � � √√ . . √√√√</formula></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Corrupted metadata fields are: (P) pathname, (C) child pointer, (S) default block size, (R) replication factor, (B) block pointer, (I) block ID, (G) block generation stamp, and (L) actual block length. Each cell presents the resulting actions</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1.3">Real Software Bugs</head><p>In this section, we explore how well HARDFS handles real software bugs. We chose five bugs from Hadoop and HDFS bug repositories <ref type="bibr" target="#b4">[5,</ref><ref type="bibr" target="#b7">8]</ref>; <ref type="table" target="#tab_5">Table 4</ref> gives a summary.  The bugs have the following characteristics: they affect at least one of the subsystems we hardened, the bugs received a rank "major" or greater, and the bugs result in data loss under certain circumstances.</p><p>The bugs were discovered over a number of years, ranging from 2007 to 2012. The older bugs tend to be simple programmer oversights. For example, deletion of valid blocks can be triggered by a poorly written loop that processes block reports incorrectly <ref type="bibr" target="#b0">[1]</ref>, or because of missing safemode checks <ref type="bibr" target="#b8">[9]</ref>. The newer bugs tend to be more subtle. For example, blocks could be deleted or under replicated due to complex ordering of thread executions, messages, operator actions and failures <ref type="bibr" target="#b2">[3,</ref><ref type="bibr" target="#b3">4,</ref><ref type="bibr" target="#b9">10]</ref>.</p><p>For each bug, we made controlled modifications to our codebase to reproduce it. We limited ourselves to reintroducing the buggy code, injecting delays to reorder events, and dropping messages. As these bugs lead to behaviors that deviate from the expected model, HARDFS was able to detect the problem in each case and take appropriate action. In one case, HARDFS was able to restore proper state by restarting the namenode, and in four cases, HARDFS prevented data loss by simply thwarting the destructive directives ( §3.5.3).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2">Efficiency</head><p>We now evaluate the performance impact, space overhead and recovery time of each HARDFS system. All experiments were conducted in a cluster of 21 machines, each having 8GB of memory and a 2.66GHz CPU.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2.1">Performance Impact</head><p>We evaluate the time overhead of HARDFS-N using the namenode benchmark (NNBench) in the Hadoop distribution ( <ref type="figure" target="#fig_3">Figure 4a</ref>). This benchmark stresses many metadata requests by creating, renaming, and deleting files. HARDFS-N imposes acceptable overhead: 4% or 8%, with concrete state or Bloom filters, respectively.</p><p>In an experiment designed to stress HARDFS-R containing heavy client write activity and significant background processing of block reports, we found that the performance overhead of HARDFS-R is negligible.</p><p>Finally, to evaluate the performance of HARDFS-D, we run the DFSIO benchmark with 3-way replication on a cluster containing one dedicated namenode and 20 datanodes and measure the average throughput of read and write operations. The results in <ref type="figure" target="#fig_3">Figure 4b</ref> show that the overhead of HARDFS-D is negligible for both workloads.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2.2">Memory Overhead</head><p>We measure the memory allocated for the namenode in both HDFS and HARDFS-N as the number of managed files is varied. <ref type="figure" target="#fig_3">Figure 4c</ref> shows that concrete states in HARDFS-N lead to memory overheads near 100%; this accentuates the need for lightweight data structures such as Bloom filters. As desired, the memory overhead of HARDFS with Bloom filters is negligible (2.6%).</p><p>We measure the memory allocated for both HDFS and HARDFS-D by varying the number of replicas a datanode manages <ref type="figure" target="#fig_3">(Figure 4d</ref>). The space efficiency of Bloom filters makes the memory overhead of HARDFS-D less than 1%. Finally, HARDFS-R with Bloom filters incurs less than 2% memory overhead (not shown).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2.3">Recovery Time</head><p>We measure the time for HARDFS-N to recover corrupt states using three approaches: simple reboot, microrecovery, and optimized micro-recovery. Normal microrecovery creates a new checkpoint based on the last checkpoint and the operation log; optimized microrecovery computes only the needed state by efficiently scanning the log and last checkpoint ( §4.1.2). <ref type="figure" target="#fig_3">Fig- ure 4e</ref> summarizes the results. Although crash-andreboot works correctly, it is prohibitively expensive: more than an hour is required to reboot a namenode managing 1 million files; most of this time is spent processing block reports from datanodes <ref type="bibr" target="#b21">[22]</ref>. Fortunately, microrecovery is highly efficient and more than two orders of magnitude faster. Our optimized version can recover corrupted state in less than 10 seconds, even when the namenode is managing 1 million files. <ref type="figure" target="#fig_3">Figure 4f</ref> shows similar benefits of using micro-recovery for HARDFS-R.</p><p>HARDFS-D does not utilize micro-recovery, as a datanode reboot is relatively quick. A datanode reboot involves reading a block list from local disks and sending the list to the namenode. In our experiments, it takes about 2 seconds to reboot a datanode storing 40,000 blocks (around 2.5TB) of data (not shown).   <ref type="table" target="#tab_8">Table 5</ref> compares the effort of implementing HDFS to the effort of hardening HDFS. By selecting three key modules where correctness is most important, we were able to focus our efforts on 57% of the codebase. Our lightweight second versions are much smaller than the original versions (17% to 40% of the main-version sizes); overall, our changes only increase the codebase by 12%. Although implemented in Java, HARDFS could be implemented in declarative languages <ref type="bibr" target="#b12">[13,</ref><ref type="bibr" target="#b45">46]</ref> in order to further reduce the engineering effort. We leave that for future work.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Subsystem</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.3">Engineering Effort</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Related Work</head><p>In this section we discuss related work on which HARDFS is based and other approaches to addressing memory corruption and software bugs. HARDFS is primarily based on two related works: Nversion programming (NVP) <ref type="bibr" target="#b13">[14]</ref> and Micro-reboot <ref type="bibr" target="#b22">[23]</ref>. Traditional NVP systems require high engineering effort to develop multiple versions of a software system. In addition, coordinating different implementations often requires complex machinery and incurs significant overhead <ref type="bibr" target="#b15">[16]</ref>. HARDFS reduces engineering costs by only protecting select subsystems with redundant implementations. HARDFS minimizes overhead by making data structures lightweight via lossy compression.</p><p>Lossy compression occasionally causes unnecessary recovery due to error-detection false positives; we make this acceptable by making recovery inexpensive with Micro-reboot, which advocates that systems should be designed with the ability to reboot partial components <ref type="bibr" target="#b22">[23]</ref>. Micro-reboot has been useful in other systems, allowing OS drivers and file systems to be restarted without a full OS reboot <ref type="bibr" target="#b53">[54,</ref><ref type="bibr" target="#b54">55,</ref><ref type="bibr" target="#b55">56]</ref>.</p><p>A common way to address memory corruption is to add detection machinery at the hardware and software layer (e.g., using ECC memory and page checksums). These approaches do not protect the system from bugs introduced by complex software in many layers. An endto-end approach to handling corruption is provided by PASC <ref type="bibr" target="#b28">[29]</ref>, a library that makes it easy for developers to maintain two replicas of the main state and execute the program logic twice on both replicas. PASC involves minimal engineering effort since developers do not need to implement the same functionality twice; however, simply executing the same code twice makes the system vulnerable to bugs in that code. Furthermore, keeping two complete state replicas is costly.</p><p>One way to address bugs (but not memory corruption) is to perform offline testing driven by sophisticated model checkers <ref type="bibr" target="#b36">[37,</ref><ref type="bibr" target="#b57">58,</ref><ref type="bibr" target="#b58">59]</ref>. Model checking is complementary to SLEEVE. It is more desirable to find and fix a bug during testing than to tolerate the bug during deployment; however, offline testing can only address bugs that arise in the situations selected by the model checker's execution-exploration and state-exploration algorithms. By contrast, SLEEVE performs checking in every situation that arises in deployment.</p><p>Some systems, like HARDFS, attempt to address both bugs and memory corruption. Recon <ref type="bibr" target="#b31">[32]</ref> interposes on all disk writes by the file system, and prevents any writes that would break fsck's consistency rules. Although relatively lightweight, Recon only checks for consistency, not correctness in general. Byzantine Fault Tolerance (BFT) <ref type="bibr" target="#b23">[24,</ref><ref type="bibr" target="#b42">43,</ref><ref type="bibr" target="#b46">47]</ref> is a heavyweight solution which protects software systems from malicious behaviors like corruption, bad inputs, and wrong computation. Unfortunately, BFT requires a high degree of replication (3f + 1 replicas to tolerate f failures), does not handle cases where the logic of the software is buggy, and may be difficult to deploy (e.g., requires significant changes to the HDFS replication policies <ref type="bibr" target="#b27">[28]</ref>).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Conclusion</head><p>Distributed systems fail, and worse, sometimes they fail silently. We propose SLEEVE, a new approach that encourages developers to harden their systems against failsilent behaviors with minimal engineering effort. Central to our approach is the idea of building a lightweight version that protects important components of the system. Applying the SLEEVE approach, we harden HDFS and show that it can detect and recover from a wide range of fail-silent behaviors caused by memory corruptions and software bugs. We hope that the SLEEVE approach can be applied to distributed systems beyond HDFS.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: HDFS, corrupted HDFS, and HARDFS.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: Sleeved systems architecture.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: Types of incorrect actions.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: Performance: time, space, and recovery.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="false"><head></head><label></label><figDesc>. For example, in the first row of the ta- ble, at the entry path of the request create(F), HARDFS- N records this fact by calling insert(F) to the Bloom filter. Table 1 can be seen as a concrete example of how a developer programs a sleeved service. HARDFS-N uses Bloom filters as a space-efficient data structure for encoding the file namespace. Only three</figDesc><table>Message 
+Logic of the secondary version 
+
+create(F) 
+client requests 
+NN to create 
+file F 
+
+Entry: 
+If exists(F) Then reject; 
+Else 
+insert(F); 
+generateAction(txCreate[F]); 
+Return: check response; 
+addBlk(F) 
+client requests 
+NN to allocate a 
+block to file F 
+
+Entry: F:X = ask-then-check(F); 
+Return: 
+B = addBlk(F); 
+If exists(F) &amp; !exists(B) Then 
+X ′ = X ∪ {B}; 
+update(F:X, F:X ′ ); 
+insert(B@0); 
+Else declare error; 
+blkRcvd(B,100) 
+DN informs NN 
+of received 
+100-byte block B 
+
+Entry: 
+B@L = ask-then-check(B); 
+update(B@L, B@100); 
+Return: check response; 
+complete(F) 
+client informs 
+NN of write 
+completion on 
+file F 
+
+Entry: 
+If exists(F) Then 
+SIZES = empty-list 
+F:X = ask-then-check(F); 
+for B in X: 
+B@L = ask-then-check(B); 
+SIZES.append(B@L); 
+generateAction(txClose[F,SIZES]); 
+Return: check response; 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_1" validated="false"><head>Table 1 :update(x1, x2) represents a delete(x1) followed by an insert(x2); "Check response" means that the secondary version compares returned results and handles dis- agreement if any; F:B represents a mapping from file F to block B; B@x indicates that block B is x bytes long. Multiple Bloom filters (not shown) are used to encode different facts.</head><label>1</label><figDesc>SLEEVE for namespace management. The table shows how the secondary version derives the semantics of input messages from a client or datanode (DN) to the namenode (NN), manages its state using Bloom filter APIs, and generates expected actions.</figDesc><table></table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_3" validated="false"><head>Table 2 :</head><label>2</label><figDesc></figDesc><table>Outcomes of random memory corruption. 
+
+ically replicated across multiple datanodes, rebooting a 
+datanode does not affect data availability. In addition, as 
+we will show in our evaluation, rebooting a datanode is 
+fast, taking only a few seconds ( §5.2.3). Therefore, we 
+do not investigate micro-recovery for HARDFS-D. 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_4" validated="false"><head>: a the namenode fails to reboot and crashes permanently; b data loss; c inconsistency.</head><label></label><figDesc></figDesc><table>from the combination of input message (e.g., mkdir) and cor-
+rupted internal state. Possible outcomes are: (×) faulty trans-
+action, (�) incorrect response, ( 
+
+√ 
+
+) correct transaction and re-
+sponse, (.) inapplicable. FootnotesBug 
+Year Priority Description 
+
+HADOOP-1135 2007 Major 
+Blocks in block report wrongly 
+marked for deletion 
+HADOOP-3002 2008 Blocker Blocks removed during safemode 
+HDFS-900 
+2010 Blocker Valid replica deleted rather than 
+corrupt replica 
+HDFS-1250 
+2010 Major 
+Namenode processes block report 
+from dead datanode 
+HDFS-3087 
+2012 Critical Decommission before replication 
+during namenode restart 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_5" validated="false"><head>Table 4 :</head><label>4</label><figDesc></figDesc><table>Software bugs. 
+
+instance of the Bloom filter is negligible: it takes only 2 
+seconds for a namespace of 200K files. 
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_8" validated="false"><head>Table 5 : Engineering effort in lines of code.</head><label>5</label><figDesc></figDesc><table></table></figure>
+
+			<note place="foot" n="108"> 11th USENIX Conference on File and Storage Technologies (FAST &apos;13) USENIX Association</note>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="8">Acknowledgments</head><p>We thank the anonymous reviewers and our shepherd Ashvin Goel for their feedback, which helped improve the quality of the paper. This material was supported by funding from NSF grants CNS-1218405, CCF-0937959, CSR-1017518, CCF-1016924, CCF-1017073, as well as generous support from NetApp and Google. Tyler Harter is supported by the Facebook Fellowship and NSF Fellowship. Any opinions, findings, and conclusions or recommendations expressed in this material are those of the authors and do not necessarily reflect the views of the NSF or other institutions.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title level="m" type="main">A block report processing may incorrectly cause the namenode to delete blocks</title>
+		<ptr target="https://issues.apache.org/jira/browse/HADOOP-1135" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Aspectj</surname></persName>
+		</author>
+		<ptr target="www.eclipse.org/aspectj" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+				<ptr target="https://issues.apache.org/jira/browse/HDFS-900" />
+		<title level="m">Corrupt replicas are not tracked correctly through block report from DataNode</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+		<title level="m" type="main">Decommissioning on NN restart can complete without blocks being replicated</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hadoop</forename><surname>Jira</surname></persName>
+		</author>
+		<ptr target="http://issues.apache.org/jira/browse/HADOOP" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hadoop</forename><surname>Mapreduce</surname></persName>
+		</author>
+		<ptr target="http://hadoop.apache.org/mapreduce" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Hbase</surname></persName>
+		</author>
+		<ptr target="http://hbase.apache.org" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hdfs</forename><surname>Jira</surname></persName>
+		</author>
+		<ptr target="http://issues.apache.org/jira/browse/HDFS" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<monogr>
+				<ptr target="https://issues.apache.org/jira/browse/HADOOP-3002" />
+		<title level="m">HDFS should not remove blocks while in safemode</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<monogr>
+				<ptr target="https://issues.apache.org/jira/browse/HDFS-1250" />
+		<title level="m">Namenode accepts block report from dead datanodes</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<monogr>
+		<title level="m" type="main">Amazon s3 availability event</title>
+		<ptr target="http://status.aws.amazon.com/s3-20080720.html" />
+		<imprint>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<monogr>
+		<title level="m" type="main">Observations on errors, corrections, and trust of dependent systems</title>
+		<ptr target="http://perspectives.mvdirona.com/" />
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<monogr>
+		<title level="m" type="main">BOOM Analytics: Exploring Data-Centric, Declarative Programming for the Cloud</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Peter</forename><surname>Alvaro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tyson</forename><surname>Condie</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Neil</forename><surname>Conway</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Khaled</forename><surname>Elmeleegy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joseph</forename><forename type="middle">M</forename><surname>Hellerstein</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Russell C</forename><surname>Sears</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+	<note>In EuroSys &apos;10</note>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">The Methodology of NVersion Programming</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Algirdas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Avižienis</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Software Fault Tolerance</title>
+		<editor>Michael R. Lyu</editor>
+		<imprint>
+			<publisher>John Wiley &amp; Sons Ltd</publisher>
+			<date type="published" when="1995" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">An Analysis of Data Corruption in the Storage Stack</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Bairavasundaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Garth</forename><forename type="middle">R</forename><surname>Goodson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bianca</forename><surname>Schroeder</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Arpacidusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FAST &apos;08</title>
+		<imprint>
+			<biblScope unit="page" from="223" to="238" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Tolerating File-System Mistakes with EnvyFS</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Bairavasundaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Swaminathan Sundararaman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX &apos;09</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">Commercial Fault Tolerance: A Tale of Two Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wendy</forename><surname>Bartlett</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lisa</forename><surname>Spainhower</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Transactions on Dependable and Secure Computing</title>
+		<imprint>
+			<biblScope unit="volume">1</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="87" to="96" />
+			<date type="published" when="2004-01" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Towards a Cloud Computing Research Agenda</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ken</forename><surname>Birman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gregory</forename><surname>Chockler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robbert</forename><surname>Van Renesse</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM SIGACT News</title>
+		<imprint>
+			<biblScope unit="volume">40</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="68" to="80" />
+			<date type="published" when="2009-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Disk shadowing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dina</forename><surname>Bitton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jim</forename><surname>Gray</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">VLDB 14</title>
+		<meeting><address><addrLine>Los Angeles, CA, Au</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="1988" />
+			<biblScope unit="page" from="331" to="338" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Space/time trade-offs in hash coding with allowable errors</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Burton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Bloom</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Communications of the ACM</title>
+		<imprint>
+			<biblScope unit="volume">13</biblScope>
+			<biblScope unit="page" from="422" to="426" />
+			<date type="published" when="1970" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">An improved construction for counting bloom filters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Flavio</forename><surname>Bonomi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Mitzenmacher</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rina</forename><surname>Panigrahy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sushil</forename><surname>Singh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">George</forename><surname>Varghese</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 14th conference on Annual European Symposium</title>
+		<meeting>the 14th conference on Annual European Symposium<address><addrLine>London, UK, UK</addrLine></address></meeting>
+		<imprint>
+			<publisher>Springer-Verlag</publisher>
+			<date type="published" when="2006" />
+			<biblScope unit="volume">14</biblScope>
+			<biblScope unit="page" from="684" to="695" />
+		</imprint>
+	</monogr>
+	<note>ESA&apos;06</note>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dhruba</forename><surname>Borthakur</surname></persName>
+		</author>
+		<ptr target="http://hadoopblog.blogspot.com/2010/02/hadoop-namenode-high-availability.html" />
+		<title level="m">Hadoop avatarnode high availability</title>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Microreboot -A Technique for Cheap Recovery</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">George</forename><surname>Candea</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shinichi</forename><surname>Kawamoto</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yuichi</forename><surname>Fujiki</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Greg</forename><surname>Friedman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Armando</forename><surname>Fox</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI &apos;04</title>
+		<imprint>
+			<biblScope unit="page" from="31" to="44" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Practical Byzantine Fault Tolerance</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Miguel</forename><surname>Castro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Barbara</forename><surname>Liskov</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI &apos;99</title>
+		<meeting><address><addrLine>LA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="1999-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">Paxos Made Live -An Engineering Perspective</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tushar</forename><surname>Chandra</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><surname>Griesemer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joshua</forename><surname>Redstone</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">PODC &apos;07</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">Bigtable: A Distributed Storage System for Structured Data</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fay</forename><surname>Chang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeffrey</forename><surname>Dean</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanjay</forename><surname>Ghemawat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wilson</forename><forename type="middle">C</forename><surname>Hsieh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Deborah</forename><forename type="middle">A</forename><surname>Wallach</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Burrows</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tushar</forename><surname>Chandra</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrew</forename><surname>Fikes</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><surname>Gruber</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI &apos;06</title>
+		<imprint>
+			<biblScope unit="page" from="205" to="218" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">RAID: High-performance, Reliable Secondary Storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Peter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Edward</forename><forename type="middle">K</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Garth</forename><forename type="middle">A</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Randy</forename><forename type="middle">H</forename><surname>Gibson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><forename type="middle">A</forename><surname>Katz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Patterson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Computing Surveys</title>
+		<imprint>
+			<biblScope unit="volume">26</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="145" to="185" />
+			<date type="published" when="1994-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<analytic>
+		<title level="a" type="main">Upright cluster services</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Clement</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Kapritsos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Alvisi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Dahlin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Riche</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP &apos;09</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Practical hardening of crash-tolerant systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Miguel</forename><surname>Correia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Daniel</forename><forename type="middle">Gomez</forename><surname>Ferro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Flavio</forename><forename type="middle">P</forename><surname>Junqueira</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Marco</forename><surname>Serafini</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX &apos;12</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<analytic>
+		<title level="a" type="main">Underneath the Covers at Google: Current Systems and Future Directions</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeffrey</forename><surname>Dean</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Google I/O &apos;08</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">Summary cache: a scalable wide-area web cache sharing protocol</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Li</forename><surname>Fan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pei</forename><surname>Cao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Almeida</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">Z</forename><surname>Broder</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE/ACM Transactions on Networking</title>
+		<imprint>
+			<biblScope unit="volume">8</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<biblScope unit="page" from="281" to="293" />
+			<date type="published" when="2000-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<analytic>
+		<title level="a" type="main">Ashvin Goel, and Angela Demke Brown. Recon: Verifying file system consistency at runtime</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Daniel</forename><surname>Fryer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kuei</forename><surname>Sun</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rahat</forename><surname>Mahmood</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tinghao</forename><surname>Cheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shaun</forename><surname>Benjamin</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FAST &apos;12</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">The Google File System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanjay</forename><surname>Ghemawat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Howard</forename><surname>Gobioff</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shun-Tak</forename><surname>Leung</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP &apos;03</title>
+		<imprint>
+			<biblScope unit="page" from="29" to="43" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<monogr>
+		<title level="m" type="main">Transaction Processing: Concepts and Techniques</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jim</forename><surname>Gray</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andreas</forename><surname>Reuter</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1993" />
+			<publisher>Morgan Kaufmann</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhongxian</forename><surname>Gu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Earl</forename><forename type="middle">T</forename><surname>Barr</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><forename type="middle">J</forename><surname>Hamilton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhendong</forename><surname>Su</surname></persName>
+		</author>
+		<title level="m">Has the bug really been fixed? In ICSE (1)</title>
+		<imprint>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="55" to="64" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<analytic>
+		<title level="a" type="main">Improving File System Reliability with I/O Shepherding</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Gunawi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Prabhakaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Krishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP &apos;07</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b36">
+	<analytic>
+		<title level="a" type="main">Arpaci-Dusseau, Koushik Sen, and Dhruba Borthakur. FATE and DESTINI: A Framework for Cloud Recovery Testing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Haryadi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thanh</forename><surname>Gunawi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pallavi</forename><surname>Do</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Peter</forename><surname>Joshi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joseph</forename><forename type="middle">M</forename><surname>Alvaro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Hellerstein</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arpacidusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Remzi</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">NSDI &apos;11</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b37">
+	<analytic>
+		<title level="a" type="main">On Designing and Deploying Internet-Scale Services</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">James</forename><surname>Hamilton</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">LISA &apos;07</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b38">
+	<analytic>
+		<title level="a" type="main">A file is not a file: understanding the i/o behavior of apple desktop applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tyler</forename><surname>Harter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chris</forename><surname>Dragga</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Vaughn</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi</forename><forename type="middle">H</forename><surname>Arpacidusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP &apos;11</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b39">
+	<analytic>
+		<title level="a" type="main">Cloud Storage FUD: Failure and Uncertainty and Durability</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alyssa</forename><surname>Henry</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FAST &apos;09</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b40">
+	<analytic>
+		<title level="a" type="main">Reliability and Security of RAID Storage Systems and D2D Archives Using SATA Disk Drives</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Gordon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joseph</forename><forename type="middle">F</forename><surname>Hughes</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Murray</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Storage</title>
+		<imprint>
+			<biblScope unit="volume">1</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="95" to="107" />
+			<date type="published" when="2005-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b41">
+	<analytic>
+		<title level="a" type="main">Cassandra -a decentralized structured storage system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Avinash</forename><surname>Lakshman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Prashant</forename><surname>Malik</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">LADIS &apos;09</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b42">
+	<analytic>
+		<title level="a" type="main">The Byzantine Generals Problem</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Leslie</forename><surname>Lamport</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><surname>Shostak</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Marshall</forename><surname>Pease</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Programming Languages and Systems</title>
+		<imprint>
+			<biblScope unit="volume">4</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<biblScope unit="page" from="382" to="401" />
+			<date type="published" when="1982-07" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b43">
+	<analytic>
+		<title level="a" type="main">Fast crash recovery in ramcloud</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Diego</forename><surname>Ongaro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stephen</forename><forename type="middle">M</forename><surname>Rumble</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ryan</forename><surname>Stutsman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><forename type="middle">K</forename><surname>Ousterhout</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mendel</forename><surname>Rosenblum</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mendel</forename><surname>Rosenblum</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP &apos;11</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b44">
+	<analytic>
+		<title level="a" type="main">A Case for Redundant Arrays of Inexpensive Disks (RAID)</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Patterson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Garth</forename><surname>Gibson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Randy</forename><surname>Katz</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGMOD &apos;88</title>
+		<meeting><address><addrLine>Chicago, IL</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="1988-06" />
+			<biblScope unit="page" from="109" to="116" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b45">
+	<analytic>
+		<title level="a" type="main">Pip: Detecting the unexpected in distributed systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Patrick</forename><surname>Reynolds</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Janet</forename><forename type="middle">L</forename><surname>Wiener</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeffrey</forename><forename type="middle">C</forename><surname>Mogul</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mehul</forename><forename type="middle">A</forename><surname>Shah</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Charles</forename><surname>Killian</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amin</forename><surname>Vahdat</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">NSDI &apos;06</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b46">
+	<analytic>
+		<title level="a" type="main">Base: using abstraction to improve fault tolerance</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rodrigo</forename><surname>Rodrigues</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Miguel</forename><surname>Castro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Barbara</forename><surname>Liskov</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP &apos;01</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b47">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bianca</forename><surname>Schroeder</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eduardo</forename><surname>Pinheiro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wolfdietrich</forename><surname>Weber</surname></persName>
+		</author>
+		<title level="m">DRAM errors in the wild: A Large-Scale Field Study</title>
+		<meeting><address><addrLine>Seattle, Washington</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2007-06" />
+		</imprint>
+	</monogr>
+	<note>SIGMETRICS &apos;09</note>
+</biblStruct>
+
+<biblStruct xml:id="b48">
+	<analytic>
+		<title level="a" type="main">The Hadoop Distributed File System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Konstantin</forename><surname>Shvachko</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hairong</forename><surname>Kuang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanjay</forename><surname>Radia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><surname>Chansler</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">MSST &apos;10</title>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b49">
+	<monogr>
+		<title level="m" type="main">Hdfs scalability: The limits to growth</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Konstantin</forename><forename type="middle">V</forename><surname>Shvachko</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2010" />
+			<biblScope unit="page">35</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b50">
+	<analytic>
+		<title level="a" type="main">Improving Storage System Availability with D-GRAID</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Muthian</forename><surname>Sivathanu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Prabhakaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Arpacidusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FAST &apos;04</title>
+		<meeting><address><addrLine>San Francisco, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2004-04" />
+			<biblScope unit="page" from="15" to="30" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b51">
+	<analytic>
+		<title level="a" type="main">Semantically-Smart Disk Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Muthian</forename><surname>Sivathanu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Prabhakaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Florentina</forename><forename type="middle">I</forename><surname>Popovici</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Timothy</forename><forename type="middle">E</forename><surname>Denehy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FAST &apos;03</title>
+		<meeting><address><addrLine>San Francisco, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2003-04" />
+			<biblScope unit="page" from="73" to="88" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b52">
+	<analytic>
+		<title level="a" type="main">When do changes induce fixes?</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jacek</forename><surname>Sliwerski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thomas</forename><surname>Zimmermann</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andreas</forename><surname>Zeller</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM SIGSOFT Software Engineering Notes</title>
+		<imprint>
+			<date type="published" when="2005" />
+			<biblScope unit="page" from="1" to="5" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b53">
+	<analytic>
+		<title level="a" type="main">Membrane: Operating System Support for Restartable File Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Swaminathan</forename><surname>Sundararaman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sriram</forename><surname>Subramanian</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Abhishek</forename><surname>Rajimwale</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpacidusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Remzi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><forename type="middle">M</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Swift</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FAST &apos;10</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b54">
+	<analytic>
+		<title level="a" type="main">Improving the Reliability of Commodity Operating Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><forename type="middle">M</forename><surname>Swift</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Brian</forename><forename type="middle">N</forename><surname>Bershad</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Henry</forename><forename type="middle">M</forename><surname>Levy</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP &apos;03</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b55">
+	<analytic>
+		<title level="a" type="main">Recovering device drivers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><forename type="middle">M</forename><surname>Swift</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Brian</forename><forename type="middle">N</forename><surname>Bershad</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Henry</forename><forename type="middle">M</forename><surname>Levy</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI &apos;04</title>
+		<imprint>
+			<biblScope unit="page" from="1" to="16" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b56">
+	<analytic>
+		<title level="a" type="main">The HP AutoRAID Hierarchical Storage System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><surname>Wilkes</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Richard</forename><surname>Golding</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Carl</forename><surname>Staelin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tim</forename><surname>Sullivan</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Computer Systems</title>
+		<imprint>
+			<biblScope unit="volume">14</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="108" to="136" />
+			<date type="published" when="1996-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b57">
+	<analytic>
+		<title level="a" type="main">MODIST: Transparent Model Checking of Unmodified Distributed Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Junfeng</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tisheng</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ming</forename><surname>Wu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhilei</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xuezheng</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Haoxiang</forename><surname>Lin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mao</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fan</forename><surname>Long</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lintao</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lidong</forename><surname>Zhou</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">NSDI &apos;09</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b58">
+	<analytic>
+		<title level="a" type="main">EX-PLODE: A Lightweight, General System for Finding Serious Storage System Errors</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Junfeng</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Can</forename><surname>Sar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dawson</forename><surname>Engler</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI &apos;06</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b59">
+	<monogr>
+		<title level="m" type="main">How do fixes become bugs? -a comprehensive characteristic study on incorrect fixes in commercial and open source operating systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ding</forename><surname>Zuoning Yin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yuanyuan</forename><surname>Yuan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shankar</forename><surname>Zhou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lakshmi</forename><surname>Pasupathy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Bairavasundaram</surname></persName>
+		</author>
+		<imprint>
+			<biblScope unit="page">11</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

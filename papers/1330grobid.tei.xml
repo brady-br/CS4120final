@@ -1,0 +1,996 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T01:54+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Correctness Proofs for Device Drivers in Embedded Systems</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jianjun</forename><surname>Duan</surname></persName>
+							<email>jjduan@cs.utah.edu</email>
+							<affiliation key="aff0">
+								<orgName type="department" key="dep1">School of Computing</orgName>
+								<orgName type="department" key="dep2">School of Computing</orgName>
+								<orgName type="institution" key="instit1">University of Utah</orgName>
+								<orgName type="institution" key="instit2">University of Utah</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><surname>Regehr</surname></persName>
+							<email>regehr@cs.utah.edu</email>
+							<affiliation key="aff0">
+								<orgName type="department" key="dep1">School of Computing</orgName>
+								<orgName type="department" key="dep2">School of Computing</orgName>
+								<orgName type="institution" key="instit1">University of Utah</orgName>
+								<orgName type="institution" key="instit2">University of Utah</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Correctness Proofs for Device Drivers in Embedded Systems</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Computer systems do not exist in isolation: they must interact with the world through I/O devices. Our work, which focuses on constrained embedded systems, provides a framework for verifying device driver software at the machine code level. We created an abstract device model that can be plugged into an existing formal semantics for an instruction set architecture. We have instantiated the abstract model with a model for the serial port for a real embedded processor, and we have verified the full functional correctness of the transmit and receive functions from an open-source driver for this device.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Formal verification of high-level software is relatively well understood. Interesting recent examples include correctness proofs for a realistic compiler <ref type="bibr" target="#b19">[20]</ref>, a LISP interpreter <ref type="bibr" target="#b25">[25]</ref>, and an operating system kernel <ref type="bibr" target="#b17">[18]</ref>. Device drivers-routines that directly interact with peripherals-are less well understood, but they are worth verifying since they are part of the trusted computing base for essentially all safety-critical computer systems.</p><p>Our goal is to prove full functional correctness of bottom-level device code that directly interacts with hardware devices through I/O registers. Our approach requires substantial manual effort, but the resulting proofs are stronger than those produced in previous work: we guarantee not only that the hardware device is driven in a functionally correct fashion, but also that its timing requirements are met. This approach is too detail-oriented to scale up to large driver stacks that may be thousands of lines; we intend to integrate our manual proofs about bottom-level routines with more automated methods for reasoning about the rest of the driver stack.</p><p>Starting with <ref type="bibr">Fox et al.'</ref>s semantics for the ARM instruction set architecture <ref type="bibr" target="#b13">[14,</ref><ref type="bibr" target="#b22">23]</ref>, which models only the ARM core and memory, we created a framework for plugging in models of hardware peripherals typically found on an ARM-based systems-on-chip (SoC), such as communication ports, timers, and analog-to-digital converters. As a proof-of-concept, we instantiated our abstract device model with a UART (serial port) found on a real ARM processor. We then took a simple opensource driver for this UART, compiled it to ARM object code, and verified the functional correctness of its transmit and receive functions. Our results are all proved in HOL4 <ref type="bibr" target="#b14">[15]</ref>. So far, our work is limited to devices and drivers that do not use interrupts or direct memory access (DMA).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Timing Requirements</head><p>Peripherals are clocked independently of the processor core. Therefore, even on a uniprocessor, device drivers execute in parallel with the devices they manage. One approach to verifying device drivers is to model the hardware as an independent thread, permitting thread verification techniques to be leveraged. However, this approach abstracts away timing information, preventing timing requirements from being verified. Timing constraints are not only important in device drivers, but also embedded systems often have timing constraints as part of their top-level specifications. For example, an automotive brake-by-wire system might be required to begin brake drum actuation within 50 ms of receiving a brake pedal input.</p><p>Let's look at a more detailed example: a hypothetical embedded system with two peripherals. One is a device that collects data from the environment at a fixed rate and stores a sample into a hardware FIFO every s cycles. The driver for this sensor copies a sample from the FIFO to a buffer in memory, which costs sd cycles. The other device is a transmitter that sends out of its own hardware FIFO, one sample every t cycles. Its driver copies a sample from the memory buffer into the transmit FIFO, which costs td cycles.</p><p>Assume that the drivers are called in a synchronous fashion from a tight loop that repeatedly reads a sample and then transmits a sample. The loop body executes in sd + td + c cycles, where c is the loop overhead. For a simple system without added synchronization, t ≤ sd + td + c ≤ s must hold or else samples will be dropped. If t &gt; sd + td + c, either the buffer in the transmitter will be overrun or the buffer in memory will be overrun. If sd + td + c &gt; s, either the buffer in the sensor will be overrun or the buffer in the memory will be overrun.</p><p>To specify and verify properties like this, a rather lowlevel model of the interaction between devices and their drivers are needed. The rest of this paper describes such a model.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Modeling a Processor with Devices</head><p>This section describes our system model, which makes it possible to plug devices into an existing model of an ARM processor core. Our device model, like the ARM model, is formalized in HOL4. All theorems listed in this paper have been proved in HOL4.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Background: Cambridge ARM semantics</head><p>Our work is based on <ref type="bibr">Fox et al.'</ref>s formal model of the ARMv4 instruction set architecture <ref type="bibr" target="#b13">[14,</ref><ref type="bibr" target="#b22">23]</ref>. It includes banked registers including special purpose registers, exceptions, status flags, co-processors and a data bus. A system model with no co-processors and no interrupt handling is built by extending the core model with memory through the data bus. Its next-state operation is at the instruction level; it takes the system state as the input and returns the next state. There are tools to automatically prove theorems about the semantics of individual concrete ARMv4 instructions.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">System model</head><p>We model an embedded system using this record:</p><formula xml:id="formula_0">{next : state → state, undefed : state → bool } (1)</formula><p>→ is used to represent function types. state is the type of the state of the system. next is used to encode the transition of the system, which includes fetching and parsing the instruction, fetching data, computing, updating registers, memory and the state of devices. The undefed predicate tests if the state is erroneous. The system enters an erroneous state when the processor core encounters an exceptional condition (our work does not consider the handling of interrupts or processor exceptions), when the processor accesses the memory addresses which are mapped to some device which is not present in the system, or when a device-specific error is encountered (for example, reading a device register that is in an indeterminate state or writing to a read-only device register). We require that:</p><formula xml:id="formula_1">∀ s. undefed s =⇒ undefed (next s)<label>(2)</label></formula><p>That is, the erroneous state is sticky and we are not concerned with the system's subsequent behavior. One of our goals will be to prove that device drivers cannot put the system into an erroneous state. A function step describes the effect of consecutive application of next:</p><formula xml:id="formula_2">step n s = if n = 0 then s else next (step (n − 1) s)<label>(3)</label></formula><p>For step to describe a running system, memory values including both instructions and data must be part of the system state. But that is not enough. For example, the processor can use values obtained by a sensor device from the environment to change the memory content. For cases like this, we require the state of the related device contain input streams, which need to contain the information from the future.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">Specifying properties</head><p>We use the following construct to specify the properties of a state for the system:</p><formula xml:id="formula_3">sys pred (P, I, Q) = ∀ s. P s ∧ ¬undefed s =⇒ ∃ t. Q (step t s) ∧ (∀ n. n ≤ t =⇒ I (step n s) ∧ ¬undefed (step n s))<label>(4)</label></formula><p>This is a shallow embedding of Hoare logic <ref type="bibr" target="#b12">[13,</ref><ref type="bibr" target="#b15">16]</ref> with P, I, Q as the predicates of precondition, global invariant and postcondition with type state → bool . Note that this is about complete correctness.</p><p>To use this construct to describe the properties of a program, the program must be specified in terms of the current program counter and instruction memory. The value of the program counter and the instruction memory should be specified as part of P. We represent the program as a set of pairs of an instruction and its address. We use code p s to indicate a program p is part of the memory in a system state s.</p><p>In most cases, the part of memory which holds the program should be left unchanged at every moment. That should be part of I.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.4">Abstract device model</head><p>A peripheral device runs in parallel with the processor core. Its state can change with or without interacting with the core or with the external world. The core interacts with devices using memory-mapped I/O: a collection of dedicated registers that are mapped into the processor's address space. From the perspective of the core, these registers are accessed like memory locations, though of course device registers do not in general contain the last value written to them, and both reads and writes may have side effects.</p><p>Based on this observation, we design an abstract type to represent a generic peripheral:</p><formula xml:id="formula_4">{mapped : addr → bool, mappedRead : addr → τ → (word * bool * τ ), mappedW rite : addr → word → τ → (bool * τ ), transit : τ → τ, wellf orm : τ → bool} (5)</formula><p>Here addr and word are types for memory addresses and data. τ is the type for the state of the device, which varies depending on the individual device. * is used to construct a tuple. mapped describes if an address is mapped to this device. mappedRead and mappedWrite describe the effect of read and write commands from the processor core. Possible side effect on the device states is captured by τ in input and return types. The flag with bool type indicates if an error occurs during the memory-mapped access of the device registers. transit describes the autonomous transition of the device itself without the command from the processor core. wellform tells if a state of the device is wellformed. A concrete device such as a UART is modeled as an instance of this abstract model. τ is instantiated with a concrete type, and all the members are assigned functions which model the concrete device.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.5">Extended system model</head><p>An embedded SoC is a processor core plus a collection of peripherals. We start with a processor core that is extended with a null device whose mapped function returns false for all addresses. We can then build a realistic SoC by adding more devices on top of this bare one, as shown in <ref type="figure" target="#fig_0">Figure 1</ref>. Device models can be repeatedly composed as long as they fail to share mapped registers (real devices have this property, generally).</p><p>The state of a system with devices can be modeled using this record:</p><p>{regs : regnum → word, mem : addr → word, devSt : τ, undef : bool}.  Here regnum is the type of a register, regs represents the register store, which includes the data registers and special purpose registers such the program counter. We use r0 to indicate register 0, r14 to indicate register 14, etc. pc is used to indicate the program counter. They are all of regnum type. mem represents the memory. devSt represents the state of the devices. The system is in an erroneous state when undef is set. Given a state s, undefed s = s.undef. next should implement the execution of the processor core and transit for the device in parallel. They are independent of each other except when the instruction is a command to the device. In this scenario, the processor core commands the device to run mappedRead or mappedWrite and reads data from or writes the data to the specific device register. It may set undef based on the results of these operations. At the same time, when running mappedRead or mappedWrite the device updates its state. The device finally updates its state again with transit.</p><p>This theorem establishes that adding a new device does not break a system that was previously working:</p><p>Theorem 1: If a system s does not run into an erroneous state in a n steps running a program p, it will not run into an erroneous state in n steps running p with device d plugged in.</p><p>Proof: It is obvious that p does not access the addresses mapped to d in these n steps. Otherwise it would have run into an erroneous state. So there is no chance for d to introduce errors to p in these n steps, since s and d are independent of each other in these n steps.</p><p>Also, if we can verify a property of a program in a system with only some set of peripherals, the property still holds when more devices are added:</p><p>Theorem 2: For any system s with device dev a , if sys pred (P, I, Q) holds on it, then it holds for the system with one more device dev b added, considering only the state components which resembles the state of s.</p><p>Proof: sys pred (P, I, Q) actually specifies a sequence of transitions of the system. Similar to Theorem 1, in the new system, those components resembling s and dev b are independent of each other in the sequence. So the sequence specified by sys pred (P, I, Q) is still same.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">A Realistic UART Model</head><p>We instantiate the abstract device (5) with a model of the UART0 from an NXP LPC2129 chip <ref type="bibr" target="#b16">[17]</ref>. This is a popular embedded processor based on the ARM7TDMI architecture. It targets industrial control applications.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">UART model</head><p>Our UART model is conservative: while it does not model all behaviors of the real device, it should be the case that any code that is verified against the model will also work when running on the hardware. In our model, a register access can lead the system into undefined states in the following scenarios:</p><p>1. When the register is not modeled. For example, access of the addresses reserved for the modem function is undefined.</p><p>2. When a write-only register is read, or when a readonly register is written.</p><p>3. When a reserved bit is accessed.</p><p>4. When data corruption may occur. For example the receiving buffer register is read when its value is indeterminate.</p><p>The state of such a UART model is represented with a record:</p><p>{RBR : byte, THR : byte, SCR : byte, DLL : byte, DLM : byte, dlab : bool , rdr : bool , oe : bool , thre : bool , temt : bool , clk : num, in : num → byte option, out : num → byte option};</p><p>Here byte is the type for 8-bit byte. num is the type for the natural number. Note that registers LCR and LSR are broken down into boolean flags. Access of FCR is modeled as side effect only. THR and out form the output queue, and RBR and in form the input queue.</p><p>One important feature is that its speed is parameterized relative to the core speed. We are not modeling the exact baud rate. But in a similar fashion we use the 16-bit word value from DLM and DLL as a slow-down factor b unless its value is 0, in which case we set b to be 1. For a UART state ps, slowFac ps returns b. The UART only performs meaningful state transition every b cycles. To do so, clk is incremented for each instruction cycle. But it will be reset to 0 when it reaches b. Only at that moment the device performs transmitting and receiving function, updates its registers and shifts its input and output streams. At other moments when clk &lt; b − 1 , the UART only updates clk for book-keeping purpose. However, The memory-mapped access from the processor core however can occur at any clk value.</p><p>The incoming and outing data streams are modeled as functions in and out from natural numbers to byte option. An option type has two constructors, THE and NONE. THE x wraps x into the particular option type, while NONE indicates nothing is wrapped, which is suitable to describe that at some moments the input or output stream are idle with no characters transmitted. With every b cycles of instruction execution, the two streams will shift. The new value for in is λt. in (t + 1)</p><p>the new value for out is λt. if t = 0 then d else out (t − 1)</p><p>where d is the character just sent out.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Describing the property of UART</head><p>We describe the property of the UART device in terms of strings extracted from the output queue and input queue. Only non-empty strings are considered. The predicates are defined in <ref type="figure">Figure 2</ref>. Suppose hd, tl return the first character and the tail of a string respectively, and TRUE stands for boolean value true. UART states which are not well-defined are excluded by the wellform function. An input stream can be shifted by cutStrm. For the transmit function, outStr s os describes that s is the most recent string in the output stream os. And sentStr s ps describes that s is the most recent string sent out by the processor in the UART state ps. For the receive function, inStr s is describes that s is the string in the input stream is. And inpStr s ps describes that s is the next string to be received by the processor in the UART state ps. inInp m c ps describes that a character c is at most at slot m in the input stream of ps. shifted ps2 ps1 is a weak invariant for  shifted ps2 ps1 = ∃n.(ps2 .in = cutStrm n ps1 .in) ∧ if ps2 .rdr then inInp n ps2 .RBR ps1 else TRUE (10) <ref type="figure">Figure 2</ref>: Definitions used to describe the property of the UART device the receive function. It describes that the input queue in ps2 results from the one in ps1 after some time.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Correctness of a UART Driver</head><p>We started with a freely available driver for the LPC2129's UART0 that is implemented in C, and compiled it to ARM assembly using GCC 4.1.1. We made one change to the compiler's output, which was to change the "bx" instruction that implements a returnfrom-function to a "mov" instruction. We did this because "bx" is not modeled in our current ARM tool which does not support the THUMB mode. We proved full correctness for three functions which interact with device registers: the putch function transmits a character, the getch function which attempts to read a character from RBR, and the getchW function which performs a blocking read from RBR. The code is shown in <ref type="figure" target="#fig_2">Figure 3</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1">UART model soundness</head><p>Our correctness claim is based on the correctness claims of other components. We assume that the ARM model in HOL4 is correct (this ARM model has been used in several projects, and an earlier version was verified against a specific instance of the ARM hardware). Then we depend on the fact that the abstract device model attached to the ARM model is sound as shown in Section 3.5. The soundness of the UART model is proved in the process. For example, We have proved the following properties regarding the transmitting function, among others: Theorem 3: No character will be appended to the output under any following conditions:</p><p>1. no memory-mapped read or write occurs, 2. a read occurs, 3. a write occurs but the THR register is not accessible or not written, and the FCR register is not written (to reset the transmission queue).</p><p>In fact, the only scenario in which a character is appended to the output is when the THR register is written with thre set.  </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2">Memory safety and control flow integrity</head><p>To prove the full correctness we need to prove memory safety and control flow integrity of the driver code. They are a useful part of the safety properties from the correctness specification, and also they are important for proof management. Memory safety requires that only a given range of registers in the ARM core and memory is accessed. This implies compliance to the calling convention. So it is useful when proving the callers of the driver functions. It also implies the separation of instruction memory, which is essential to prove control flow integrity.</p><p>Ideally, we could know what addresses or registers are accessed in an ARM instruction when it is decoded. Here we use a different approach by examining the change of content in the memory and registers. Since the access which could cause side effects is limited to access of memory-mapped device registers, of which we already take care, this approach serves our purpose well. Function sepMem accSet s1 s2 just does this. It checks two system states s1 and s2 to see if any address not in the set addrSet have the same content. sepReg regSet s1 s2 does the same thing for the registers across two states. These two predicates are rather naive, an embedding of separation logic here would be nice.</p><p>Control flow integrity specifies that only some certain sequences of PC values can occur in the execution. For example, when putch is busy waiting, it just strictly follows the loop. Control flow integrity is necessary to prove the loop invariant, or generally any data flow, and thus helps us to sequentially compose the theorems about segments of the execution together to prove the final theorem. In the final theorem we did not include the stepwise specification of the control flow.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.3">Correctness of the UART driver</head><p>We proved the full correctness theorems of three functions: putch, getch, and getchW. putch first waits for thre being set. It will then copy the byte from register r0 to THR. getch copies the byte from RBR to register r0 if rdr is set. Otherwise it returns 0xff. getchW first waits for rdr being set. It will then copy the byte from RBR to register r0. Note that if getchW is used to receive a string, character may be dropped if the UART is too fast.</p><p>The correctness property includes both liveness and safety properties. For all three functions, the basic liveness property states that the function will return to its caller. And the basic safety property states that memory safety is observed, the operating configuration of the UART device is not changed in terms of its speed (described by the slow-down factor) and the controlling bit dlab, and the system does not run into any erroneous state. The following three theorems states the correctness of the three functions.</p><p>Theorem 4: putch will successfully appended the character from r0 to the string already sent out in the output queue. The basic safety and liveness properties hold in the process.</p><p>Theorem 5: getch will successfully read a character from the input queue or return 0xff. The basic safety and liveness properties hold in the process.</p><p>Theorem 6: If there is a string in the input queue, and the UART is slow enough, function getchW will successfully read the next character from the input stream. In the process, no overrun error occurs to the UART, and the basic safety and liveness properties hold.</p><p>The correctness of getchW depends on the speed of the UART device relative to the ARM core, and the latency caused by the driver code. The driver code must be efficient enough and the UART must be slow enough so that no buffer overrun error can occur. Our approach allows such constraint to be expressed, while the previous work is rather awkward at this <ref type="bibr" target="#b0">[1]</ref>.</p><p>The tight timing properties in Theorem 6 will be helpful when proving the string level receiving function, which calls getchW repetitively. The string can be retrieved completely without overrun, as long as the interval between the consecutive return and entry of getchW is bounded by delay, which is bounded by the difference between the slow-down factor of the UART and the latency introduced in getchW, which is 9 instruction cycles. This guarantees that oe is not set when getchW is entered  The assumption A, precondition P, invariant I and postcondition Q for UART driver functions putch, getch and getchW. They are intended to be used in A =⇒ sys pred (P , I , Q). s0 indicates the initial state at the entry of the respective functions. p indicates the respective function body. reAddr indicates the return address.</p><p>next time, thus the precondition of getchW is met.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.4">Proof method</head><p>All the theorems about the execution we proved are in the form of sys pred (P, I, Q). The details are listed in <ref type="table" target="#tab_4">Table 2</ref>. We use LSB to extract the least significant byte from a register, which is 32 bits wide in the ARM model that we use. c::str appends a character c to the head of a string str. The modifiable register sets are defined in putchReg = getchWReg = {R0, R2, R3, pc} for putch and getchW, and getchReg = {R0, pc} for putch respectively. Set lpcMapped indicates all the memory addresses which are mapped to devices in a LPC2129 SoC. putch and getchW work in the polling mode by testing for certain conditions with a busy-waiting loop. Termination of the loop depends on the state of the device, and needs to be proved. One difficulty in proving loop termination is that the device is not synchronized with the ARM core at a known rate. In the proof, we provide the witness for the existentially qualified t, then use induction on time n as in definition (4).</p><p>Use putch as an example. We break the execution sequence into three parts. With each part we prove a correctness lemma in the form of sys pred (P, I, Q). The control flow and data flow assertions are encoded in I. The first part is the busy waiting until thre is set in the UART. The length of this waiting depends on the speed of the UART and the UART state at the point of entry of putch.</p><p>When thre is set, the program counter could be at any instruction of the loop. The second part is the break of the loop from the point where thre is set to the exit of the loop. The third part is the sequential execution to copy the character to the register THR and return. In classic cases when no devices are concerned, the first two parts are treated as one, since it is at a static instruction point that the condition triggering the break of the loop is met.</p><p>putch, getch and getchW are used to implement string level transmitting and receiving functions. Proving the correctness of these functions do not need to work at the level of device details. Sophisticated program logic <ref type="bibr" target="#b10">[11,</ref><ref type="bibr" target="#b22">23,</ref><ref type="bibr" target="#b23">24,</ref><ref type="bibr" target="#b32">32]</ref> may be needed to deal with scaling and more complicated control flow. The state of device can be trivially plugged in the proof based on Section 3.5. Our theorems already imply the calling convention. It should not be difficult to translate them into appropriate format and integrate them into high level proof.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Related Work</head><p>Device drivers are typically written in unsafe programming languages and live in the kernel's address space. Driver bugs can corrupt or drop data, cause peripherals to malfunction or become wedged, and crash the OS <ref type="bibr" target="#b5">[6]</ref>.</p><p>Device driver verification: In previous work on verifying functional correctness of device drivers <ref type="bibr" target="#b0">[1,</ref><ref type="bibr" target="#b1">2,</ref><ref type="bibr" target="#b21">22]</ref>, parallelism is modeled as concurrency between the driver code and device transitions, and the cases of interleaving were reduced by considering the net effect of the interleaving on the state of the system. This approach allows one to take advantage of methodologies used in verifying concurrent programs <ref type="bibr" target="#b4">[5,</ref><ref type="bibr" target="#b9">10,</ref><ref type="bibr" target="#b11">12,</ref><ref type="bibr" target="#b18">19,</ref><ref type="bibr" target="#b26">26]</ref>. However, it has difficulty dealing with some timing constraints on the driver code <ref type="bibr" target="#b0">[1]</ref>. In contrast, we modeled the speed of the serial device so that some timing properties can be reasoned about; the accuracy depends on the details of the instruction set architecture model that is used.</p><p>Device driver synthesis: One approach to improve the reliability of device drivers is to mechanically generate "correct by construction" drivers from a high-level formal specification of a device and its environment <ref type="bibr" target="#b6">[7,</ref><ref type="bibr" target="#b20">21,</ref><ref type="bibr" target="#b28">28,</ref><ref type="bibr" target="#b31">31,</ref><ref type="bibr" target="#b33">33]</ref>. By avoiding languages like C and by checking some properties, bugs can be avoided. This approach has advantages, such as making it easier to generate drivers for multiple platforms. However, the resulting driver is not verified (the code generator and compiler are trusted) and synthesis of high-performance drivers remains challenging.</p><p>Property checking: Using model checking to verify temporal properties of device drivers for commodity operating systems is well studied <ref type="bibr" target="#b2">[3,</ref><ref type="bibr" target="#b3">4,</ref><ref type="bibr" target="#b27">27]</ref>. Most of these works are at the source code level and focus on the interface between the drivers and the kernel, as opposed to focusing on correct interaction with the device. The main goal of most of these works are to keep drivers from crashing or hanging the OS. Source-level model checking can be difficult to use in the context of embedded systems <ref type="bibr" target="#b30">[30]</ref>. Model checking of embedded C code <ref type="bibr" target="#b8">[9]</ref> and assembly code <ref type="bibr" target="#b7">[8,</ref><ref type="bibr" target="#b29">29]</ref> has been done. In these works, specific hardware details are considered. However, the works are largely limited to bug hunting instead of providing correctness guarantees.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Conclusion and Future Work</head><p>Our goal is to prove full correctness, including timing properties, of device drivers for an embedded system in terms of a model of a CPU plus its peripheral devices. We introduced an abstract device model that can be integrated with a formal model of a processor core and we instantiated it with a realistic model of the UART from a commonly-used ARM processor. We then proved full correctness of the transmit and receive functions from an open-source driver for that device.</p><p>Our work is intended to provide a platform for verifying embedded systems in a modular way with regard to its hardware devices. It allows us to prove the correctness of the driver for one device at a time, and claim validity for a system containing multiple devices. For the existing proof about ARM code in HOL4 which does not consider devices, this allows the support for devices being added without repeating most of the proof.</p><p>We have three things planned for the future. The first is to finish the proof of the full correctness of the UART driver for the receiving and transmitting function and integrate it with an existing proof. The second one is to design a program logic on top of the existing work to support the devices in a modular way, which will make the reasoning of large programs more scalable. The logic should have separation logic support for the main memory. The third one is to design a framework to support the reasoning about drivers that handle interrupts.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: System with devices</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head></head><label></label><figDesc>wellform ps = (¬ps.temt ∨ ps.thre) ∧ (¬(ps.clk = 0 ) ∨ ps.thre) ∧ ps.clk &lt; slowFac ps cutStrm n s = λx .s (n + x ) outStr s os = ∃n.(os n = SOME (hd s)) ∧ (∀l .l &lt; n =⇒ (os l = NONE)) ∧ outStr (tl s)(cutStrm (n + 1 ) os) sentStr s ps = if ¬ps.thre then (ps.THR = h) ∧ outStr (tl s) ps.out else outStr s ps.out inStr s is = ∃n.(is n = SOME h) ∧ (∀l.l &lt; n =⇒ (is l = NONE)) ∧ inStr (tl s) (cutStrm (n + 1 ) is) inpStr s ps = if ps.rdr then (ps.RBR = h) ∧ inStr (tl s) ps.in else inStr s ps.in inInp m c ps = ps.rdr ∧ (c = ps.RBR) ∨ ∃n.n &lt; m ∧ (ps.in n = SOME c)</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: The ARM assembly code for putch, getch and getchW</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head></head><label></label><figDesc>(code p s) ∧ (s.regs pc = 0x28c) ∧ (s.regs pc = 0x314 ) ∧ (s.regs pc = 0x334 ) ∧ (s.regs r14 = reAddr ) ∧ (s.regs r14 = reAddr ) ∧ (s.regs r14 = reAddr ) ∧ (wellform s.devSt) ∧ (wellform s.devSt) ∧ (wellform s.devSt) ∧ ¬s.devSt.dlab ∧ ¬s.devSt.dlab ∧ ¬s.devSt.dlab ∧ (LSB (s.regs r0 ) = c) ∧ ¬s.devSt.rdr (inpStr str s.devSt) ∧ (sentStr str s.devSt) ¬s.devSt.oe I λs. (sepMem lpcMapped s0 s) ∧ λs. (sepMem lpcMapped s0 s) ∧ λs. (sepMem lpcMapped s0 s) ∧ (sepReg putchReg s0 s) ∧ (sepReg getchReg s0 s) ∧ (sepReg getchWReg s0 s) ∧ ¬s.devSt.dlab ∧ ¬s.devSt.dlab ∧ ¬s.devSt.dlab ∧ ¬s.devSt.oe ∧ (wellform s.devSt) ∧ (wellform s.devSt) ∧ (wellform s.devSt) ∧ (slowFac s = slowFac s0 ) (slowFac s = slowFac s0 ) (slowFac s = slowFac s0 ) Q λs. (s.regs pc = reAddr ) ∧ λs. (s.regs pc = reAddr ) ∧ λs. (s.regs pc = reAddr ) ∧ (sentStr (c :: str ) s.devSt) ((LSB (s.regs r0 ) = 0xff ) ∨ (LSB (s.regs r0 ) = el 0 str ) ∧ ∃m. inInput m (s.regs r0 ) (inpStr (tl str ) s.devSt) ∧ s.devSt) ¬s.devSt.rdr ∧ s.devSt.clk + delay + 1 &lt; (slowFac s)</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_1" validated="false"><head>Table 1 sum</head><label>1</label><figDesc></figDesc><table>-
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_4" validated="false"><head>Table 2 :</head><label>2</label><figDesc></figDesc><table></table></figure>
+		</body>
+		<back>
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">Formal device and programming model for a serial interface</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alkassar</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Hillebrand</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Knapp</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Rusev</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tverdyshev</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 4th Intl. Verification Workshop (VERIFY)</title>
+		<meeting>of the 4th Intl. Verification Workshop (VERIFY)<address><addrLine>Bremen, Germany</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2007-07" />
+			<biblScope unit="page" from="4" to="20" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Formal functional verification of device drivers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alkassar</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hillebrand</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 2nd Intl. Conf. on Verified Software: Theories, Tools, Experiments (VSTTE)</title>
+		<meeting>of the 2nd Intl. Conf. on Verified Software: Theories, Tools, Experiments (VSTTE)<address><addrLine>Toronto, Canada</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2008-10" />
+			<biblScope unit="page" from="225" to="239" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">Thorough static analysis of device drivers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Ball</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Bounimova</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Cook</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Levin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Lichten-Berg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Mcgarvey</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Ondrusek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">K</forename><surname>Rajamani</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ustuner</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 2006 EuroSys Conf</title>
+		<meeting>of the 2006 EuroSys Conf<address><addrLine>Leuven, Belgium</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2006-04" />
+			<biblScope unit="page" from="73" to="85" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Automatically validating temporal safety properties of interfaces</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Ball</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">K</forename><surname>And Rajamani</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 8th Intl. SPIN Workshop on Model Checking Software (SPIN)</title>
+		<meeting>of the 8th Intl. SPIN Workshop on Model Checking Software (SPIN)<address><addrLine>Toronto, Canada</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2001-05" />
+			<biblScope unit="page" from="103" to="122" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Modular verification of software components in C</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chaki</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Clarke</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Groce</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Jha</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Veith</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 22nd Intl. Conf. on Software Engineering (ICSE)</title>
+		<meeting>of the 22nd Intl. Conf. on Software Engineering (ICSE)<address><addrLine>Portland, OR</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2003-05" />
+			<biblScope unit="page" from="385" to="395" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">An empirical study of operating system errors</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chou</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Chelf</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Hallem</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Engler</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">R</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 18th ACM Symp. on Operating Systems Principles (SOSP)</title>
+		<meeting>of the 18th ACM Symp. on Operating Systems Principles (SOSP)<address><addrLine>Banff, Canada</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2001-10" />
+			<biblScope unit="page" from="73" to="88" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">NDL: A domainspecific language for device drivers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Conway</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">L</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Edwards</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 2004 Conf. on Languages, Compilers, and Tools for Embedded Systems (LCTES)</title>
+		<meeting>of the 2004 Conf. on Languages, Compilers, and Tools for Embedded Systems (LCTES)<address><addrLine>Washington, DC</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2004-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Some assembly required -program analysis of embedded system code</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fehnker</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Huuck</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Rauch</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Seefried</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 8th Intl. Working Conf. on Source Code Analysis and Manipulation (SCAM)</title>
+		<meeting>of the 8th Intl. Working Conf. on Source Code Analysis and Manipulation (SCAM)<address><addrLine>Beijing, China</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2008-09" />
+			<biblScope unit="page" from="15" to="24" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Automatic bug detection in microcontroller software by static program analysis</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fehnker</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Huuck</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Schlich</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tapp</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 35th Conf. on Current Trends in Theory and Practice of Computer Science (SOFSEM)</title>
+		<meeting>of the 35th Conf. on Current Trends in Theory and Practice of Computer Science (SOFSEM)<address><addrLine>Spindleruv Ml´ynMl´yn, Czech Republic</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2009-01" />
+			<biblScope unit="page" from="267" to="278" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Modular verification of concurrent assembly code with dynamic thread creation and termination</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Feng</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Shao</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 10th ACM SIGPLAN Intl. Conf. on Functional Programming (ICFP)</title>
+		<meeting>of the 10th ACM SIGPLAN Intl. Conf. on Functional Programming (ICFP)<address><addrLine>Tallinn, Estonia</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2005-09" />
+			<biblScope unit="page" from="254" to="267" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Certifying lowlevel programs with hardware interrupts and preemptive threads</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Feng</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Shao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Guo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dong</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">J. Automatic Reasoning</title>
+		<imprint>
+			<biblScope unit="volume">42</biblScope>
+			<biblScope unit="page" from="301" to="347" />
+			<date type="published" when="2009-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Thread-Modular model checking</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Flanagan</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Qadeer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 10th Intl. SPIN Workshop on Model Checking Software (SPIN)</title>
+		<meeting>of the 10th Intl. SPIN Workshop on Model Checking Software (SPIN)<address><addrLine>Portland, OR</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2003-05" />
+			<biblScope unit="page" from="213" to="224" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Assigning meanings to programs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Floyd</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">W</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of Symp. in Applied Mathematics</title>
+		<meeting>of Symp. in Applied Mathematics<address><addrLine>New York City, NY</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="1966-04" />
+			<biblScope unit="volume">19</biblScope>
+			<biblScope unit="page" from="19" to="32" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Formal specification and verification of ARM6</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fox</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 16th Intl. Conf. on Theorem Proving in Higher Order Logics (TPHOLs)</title>
+		<meeting>of the 16th Intl. Conf. on Theorem Proving in Higher Order Logics (TPHOLs)<address><addrLine>Rome, Italy</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2003-09" />
+			<biblScope unit="page" from="25" to="40" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Introduction to the HOL system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gordon</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 1991 Intl. Workshop on the HOL Theorem Proving System and its Applications (TPHOLs)</title>
+		<meeting>of the 1991 Intl. Workshop on the HOL Theorem Proving System and its Applications (TPHOLs)<address><addrLine>Davis, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="1991-08" />
+			<biblScope unit="page" from="2" to="3" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">An axiomatic basis for computer programming</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hoare</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">A R</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Communications ACM</title>
+		<imprint>
+			<biblScope unit="volume">12</biblScope>
+			<biblScope unit="page" from="576" to="583" />
+			<date type="published" when="1969-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Keil</forename><surname>Nxp Lpc2129</surname></persName>
+		</author>
+		<ptr target="http://www.keil.com/dd/chip/3648.htm" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">seL4: formal verification of an OS kernel</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Klein</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Elphinstone</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Heiser</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Andronick</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Cock</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Derrin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Elkaduwe</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Engelhardt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Kolanski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Norrish</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Sewell</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Tuch</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Winwood</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 22nd ACM Symp. on Operating Systems Principles (SOSP)</title>
+		<meeting>of the 22nd ACM Symp. on Operating Systems Principles (SOSP)<address><addrLine>Big Sky, MT</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2009-10" />
+			<biblScope unit="page" from="207" to="220" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">The temporal logic of actions</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lamport</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Programming Languages and Systems</title>
+		<imprint>
+			<biblScope unit="volume">16</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<biblScope unit="page" from="872" to="923" />
+			<date type="published" when="1994-05" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Formal certification of a compiler back-end or: programming a compiler with a proof assistant</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Leroy</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 33rd Symp. on Principles of Programming Languages (POPL</title>
+		<meeting>of the 33rd Symp. on Principles of Programming Languages (POPL<address><addrLine>Charleston, SC</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2006-01" />
+			<biblScope unit="page" from="42" to="54" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Dealing with hardware in embedded software: A general framework based on the Devil language</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M ´ Erillon</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Muller</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 2001 Workshop on Languages, Compilers, and Tools for Embedded Systems (LCTES) / The Workshop on Optimization of Middleware and Distributed Systems (LCTES/OM)</title>
+		<meeting>of the 2001 Workshop on Languages, Compilers, and Tools for Embedded Systems (LCTES) / The Workshop on Optimization of Middleware and Distributed Systems (LCTES/OM)<address><addrLine>Snowbird, UT</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2001-06" />
+			<biblScope unit="page" from="121" to="127" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">Verification of device drivers and intelligent controllers: a case study</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Monniaux</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 7th Intl. Conf. on Embedded Software (EMSOFT)</title>
+		<meeting>of the 7th Intl. Conf. on Embedded Software (EMSOFT)<address><addrLine>Salzburg, Austria</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2007-10" />
+			<biblScope unit="page" from="30" to="36" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Hoare logic for ARM machine code</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Myreen</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">O</forename><surname>Fox</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">C J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gordon</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 2007 Symp. on Fundamentals of Software Engineering (FSEN)</title>
+		<meeting>of the 2007 Symp. on Fundamentals of Software Engineering (FSEN)<address><addrLine>Tehran, Iran</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2007-04" />
+			<biblScope unit="page" from="272" to="286" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Hoare logic for realistically modelled machine code</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Myreen</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">O</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gordon</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 13th Intl</title>
+		<meeting>of the 13th Intl</meeting>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<monogr>
+				<title level="m">Conf. on Tools and Algorithms for the Construction and Analysis of Systems (TACAS)</title>
+		<meeting><address><addrLine>Braga, Portugal</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2007-04" />
+			<biblScope unit="page" from="568" to="582" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">Verified LISP implementations on ARM, x86 and PowerPC</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Myreen</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">O</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gordon</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 22nd Intl. Conf. on Theorem Proving in Higher Order Logics (TPHOLs)</title>
+		<meeting>of the 22nd Intl. Conf. on Theorem Proving in Higher Order Logics (TPHOLs)<address><addrLine>Munich, Germany</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2009-08" />
+			<biblScope unit="page" from="359" to="374" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">Resources, concurrency, and local reasoning</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O&amp;apos;hearn</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">W</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Theoretical Computer Science</title>
+		<imprint>
+			<biblScope unit="volume">375</biblScope>
+			<biblScope unit="page" from="271" to="307" />
+			<date type="published" when="2007-05" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<analytic>
+		<title level="a" type="main">Integrated static analysis for Linux device driver verification</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Post</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>And K ¨ Uchlin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 6th Intl. Conf. on Integrated Formal Methods (IFM)</title>
+		<meeting>of the 6th Intl. Conf. on Integrated Formal Methods (IFM)<address><addrLine>Oxford, UK</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2007-07" />
+			<biblScope unit="page" from="518" to="537" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Automatic device driver synthesis with Termite</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ryzhyk</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Chubb</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Kuz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Sueur</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">L</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Heiser</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 22nd ACM Symp. on Operating Systems Principles (SOSP)</title>
+		<meeting>of the 22nd ACM Symp. on Operating Systems Principles (SOSP)<address><addrLine>Big Sky, MT</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2009-10" />
+			<biblScope unit="page" from="73" to="86" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<analytic>
+		<title level="a" type="main">Model checking of software for microcontrollers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Schlich</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Embedded Computing Systems (TECS)</title>
+		<imprint>
+			<biblScope unit="volume">9</biblScope>
+			<date type="published" when="2010-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">Model checking C source code for embedded systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Schlich</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kowalewski</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Intl. J. Software Tools for Technology Transfer</title>
+		<imprint>
+			<biblScope unit="volume">11</biblScope>
+			<biblScope unit="page" from="187" to="202" />
+			<date type="published" when="2009-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<analytic>
+		<title level="a" type="main">HAIL: a language for easy and correct device access</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sun</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Yuan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Kallahalla</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And Islam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 2005 Intl. Conf. on Embedded Software (EMSOFT)</title>
+		<meeting>of the 2005 Intl. Conf. on Embedded Software (EMSOFT)<address><addrLine>Jersey City, NJ</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2005-09" />
+			<biblScope unit="page" from="1" to="9" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">A compositional logic for control flow</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tan</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Appel</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">W</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 7th Intl. Conf. on Verification, Model Checking, and Abstract Interpretation (VMCAI)</title>
+		<meeting>of the 7th Intl. Conf. on Verification, Model Checking, and Abstract Interpretation (VMCAI)<address><addrLine>Charleston, SC</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2006-01" />
+			<biblScope unit="page" from="80" to="94" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<analytic>
+		<title level="a" type="main">Synthesizing operating system based device drivers in embedded systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Malik</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the 1st IEEE/ACM/IFIP Intl. Conf. on Hardware/Software Codesign and System Synthesis (CODES+ISSS)</title>
+		<meeting>of the 1st IEEE/ACM/IFIP Intl. Conf. on Hardware/Software Codesign and System Synthesis (CODES+ISSS)<address><addrLine>Newport Beach, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2003-10" />
+			<biblScope unit="page" from="37" to="44" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

@@ -1,0 +1,783 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:53+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">EdgeBalance: Model-Based Load Balancing for Network Edge Data Planes</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wei</forename><surname>Zhang</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Abhigyan</forename><surname>Sharma</surname></persName>
+							<affiliation key="aff1">
+								<orgName type="laboratory">AT&amp;T Labs Research</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Timothy</forename><surname>Wood</surname></persName>
+						</author>
+						<author>
+							<affiliation key="aff0">
+								<orgName type="institution">The George Washington University</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">EdgeBalance: Model-Based Load Balancing for Network Edge Data Planes</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Edge data centers are an appealing place for telecommunica-tion providers to offer in-network processing such as VPN services, security monitoring, and 5G. Placing these network services closer to users can reduce latency and core network bandwidth, but the deployment of network functions at the edge poses several important challenges. Edge data centers have limited resource capacity, yet network functions are resource intensive with strict performance requirements. Repli-cating services at the edge is needed to meet demand, but balancing the load across multiple servers can be challenging due to diverse service costs, server and flow heterogeneity, and dynamic workload conditions. In this paper, we design and implement a model-based load balancer EdgeBalance for edge network data planes. EdgeBalance predicts the CPU demand of incoming traffic and adaptively distributes flows to servers to keep them evenly balanced. We overcome several challenges specific to network processing at the edge to improve throughput and latency over static load balancing and monitoring-based approaches.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Edge datacenters running network services such as 5G, VPN, and broadband alongside 3rd party applications requiring lowlatency <ref type="bibr" target="#b19">[20]</ref> face many of the issues of a larger centralized datacenter such as multi-tenancy and workload dynamics. However, these challenges are worsened due to: (1) a network edge has fewer resources to begin with, and requires constant adjustment among tenants to meet their time-varying demands <ref type="bibr" target="#b14">[15]</ref>; (2) a network edge runs computationally demanding applications and must meet strict throughput and latency requirements. Network functions (NFs) comprising a network service stretch performance of CPUs to their limits to support line rate performance <ref type="bibr" target="#b9">[10]</ref>, and are often deployed at the edge in part to reduce latency. Thus many applications running on the edge are expected to have real-time performance requirements, which requires resource allocation to provide stronger guarantees <ref type="bibr" target="#b22">[23]</ref>.</p><p>Existing work on resource management for network services has focused on two distinct parts of the problem. First, coarse-grained resource management is addressed using algorithms for placement of VMs and containers running network functions, e.g., E2 <ref type="bibr" target="#b17">[18]</ref>, and Stratos <ref type="bibr" target="#b7">[8]</ref>. Second, fine-grained load management is achieved through load balancers that distribute work across service replicas. This can be achieved with the connection-level load balancers used for cloud servers, but as we show, such load balancers are not a good fit for the needs of NFs, especially at the edge.</p><p>Connection load balancers can use static or dynamic policies for dispatching connections. Many of today's cloud load balancers, Ananta <ref type="bibr" target="#b18">[19]</ref>, Maglev <ref type="bibr" target="#b6">[7]</ref>, adopt simple static policies. But, more sophisticated policies are needed such as treating "elephant" flows separately to avoid impacting performance for other "mice" flows at the edge. Further, connection load balancing at the network edge has several unique constraints compared to prior work on designing dynamic policies <ref type="bibr" target="#b1">[2,</ref><ref type="bibr" target="#b3">4,</ref><ref type="bibr" target="#b4">5,</ref><ref type="bibr" target="#b11">12,</ref><ref type="bibr" target="#b13">14,</ref><ref type="bibr" target="#b13">14]</ref>. (1) A connection's duration or its bandwidth cannot be estimated at the start. (2) A connection assigned to an NF cannot be migrated to (or restarted at) a different server. <ref type="formula">(3)</ref> The CPU use of NFs cannot be measured by the cloud infrastructure because high-performance NFs often use polling for network IO and report 100% CPU use on cores independent of the traffic they are processing <ref type="bibr" target="#b5">[6]</ref>. (4) NFs (e.g., NATs) are often middleboxes that transform outgoing packets, yet affinity must be kept to ensure the return traffic also passes through the same function. These constraints necessitate a new load balancing approach.</p><p>Our primary contribution is the design, implementation and a preliminary evaluation of a model-based load balancing technique for edge network data planes. There are two components to this solution. First is a model to estimate the load of a network service on a core as a product of its perpacket processing cost and the rate of packets processed by the service on that core. Second is a local feedback-driven controller (specifically, a Proportional-Integral-Derivative, or a PID, controller <ref type="bibr" target="#b25">[26]</ref>) that adapts load balancing weights if our estimated load on cores becomes unbalanced due to traffic changes, e.g., an arrival of an elephant flow or surge in traffic demand of a service. Importantly, neither the model nor the feedback controller requires load monitoring on NFs and uses mostly local information to create dynamic policies.</p><p>We implement our approach as a DPDK-based stateful load balancer named EdgeBalance. We evaluate EdgeBalance on the CloudLab testbed <ref type="bibr" target="#b21">[22]</ref> for load balancing network services implemented in BESS <ref type="bibr" target="#b2">[3]</ref>. Our results show that:</p><p>• EdgeBalance's network model can estimate CPU load with an absolute error of less than 5% for NFs with varying computation costs and at varying traffic loads.</p><p>• In a workload with elephant and mice flows, EdgeBalance achieves up to 50% higher throughput than the best static load balancing and achieves up to 1/3-rd the latency of a monitoring-based approach.</p><p>• For a time-varying workload with homogeneous flows, EdgeBalance achieves an equal load among servers in 1 sec which is several seconds faster than a static policy.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Why a new load balancer?</head><p>We explain why existing connection load balancers, in particular cloud load balancers <ref type="bibr" target="#b6">[7,</ref><ref type="bibr" target="#b15">16,</ref><ref type="bibr" target="#b16">17,</ref><ref type="bibr" target="#b18">19]</ref>, are not sufficient to meet network edge load balancing needs. Bidirectional affinity: A critical requirement for a network edge load balancer is to maintain affinity of a connection to an instance of a network service <ref type="bibr" target="#b18">[19]</ref>. In fact, several cloud load balancers such as Ananta and Maglev provide affinity despite a changing pool of servers. However, they provide affinity only for an inbound connection to a server. Traffic sent by a server on the connection bypasses the load balancer for efficiency.</p><p>Thus while many cloud load balancers are able to perform optimizations such as bypassing the load balancer on the return path from a server, a network edge load balancer like EdgeBalance must ensure bi-directional flow affinity for correct behavior. Unfortunately, this eliminates the possibility of applying many existing load balancing frameworks in a network edge context.</p><p>Limitations of static load balancing: Many cloud load balancers support weighted load balancing across service instances. These weights are used to determine the fraction of new connections assigned to an instance. But, how these weights are to be set is often left unspecified <ref type="bibr" target="#b16">[17,</ref><ref type="bibr" target="#b18">19]</ref>. In practice, cloud operators can use simple static policies, e.g., weight of an instance is proportional to number of its cores. But, simplistic static policies can be highly sub-optimal, especially for heterogeneous flows, shown in evaluation section.</p><p>Challenges in dynamic load balancing: The above example shows that dynamic weight tuning is needed, but using dynamic weights has two main challenges. The first challenge is that of controller design. Dynamic control can be prone to oscillations and herd behavior if weights are tuned using stale traffic measurements or if the controller aggressively adjusts weights in response to the input <ref type="bibr" target="#b23">[24]</ref>. Hence, designing and evaluating a stable controller for network services that balances controller responsiveness and stability is an important question. The second challenge is that of measuring load on network service instances. Weight adjustments depend on the current load of services, but high performance NFs are implemented using frameworks such as DPDK that perform polled network IO. Due to polling, they report 100% CPU utilization independent of the traffic they are processing. Thus inferring the load on NFs comprising a network service is the second important question.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">EdgeBalance design</head><p>EdgeBalance is a dynamic, bidirectional load balancer for a network edge datacenter. To evenly balance the load across servers and cores, it adopts a model-based approach to estimate loads and applies a PID controller using local information to dispatch connections across network services.</p><p>Design goals: EdgeBalance aims to provide • Bidirectional affinity: Provide affinity for inbound and outbound connections for NFs and other cloud applications, even when NFs modify packet headers.</p><p>• Dynamic load balancing: Dynamically equalize the load on all servers and cores to absorb any unexpected load on a server core.</p><p>• Fast convergence: Respond quickly to load imbalance due to flow skew, traffic fluctuations, etc.. • High performance: Achieve a high throughput in terms of packets and connections and add minimal latency. Architecture overview: EdgeBalance comprises a data plane forwarder and control plane elements -policy, topology controller and monitor -shown in <ref type="figure" target="#fig_0">Figure 1</ref>. Its packet processing path goes through the forwarder, which can be replicated across multiple threads for scalability. The forwarder must efficiently redirect incoming packets to an edge server running the appropriate network service. A thread processes each packet in a "run to completion" manner by fetching the packet from a NIC RX queue, choosing a next-hop server, tracking the connection through a flow table, encapsulating the packet and delivering the packet into a NIC TX queue. Later, we will describe how the packet is encapsulated. To avoid contention between threads, each forwarder maintains its own statistics about the flows it processes. This data is then periodically aggregated by the monitoring component, which tracks statistics on a per-service basis. The topology controller tracks which services are active on which servers and cores and can start and stop additional replicas. Information from these components is fed to the policy component, which guides balancing decisions made by the forwarders. On every forwarder core, a garbage cleaner executes periodically to clean up the inactive Bidirectional affinity: <ref type="figure">Figure 2</ref> shows the sequence of nodes traversed by packets in both directions.</p><p>Processing at EdgeBalance: When a packet arrives (step 1), a datacenter router sends the incoming traffic from a client into EdgeBalance. Upon the first packet of a connection, EdgeBalance records the flow's 5-tuple of &lt;src IP, dst IP, proto, src Port, dst Port&gt; and its chosen network service &lt;server ID, core ID, network service ID&gt; in a flow table entry. Then, subsequent packets in this flow follow the same path. When a new flow in one direction arrives, EdgeBalance estimates the reverse flow information by swapping source IP, destination IP, source port and destination port. It then inserts a reverse flow entry with the same &lt;server ID, core ID, network service ID&gt; as the forward flow. For consistency, garbage cleaner will remove both of the flow entries from the flow table at the same time. Then, EdgeBalance encapsulates the chosen network service information including server ID, core ID, network service ID, and an update flag (set to 0) into a VXLAN header with the source mac address of the EdgeBalance server and destination mac address of the chosen server (step 2).</p><p>Processing at edge server: An edge server assists EdgeBalance in realizing bidirectional affinity. An edge server's data plane, called a datapath node, comprises a deparser module, a nexthop module and one or more network services implemented by NFs. The deparser module parses the outer VXLAN header and gets the core ID and service ID, and then delivers the packet to right core and network service. If an NF modifies the packet header, it will set the update flag in the packet meta data to 1. When nexthop module sees that the update flag is set, it resends it to EdgeBalance, which allows EdgeBalance to learn the network service mapping for the transformed packets (not shown in <ref type="figure">Figure 2</ref>). If no network service changes the packet header, the nexthop module will bypass EdgeBalance and send the packet towards the destination server (step 3).</p><p>Packets from server to client follow a similar procedure as shown in step 4-6. In particular, EdgeBalance uses the flow entry learned in steps 1-3 to send the packet to the correct instance of the network service (step 5) to achieve bidirectional affinity even if a network service modifies packet headers.</p><p>Model-based load estimation: </p><note type="other">Figure 2: EdgeBalance packet path usage with traditional tools. Even if the datapath node can report its CPU usage to load balancer, it can easily send stale or noisy data, since in-network traffic changes rapidly. EdgeBalance takes another approach. If we know (1) the network services running on each core, (2) the per packet processing cost for a network service and (3) the number of packets for each network service, then we could predict the CPU usage at the load balancer instead of measuring it at datapath nodes as described next.</note><p>For question (1), the topology controller has the knowledge of which cores a network service is running on. For question (2), the processing cost of a network service is affected by server heterogeneity. When a datapath node starts and network service services are deployed, datapath internally generates some UDP packets to go through each network service and then measures the processing cost and reports the tuple of &lt;server ID, core id, service id, processing cost&gt; to the monitor component on EdgeBalance. For question (3), from <ref type="figure">Figure  2</ref>, we can see that EdgeBalance handles every packet going through a network service. But, it needs to efficiently count the packet arrival rate for each service on a core. A naive way would be to aggregate the number of packets by stepping through the flow table. However, when the number of flows is huge, the aggregation time will dramatically increase and incur large prediction delay. Instead, since the number of cores and services are fixed, EdgeBalance maintains a three dimensional array of &lt;server ID, core ID, service ID&gt; to record the packet counts, which ensures that the CPU load can be predicted efficiently as follows:</p><formula xml:id="formula_0">Predict_CPU i j = n ∑ k=1 (Cost i jk * Rate i jk )</formula><p>Predict_CPU i j is the predicted CPU for &lt;server i, core j&gt;. n is the total number of network services running on &lt;server i, core j&gt;. Rate i jk and Cost i jk are the packet rate and processing cost of network service k for &lt;server i, core j&gt;.</p><p>Dynamic load balancing via PID controller: EdgeBalance aims to evenly balance the load across servers and cores running network services. It does so using a PID controller to update the load balancing weight of each core at fixed intervals. Initally, the system sets an equal weight for all cores. The target for the controller is to set weights to ensure that the predicted CPU usage of a core Predict_CPU i j remains equal to the average predicted CPU usage across across all cores. We apply the PID controller approach to compute the weight change diff_weight for each core at time intervals dt as follows: err = kP * (predict_cpu -avg_predict_cpu) # P-term err_sum += kI * err * dt # I-term d_err = kD * (prev_err -err) * dt # D-term prev_err = err diff_weight = err + err_sum + d_err # PID output</p><p>We set the constants for proportional gain kP = 0.6, integral gain kI = 0.5 and derivative gain kD = 0.125 using experimental parameter tuning. In future, we plan to explore a reinforcement learning approach to set these parameters.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Evaluation</head><p>Setup: we use six servers on the NSF CloudLab testbed of "c220g5" type from the Wisconsin site. All of them have dual Intel(R) Xeon(R) Silver 4114 CPU @ 2.30GHz (2x10 cores), 64KB of L1 cache, 1024KB of L2 cache per core, and a shared 14080KB L3 cache, an Intel X710 10G Dual Port NIC and 200GB memory. Every server runs Ubuntu 14.04.1 with kernel 3.13.0-143-generic and uses Intel DPDK v18.02. We use both Pktgen-DPDK <ref type="bibr" target="#b20">[21]</ref> and Cisco Trex <ref type="bibr" target="#b24">[25]</ref> as traffic generators, and BESS <ref type="bibr" target="#b10">[11]</ref> as our dataplane platform. We configure EdgeBalance to adjust weights every 30 ms in this experiment. CPU prediction accuracy: We first evaluate the accuracy of our CPU prediction model for NFs with different processing costs. We generate short flows (10 pkts per flow) with Trex and EdgeBalance sends all traffic to one core which runs a service chain of two NFs. The first NF rewrites a portion of each packet's body and has a fixed cost. The second NF has a variable amount of computation cost, which we adjust to observe its impact on overall CPU usage. <ref type="figure">Figure 3</ref> shows that the average CPU calculated by the prediction model and the average measured CPU reported from datapath nodes have little difference, with an average absolute error of 1.8%. Next, we consider a more complex scenario with one lightweight and one heavyweight chain on the same core (not shown due to space constraints). As we increase the traffic rate while keeping the NF computation cost fixed, our model retains high accuracy, only experiencing greater than 5% error when the CPU usage passes 80% load; at this point, our model tends to overpredict the CPU needed, which is desirable since it results in a more conservative system. Next, we investigate if EdgeBalance is able to apply this model in improving end-user metrics such as throughput and latency.</p><p>Load balancing comparison -heterogeneous flows: For this experiment, we consider a workload that remains constant over time but exhibits heterogeneity in flow sizes. Specifically, a long-running elephant flow is generated by one traffic generator (Pktgen-DPDK), while a second traffic generator (Trex) generates mice flows with 10 packets per flow at 1 ms intervals. This workload is served by two datapath nodes of equal capacity that are running network service chains with the same processing cost of 700ns per packet.</p><p>We compare EdgeBalance against Static WRR, which uses equal weights for both servers in this experiment. We note that equal weights are the best static weight setting for this experiment since CPU capacity and per-packet NF processing costs are identical for both servers. We also compare against Monitor -a variant of EdgeBalance that instruments NF code to monitor cycles spent by an NF in processing packets (vs. cycles spent in polling an empty NIC queue). It periodically (every 30 ms) reports CPU utilization as the fraction of cycles spent in processing packets, based on which our PID controller computes load balancing weights.</p><p>Our experiment evaluates the sensitivity of our findings to the percentage of elephant flow in the workload. We vary the fraction of traffic from the elephant flow from 7% to 47% keeping the total input traffic (in Mbps) constant. <ref type="figure">Figure  4a</ref> and <ref type="figure">Figure 4b</ref> respectively show the throughput and the latency achieved by all schemes. To explain the results in these two figures, <ref type="figure">Figure 4c</ref> shows the average absolute difference in CPU usage among the two servers for all schemes.</p><p>EdgeBalance achieves a nearly constant throughput and latency, which is independent of the fraction of traffic from the elephant flow. In <ref type="figure">Figure 4c</ref>, we find that, EdgeBalance sets the load balancing weights so that the difference in CPU usage among servers stays below 3%. This finding shows that EdgeBalance is able to mitigate the effect of the elephant flow on a server by assigning fewer new flows to that server.</p><p>Static WRR sees a reduction in throughput and an increase in latency upon increasing the fraction of traffic from the elephant flow. A higher fraction of traffic from the elephant flow hurts Static WRR's performance because it increases the imbalance in load among the two servers. The load difference increases to 41% for the heaviest elephant flow, due to which Static WRR has a 33% lower throughput than EdgeBalance, and a latency of more than 300 us. This experiment shows that simplistic statics policies do not perform well for heterogeneous workloads.</p><p>Monitor's throughput is close to EdgeBalance but its latency up to 3 times higher in this experiment. This scheme achieves a high throughput because on average, the two servers have a CPU usage difference of at most 7%. This   <ref type="figure">Figure 4</ref>: Varying fraction of elephant flow traffic load difference is higher than that of EdgeBalance but is significantly better than that of Static WRR. But, Monitor has a high latency because it is prone to oscillation of load balancing weights it assigns to the two servers, partly due to the noise in measured CPU usage. These oscillations result in periods where packet queue lengths on NF nodes are higher than normal, which increases the latency for this scheme. In comparison, we find that the model-based approach taken by EdgeBalance results in more stable load balancing weights, which improves latency. While the oscillations for a monitorbased approach may be reduced if we increase the monitoring and weight adjustment interval significantly (say 1 sec), but it could hurt its responsiveness for dynamic workloads, a scenario we consider next.</p><p>We also evaluate how each approach (EdgeBalance, static WRR, monitor-based approach) behaves when keeping the traffic ratio from the elephant flow to be constant, but gradually increase the workload intensity for mice and elephant flows, not shown because of the limited space. Figure 5: CPU usage for a dynamic workload Load balancing comparison -dynamic workload: We consider a time-varying workload and demonstrate how quickly CPU usage converges upon a workload change. We begin with one datapath node (server 1) with NF chain processing cost 700ns, and send traffic (15 flows/sec) into this node through the load balancer. If the average CPU usage is over 95%, the load balancer will mark that datapath node as overloaded, which requires additional servers to handle the traffic. At 9 seconds, we double the traffic, causing a new datapath node to be added into the system. Since Static WRR dispatches the new flows in a round robin manner, it takes a much longer time to converge to an equal load, which is about 35 sec. On the other hand, EdgeBalance can predict and be aware of the load on server 1, it can assign more flows into the newly added server right after it is added, so the load on the two servers equalizes in close to a second as shown in <ref type="figure">Figure 5</ref>. In conclusion, EdgeBalance appears to achieve its design goals for dynamic workloads as well.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Related work</head><p>Cloud load balancers: A primary focus of cloud load balancers implemented in software is to support a scale-out design <ref type="bibr" target="#b6">[7,</ref><ref type="bibr" target="#b18">19]</ref>. Extending EdgeBalance to support a scale-out design is an important area of future work. To reduce the server CPU cores for load balancing, two kinds of approaches have been considered. First, offload stateful load balancing to switch ASICs as in SilkRoad <ref type="bibr" target="#b15">[16]</ref>. However, these approaches have limited flow scalability due to limited flow table sizes on ASICs. Second, use a stateless load balancer but instead rely on connection state at servers to provide affinity <ref type="bibr" target="#b0">[1,</ref><ref type="bibr" target="#b16">17]</ref>. However, these approaches require extensive support in server applications.</p><p>Load balancing algorithms: Several papers <ref type="bibr" target="#b1">[2,</ref><ref type="bibr" target="#b3">4,</ref><ref type="bibr" target="#b4">5]</ref> have used layer-7 information such as URLs or request sizes for load balancing. But, an edge network load balancer operates on layer-3/4 information and may not have layer-7 layer information. Dynamic load balancing based on server load has been explored by Network Dispatcher <ref type="bibr" target="#b13">[14]</ref>. However, a server's CPU load is difficult to estimate for polled IO NFs. Further, their paper does not provide sufficient details to implement its dynamic algorithm. Some papers have proposed migrating a connection to another server <ref type="bibr" target="#b12">[13]</ref> or restarting a connection on another server <ref type="bibr" target="#b11">[12]</ref>. While restarting a flow for load balancing is not practical for network services, connection migration may be supported using techniques such as OpenNF <ref type="bibr" target="#b8">[9]</ref>. we plan to explore how connection migration can enable better load balancing in the context of NFs.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Conclusions</head><p>We have shown that a stateful load balancer can meet the bidirectional affinity requirements that are specific to a network edge cloud. Further, we propose a model-based load balancing approach combines information already present at a stateful load balancer with a minimal number of parameters that model the processing cost of network services. Our initial experience suggests that this model has low prediction error, it improves performance when dealing with skewed flows and services with heterogeneous processing costs, and it responds quickly to changes in workload.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Discussion</head><p>This paper has shown promising preliminary results and the potential of using PID controller and CPU prediction models to dynamically distribute flows across network service chains in an edge environment. We will discuss key challenges for edge load balancing and look for feedback on our future work, including:</p><p>Edge load balancing: We have argued that the edge environment demands a new type of load balancer, particularly when the edge is being used for network functions. We seek feedback on what load balancing challenges attendees see as the most pressing at the edge, such as balancing the complexity of the load balancer's policies versus the overhead they incur.</p><p>Overhead and cost of state: Despite the trend towards stateless services, we argue that EdgeBalance needs to track flow state for flow affinity in case the backend server pool changes dynamically (addition or removal). We expect the discussion can focus in part on when stateful load balancers are required, and how stateful systems can be designed to achieve high scale.</p><p>Prediction robustness: In our preliminary experiments, we evaluate the accuracy of CPU prediction model by varying the length of service chains and computation cost on Intel X86 platform. We plan to evaluate the robustness of the model by conducting experiments on other hardware platforms with other common network functions such as NATs, IDSes, and stateful firewalls.</p><p>Cache interference: To efficiently use resources, multiple NFs can be consolidated on the same server. In such a deployment, NFs contend for resources such as LLC (last level cache). For stateful NFs, the processing cost of a packet may vary based on cache pollution level. We plan to investigate and incorporate the cache interference in the CPU prediction model.</p><p>Scale-up and scale-out scalability: Scalability is a key factor for a load balancer. The load balancer itself should add minimum latency to the users' traffic. EdgeBalance leverages lockless and per core data structure to efficiently scale up across the cores. We are measuring the maximum throughput by varying the number of cores. In a large scale network deployment, multiple load balancers are required to avoid a bottleneck at the load balancer itself. We are investigating how to exchange minimum information across load balancers to efficiently balance the flows for a large scale deployment.</p><p>Stateful NFs and real traces: Multiple network functions are stateful, which means they need to manage and maintain per-flow state internally. In future, we will use advanced stateful network functions (e.g., a stateful IDS) in conjuction with real network edge traces to evaluate EdgeBalance.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: EdgeBalance architecture flow entries from its flow table. Bidirectional affinity: Figure 2 shows the sequence of nodes traversed by packets in both directions. Processing at EdgeBalance: When a packet arrives (step 1), a datacenter router sends the incoming traffic from a client into EdgeBalance. Upon the first packet of a connection, EdgeBalance records the flow's 5-tuple of &lt;src IP, dst IP, proto, src Port, dst Port&gt; and its chosen network service &lt;server ID, core ID, network service ID&gt; in a flow table entry. Then, subsequent packets in this flow follow the same path. When a new flow in one direction arrives, EdgeBalance estimates the reverse flow information by swapping source IP, destination IP, source port and destination port. It then inserts a reverse flow entry with the same &lt;server ID, core ID, network service ID&gt; as the forward flow. For consistency, garbage cleaner will remove both of the flow entries from the flow table at the same time. Then, EdgeBalance encapsulates the chosen network service information including server ID, core ID, network service ID, and an update flag (set to 0) into a VXLAN header with the source mac address of the EdgeBalance server and destination mac address of the chosen server (step 2). Processing at edge server: An edge server assists EdgeBalance in realizing bidirectional affinity. An edge server's data plane, called a datapath node, comprises a deparser module, a nexthop module and one or more network services implemented by NFs. The deparser module parses the outer VXLAN header and gets the core ID and service ID, and then delivers the packet to right core and network service. If an NF modifies the packet header, it will set the update flag in the packet meta data to 1. When nexthop module sees that the update flag is set, it resends it to EdgeBalance, which allows EdgeBalance to learn the network service mapping for the transformed packets (not shown in Figure 2). If no network service changes the packet header, the nexthop module will bypass EdgeBalance and send the packet towards the destination server (step 3). Packets from server to client follow a similar procedure as shown in step 4-6. In particular, EdgeBalance uses the flow entry learned in steps 1-3 to send the packet to the correct instance of the network service (step 5) to achieve bidirectional affinity even if a network service modifies packet headers. Model-based load estimation: The use of polling mode on datapath nodes makes it hard to measure the real CPU</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head></head><label></label><figDesc>Figure 3: CPU usage prediction accuracy</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="false"><head></head><label></label><figDesc>The use of polling mode on datapath nodes makes it hard to measure the real CPU</figDesc><table>Client 
+
+Edge Cloud 
+
+Server 
+Router 
+EdgeBalance 
+
+Datapath Node 
+Datapath Node 
+
+1 
+
+2 Encap 5 
+
+NF1 
+NF2 
+NF3 
+NF1 
+NF2 
+NF3 
+
+3 
+
+Decap 
+
+4 
+
+Decap 
+
+6 
+
+… 
+
+Router 
+
+</table></figure>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">Balancing on the edge: Transport affinity without network state</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">João</forename><surname>Taveira Araújo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lorenzo</forename><surname>Saino</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lennert</forename><surname>Buytenhek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Raul</forename><surname>Landa</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">15th {USENIX} Symposium on Networked Systems Design and Implementation ({NSDI} 18)</title>
+		<imprint>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="111" to="124" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Scalable content-aware request distribution in cluster-based network servers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mohit</forename><surname>Aron</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Darren</forename><surname>Sanders</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Peter</forename><surname>Druschel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Willy</forename><surname>Zwaenepoel</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX Annual Technical Conference</title>
+		<imprint>
+			<date type="published" when="2000" />
+			<biblScope unit="page" from="323" to="336" />
+		</imprint>
+	</monogr>
+	<note>General Track</note>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title level="m" type="main">Extensible Software Switch</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bess</forename><surname>Berkeley</surname></persName>
+		</author>
+		<ptr target="https://github.com/NetSys/bess.Accessed" />
+		<imprint>
+			<biblScope unit="page" from="2018" to="2024" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+		<title level="m" type="main">A clientaware dispatching algorithm for web clusters providing multiple services</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Emiliano</forename><surname>Casalicchio</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michele</forename><surname>Colajanni</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2001" />
+			<publisher>WWW</publisher>
+			<biblScope unit="volume">1</biblScope>
+			<biblScope unit="page" from="535" to="544" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mark</forename><forename type="middle">E</forename><surname>Crovella</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mor</forename><surname>Harchol-Balter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cristina</forename><forename type="middle">D</forename><surname>Murta</surname></persName>
+		</author>
+		<title level="m">Task assignment in a distributed system: Improving performance by unbalancing load</title>
+		<imprint>
+			<date type="published" when="1997" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dpdk</forename><surname>Dpdk</surname></persName>
+		</author>
+		<ptr target="https://www.dpdk.org.Accessed" />
+		<imprint>
+			<biblScope unit="page" from="2018" to="2024" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Maglev: A fast and reliable software network load balancer</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cheng</forename><surname>Daniel E Eisenbud</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Carlo</forename><surname>Yi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cody</forename><surname>Contavalli</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Roman</forename><surname>Smith</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eric</forename><surname>Kononov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ardas</forename><surname>Mann-Hielscher</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bin</forename><surname>Cilingiroglu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wentao</forename><surname>Cheyney</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jinnah Dylan</forename><surname>Shang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Hosein</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">13th {USENIX} Symposium on Networked Systems Design and Implementation ({NSDI} 16)</title>
+		<imprint>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="523" to="535" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<monogr>
+		<title level="m" type="main">Stratos: A network-aware orchestration layer for virtual middleboxes in clouds</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aaron</forename><surname>Gember</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Anand</forename><surname>Krishnamurthy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Saul</forename><surname>St John</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><surname>Grandl</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xiaoyang</forename><surname>Gao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ashok</forename><surname>Anand</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Theophilus</forename><surname>Benson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vyas</forename><surname>Sekar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aditya</forename><surname>Akella</surname></persName>
+		</author>
+		<idno type="arXiv">arXiv:1305.0209</idno>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+<note type="report_type">arXiv preprint</note>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Opennf: Enabling innovation in network function control</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aaron</forename><surname>Gember-Jacobson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Raajay</forename><surname>Viswanathan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chaithan</forename><surname>Prakash</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><surname>Grandl</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Junaid</forename><surname>Khalid</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sourav</forename><surname>Das</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aditya</forename><surname>Akella</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM SIGCOMM Computer Communication Review</title>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2014" />
+			<biblScope unit="volume">44</biblScope>
+			<biblScope unit="page" from="163" to="174" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bo</forename><surname>Han</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vijay</forename><surname>Gopalakrishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lusheng</forename><surname>Ji</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Seungjoon</forename><surname>Lee</surname></persName>
+		</author>
+		<title level="m">Network functions virtualization: Challenges and opportunities for innovations</title>
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<monogr>
+		<title level="m" type="main">Softnic: A software nic to augment hardware</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sangjin</forename><surname>Han</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Keon</forename><surname>Jang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aurojit</forename><surname>Panda</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shoumik</forename><surname>Palkar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dongsu</forename><surname>Han</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sylvia</forename><surname>Ratnasamy</surname></persName>
+		</author>
+		<idno>UCB/EECS- 2015-155</idno>
+		<imprint>
+			<date type="published" when="2015-05" />
+		</imprint>
+		<respStmt>
+			<orgName>EECS Department, University of California, Berkeley</orgName>
+		</respStmt>
+	</monogr>
+<note type="report_type">Technical Report</note>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Task assignment with unknown duration</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mor</forename><surname>Harchol</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">-</forename><surname>Balter</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings 20th IEEE International Conference on Distributed Computing Systems</title>
+		<meeting>20th IEEE International Conference on Distributed Computing Systems</meeting>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2000" />
+			<biblScope unit="page" from="214" to="224" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Exploiting process lifetime distributions for dynamic load balancing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mor</forename><surname>Harchol</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">-</forename><surname>Balter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Allen B</forename><surname>Downey</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Computer Systems (TOCS)</title>
+		<imprint>
+			<biblScope unit="volume">15</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<biblScope unit="page" from="253" to="285" />
+			<date type="published" when="1997" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<monogr>
+		<title level="m" type="main">Network dispatcher: A connection router for scalable internet services. Computer Networks and ISDN Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">H</forename><surname>Guerney</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Hunt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Germán</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Richard</forename><forename type="middle">P</forename><surname>Goldszmidt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rajat</forename><surname>King</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Mukherjee</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1998" />
+			<biblScope unit="volume">30</biblScope>
+			<biblScope unit="page" from="347" to="357" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Scalability and performance evaluation of edge cloud systems for latency constrained applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sumit</forename><surname>Maheshwari</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dipankar</forename><surname>Raychaudhuri</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ivan</forename><surname>Seskar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Francesco</forename><surname>Bronzino</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2018 IEEE/ACM Symposium on Edge Computing (SEC)</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="286" to="299" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Silkroad: Making stateful layer-4 load balancing fast and cheap using switching asics</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rui</forename><surname>Miao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hongyi</forename><surname>Zeng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Changhoon</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeongkeun</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Minlan</forename><surname>Yu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Conference of the ACM Special Interest Group on Data Communication, SIGCOMM &apos;17</title>
+		<meeting>the Conference of the ACM Special Interest Group on Data Communication, SIGCOMM &apos;17</meeting>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">Stateless datacenter load-balancing with beamer</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vladimir</forename><surname>Olteanu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alexandru</forename><surname>Agache</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrei</forename><surname>Voinescu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Costin</forename><surname>Raiciu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">15th {USENIX} Symposium on Networked Systems Design and Implementation ({NSDI} 18)</title>
+		<imprint>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="125" to="139" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">E2: a framework for nfv applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shoumik</forename><surname>Palkar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chang</forename><surname>Lan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sangjin</forename><surname>Han</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Keon</forename><surname>Jang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aurojit</forename><surname>Panda</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sylvia</forename><surname>Ratnasamy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Luigi</forename><surname>Rizzo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Scott</forename><surname>Shenker</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 25th Symposium on Operating Systems Principles</title>
+		<meeting>the 25th Symposium on Operating Systems Principles</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="121" to="136" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Ananta: Cloud scale load balancing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Parveen</forename><surname>Patel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Deepak</forename><surname>Bansal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lihua</forename><surname>Yuan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ashwin</forename><surname>Murthy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Albert</forename><surname>Greenberg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>David</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Randy</forename><surname>Maltz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hemant</forename><surname>Kern</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Marios</forename><surname>Kumar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hongyu</forename><surname>Zikos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Wu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM SIGCOMM Computer Communication Review</title>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2013" />
+			<biblScope unit="volume">43</biblScope>
+			<biblScope unit="page" from="207" to="218" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Central office re-architected as a data center</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Larry</forename><surname>Peterson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ali</forename><surname>Al-Shabibi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tom</forename><surname>Anshutz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Scott</forename><surname>Baker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andy</forename><surname>Bavier</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Saurav</forename><surname>Das</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jonathan</forename><surname>Hart</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Guru</forename><surname>Palukar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">William</forename><surname>Snow</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Communications Magazine</title>
+		<imprint>
+			<biblScope unit="volume">54</biblScope>
+			<biblScope unit="issue">10</biblScope>
+			<biblScope unit="page" from="96" to="101" />
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<monogr>
+		<title level="m" type="main">Traffic generator: Pktgen-dpdk</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">-Dpdk</forename><surname>Pktgen</surname></persName>
+		</author>
+		<ptr target="https://git.dpdk.org/apps/pktgen-dpdk/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<monogr>
+		<title level="m" type="main">Introducing cloudlab: Scientific infrastructure for advancing cloud architectures and applications. ; login:: the magazine of USENIX &amp; SAGE</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><surname>Ricci</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eric</forename><surname>Eide</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cloudlab</forename><surname>Team</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="volume">39</biblScope>
+			<biblScope unit="page" from="36" to="38" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">The emergence of edge computing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mahadev</forename><surname>Satyanarayanan</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Computer</title>
+		<imprint>
+			<biblScope unit="volume">50</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="30" to="39" />
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Pros &amp; cons of model-based bandwidth control for client-assisted content delivery</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Abhigyan</forename><surname>Sharma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arun</forename><surname>Venkataramani</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Antonio A</forename><surname>Rocha</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">sixth international conference on communication systems and networks (COMSNETS)</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="1" to="8" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<monogr>
+		<title level="m" type="main">Cisco traffic generator: Trex</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Trex</surname></persName>
+		</author>
+		<ptr target="https://github.com/cisco-system-traffic-generator/trex-core" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Wikipedia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Contoller</surname></persName>
+		</author>
+		<ptr target="https://en.wikipedia.org/wiki/PID_controller.Accessed" />
+		<imprint>
+			<biblScope unit="page" from="2019" to="2030" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

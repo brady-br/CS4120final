@@ -1,0 +1,940 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:50+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Say Goodbye to Virtualization for a Safer Cloud</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dan</forename><surname>Williams</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">IBM T.J. Watson Research Center</orgName>
+								<address>
+									<settlement>Yorktown Heights</settlement>
+									<region>NY</region>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ricardo</forename><surname>Koller</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">IBM T.J. Watson Research Center</orgName>
+								<address>
+									<settlement>Yorktown Heights</settlement>
+									<region>NY</region>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Brandon</forename><surname>Lum</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">IBM T.J. Watson Research Center</orgName>
+								<address>
+									<settlement>Yorktown Heights</settlement>
+									<region>NY</region>
+								</address>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Say Goodbye to Virtualization for a Safer Cloud</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>When it comes to isolation on the cloud, conventional wisdom holds that virtual machines (VMs) provide greater isolation than containers because of their low-level interface to the host. A lower-level interface reduces the amount of code and complexity needed in the kernel that must be relied upon for isolation. However, it is incorrectly assumed that virtualization mechanisms are required to achieve a low-level interface suitable for isolation. In this paper, we argue that the interface to the host can be lowered for any application by moving kernel components to userspace. We show that using a userspace network stack results in a 33% reduction in kernel code usage, which is 20% better than when resorting to virtualization mechanisms and using a VM.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Cloud security is an ever-present and growing concern as more enterprises consider running workloads in the cloud. Multi-tenancy brings challenges to security, as cloud users must trust the cloud provider to maintain isolation between their workloads and any potentially malicious tenants that are co-located with them on the same physical infrastructure. Currently, running each tenant in its own virtual machine (VM) is the most common practice used by cloud providers for isolating tenants.</p><p>However, as containers gain popularity as a lightweight, developer-friendly alternative to VMs, it is reasonable to ask whether VMs are still needed for isolation. Arguments for isolation typically boil down to discussions about differences in the interface between the guest and the host, which are often conflated with the mechanism in use. VMs, using hardware virtualization mechanisms, utilize a low-level interface which is thought to provide strong isolation. Containers, using process mechanisms, utilize a high-level interface, which is thought to contribute to poor isolation. For example, the authors of LightVM describe the cause of container security concerns as follows:</p><p>The main culprit is the hugely powerful kernel syscall API that containers use to interact with the host OS. <ref type="bibr" target="#b22">[23]</ref> Yet LightVM then goes on to try to introduce containerlike properties to VMs, without giving up the complex hardware-based virtualization mechanism implementing the low-level interface to guests.</p><p>In this paper, we make the observation that the level of the interface between the guest and the host is not fundamentally tied to the actual mechanism used to separate the guest from the host (like the virtualization or process mechanism). In Section 3, we describe how the high-level container interface can be arbitrarily lowered by introducing library OS (libOS) components to applications or using userspace services in a manner we dub microkernelification. While we do not focus on enforcing isolation in this paper, we assume guards can protect a given interface despite the mechanism. <ref type="bibr" target="#b0">1</ref> Furthermore, we claim that the mechanism used by virtualization actually hurts isolation due to its complexity. To back up this claim, we introduce a rough metric based on kernel function tracing, kernel code usage, with the assumption that an interface that requires less kernel code results in greater isolation for tenants. We find that applying libOS techniques to the network stack alone is enough to produce a 20% smaller kernel code usage than traditional virtualization, which is 33% smaller than regular Unix processes.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Isolation and Kernel Code Usage</head><p>The ability to correctly isolate tenants from each other is a fundamental part of designing and operating a cloud. However, there is no trivial quantitative metric for isolation. Instead, practitioners often resort to heuristics such <ref type="figure">Figure 1</ref>: (a) A process/container typically accesses the host kernel through a high-level interface, such as using its network stack via socket system calls. (b) A VM uses a low-level interface, such as using a network tap device to process layer 2 packets (the TCP stack is implemented in the guest kernel).</p><p>as how high-level (abstract) or low-level (hardware-like) the interface between cloud applications (guests) and the host is. For example, a process expects a high-level, abstract POSIX interface, whereas a VM expects a lowlevel virtual hardware interface.</p><p>A system that implements a high-level interface hides complexity to the user at the cost of becoming more complex itself, usually in the form of an increased code base. More code can lead to more errors and vulnerabilities; the industry average is between 15 and 50 errors per 1000 lines of code <ref type="bibr" target="#b23">[24,</ref><ref type="bibr" target="#b9">10]</ref>. Conservatively, any vulnerability in the underlying system that provides isolation can lead to an exploit that violates the isolation it provides. Thus we say a system that can be implemented with less code (e.g., one that provides a low-level interface) can provide greater isolation.</p><p>Suppose we consider the Linux kernel as the underlying system that provides isolation between tenants in a cloud environment. Most familiarly, as seen in <ref type="figure">Fig- ure 1(a)</ref>, Linux provides a high-level POSIX interface for processes. Alternatively, using the KVM kernel module, Linux can provide a low-level virtual hardware interface. <ref type="figure">Figure 1(b)</ref> shows such a case, where the guest application has its own OS and uses low level (hardwarelike) abstractions from the kernel. We define kernel code usage as the number of unique kernel functions that are used throughout the execution of cloud applications. This metric provides an estimate of how much of the kernel is needed to implement high or low-level interfaces. As described above, we would expect Linux configured to provide a low-level interface to result in lower kernel code usage (and thus greater isolation) than Linux configured to provide a high-level interface including system calls that interact with large, complex subsystems like the network stack and filesystems.</p><p>In a practical setting, the kernel code usage metric could be used by cloud practitioners to lock down cloud applications to some fixed interface, via guards. In a more extreme case, if the kernel code usage for a given interface was small enough, the cloud provider could implement a hypervisor, microkernel <ref type="bibr" target="#b17">[18]</ref> or separation kernel <ref type="bibr" target="#b24">[25,</ref><ref type="bibr" target="#b26">27]</ref> with formal methods <ref type="bibr" target="#b17">[18,</ref><ref type="bibr" target="#b13">14]</ref> that exposes the desired interface, providing high assurance that the isolation property remains upheld.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">No Need for Virtualization Mechanisms</head><p>In this section, we claim that the interface mechanism (i.e., the mechanism used to implement processes vs. VMs) has little to do with the interface level. Furthermore, we describe how to arbitrarily lower the interface level for any process, thereby reducing the kernel code usage and improving isolation.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Interface Mechanism 񮽙 = Interface Level</head><p>Processors have evolved their interface mechanism (protection features) by introducing protection rings and execution modes in order to adapt to new paradigms. Initially, three protection rings were developed to help implement processes <ref type="bibr" target="#b2">[3]</ref>. We refer to these as the process interface mechanism. Since then, processes have been used to implement containerized applications. In response to the popularity of VMs, a hypervisor mode was introduced (VT in Intel <ref type="bibr" target="#b18">[19]</ref>), which is used in virtual machine monitors like QEMU/KVM (see <ref type="figure">Figure 1</ref>(b)) to implement VMs. We refer to this as the virtualization interface mechanism. Cloud applications run in VMs on top of a guest kernel which interacts with a monitor process, QEMU. QEMU interacts with the KVM module in the Linux kernel running in hypervisor mode. Both the monitor (via the process mechanism) and the guest (via the virtualization mechanism) interact with the kernel through low-level interfaces. <ref type="bibr" target="#b1">2</ref> Most likely for historic reasons, people tend to equate the interface mechanism with what it was designed for, specifically, use of the virtualization mechanism tends to be associated with low-level-interface VMs. However, equating the interface mechanism to the interface level or drawing the conclusion that low-level interfaces require the virtualization mechanism is an invalid generalization. <ref type="figure">Figure 2</ref> shows the expected relationship of interface level to kernel code usage. Unsurprisingly, we depict tra- <ref type="figure">Figure 2</ref>: The level of interface between the guest and host can be lowered by libOS techniques or microkernelification, without using virtualization mechanisms.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Lowering Process Interfaces</head><p>ditional VMs in the lower left, at a point with a low interface level and low kernel code usage. Similarly, we depict traditional Unix processes/containers as a point with a high interface level and subsequently high kernel code usage.</p><p>However, process mechanisms can be used with dramatically lower-level interfaces than standard Unix processes, depicted by a line on <ref type="figure">Figure 2</ref>. <ref type="bibr" target="#b2">3</ref> For example, as shown in <ref type="figure" target="#fig_0">Figure 3(a)</ref>, an application can choose to link with its own network stack and use the low-level network tap device as its network interface to the kernel <ref type="bibr" target="#b8">[9,</ref><ref type="bibr" target="#b14">15,</ref><ref type="bibr" target="#b12">13,</ref><ref type="bibr" target="#b20">21]</ref>. In general, this approach of moving kernel functionality into libraries is called the library OS or libOS approach. LibOSes have been well studied <ref type="bibr" target="#b10">[11]</ref> and are currently experiencing a rejuvenation in the context of the cloud due to rise of unikernels <ref type="bibr" target="#b21">[22,</ref><ref type="bibr" target="#b5">6,</ref><ref type="bibr" target="#b0">1]</ref> and the ecosystems that support them, such as MirageOS <ref type="bibr" target="#b21">[22]</ref>.</p><p>More generally, kernel functionality can be moved into user space daemons as shown in <ref type="figure" target="#fig_0">Figure 3(b)</ref>. We refer to this process as microkernelification, as the resultant architecture approaches a traditional microkernel architecture, with the kernel doing little more than inter-process communication. For example, FUSE <ref type="bibr" target="#b1">[2]</ref> is a technique in which the kernel implements a small amount of bridging code that allows a process to consume a filesystem that is implemented entirely in userspace. As a result, the applications (taken as a set) interface with the kernel at a lower level, beneath the filesystem, which will result in a lower kernel code usage. userfaultfd <ref type="bibr" target="#b6">[7]</ref> is an example of a similar strategy for memory fault handlers.</p><p>At the extreme, software approaches can be used to move the interface level down to the machine level by emulating machine instructions without hardware support (as is possible in QEMU <ref type="bibr" target="#b4">[5]</ref>). Full emulation would only need to interact with the kernel for I/O, and in that case, it can minimize the amount of kernel code used by only interacting with the lowest interface levels available: network tap and block devices.</p><p>To summarize, as shown in <ref type="figure">Figure 2</ref>, the interface level (and subsequently kernel code usage) is not dependent on using virtualization mechanisms.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Dangers of Virtualization Mechanisms</head><p>In this section, we examine how lowering the level of the interface of cloud applications via libOS techniques affects isolation indirectly through measuring kernel code usage. We also demonstrate that the use of virtualization mechanisms via KVM has a significant impact on the kernel code usage.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">Methodology</head><p>In this experiment, we use the Linux kernel ftrace functionality to observe the Linux kernel code usage for a simple HTTP web server on various isolation configurations, described in <ref type="table">Table 1</ref>.</p><p>In order to provide a comparable application in each scenario, we use the MirageOS unikernel ecosystem to build the application. MirageOS is an ecosystem of libOS components built in OCaml. MirageOS tooling allows an OCaml application to be built as standalone VMs or normal unix applications with and without libOS components.</p><p>We measure the kernel code usage for cloud applications built using MirageOS under four different scenarios (described in <ref type="table">Table 1</ref> We use the function graph tracer set to ignore irqs and trace only the pids that correspond to our application. In order to avoid contaminating the kernel trace, we run all experiments inside a virtual machine including kvm; this is possible via nested virtualization. The test VM is running a stock Ubuntu Linux kernel, version 4.10.0-38-generic. In all scenarios except for socket, we bridge the test VM's network device with the tap interface. We start and stop ftrace in the test VM entirely through the serial console to avoid any tracing contamination from SSH.</p><p>For each scenario, we measure the number of unique kernel functions that were accessed when issuing a single wget for a 1354 byte page in each scenario. We do not start the ftrace measurement until after the web server is idle and waiting for requests, to avoid polluting the trace with startup-related function calls. We use a single connection in this experiment to ensure that the size of kernel traces remain small. <ref type="figure" target="#fig_1">Figure 4</ref> shows the total number of kernel functions accessed and also shows a classification of whether each function in the ftrace log corresponds to virtualization, networking, or something else. We perform classification based on manual inspection of function names. For example, we classify a function as virtualization if its name contains kvm, vmx, x86, vmcs, vcpu, or emulator; network if its name contains: tcp, br , skb, inet, ip,  sock, napi, net, packet, sk , or tun; and other otherwise. This classification is not perfect; in particular, we expect we have missed some functions resulting in them being incorrectly classified as other.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Results</head><p>The first observation we draw from <ref type="figure" target="#fig_1">Figure 4</ref> is the effect of libOS techniques on the kernel code usage. Recall that tap and socket are processes that differ only by the network stack, with the former using a libOS stack. As seen in <ref type="table" target="#tab_1">Table 2</ref>, the use of the libOS network stack cuts the total number of network-related kernel functions called by almost two thirds, from 234 to 84. As a result, the total kernel code usage shrinks by a factor of 1.5, from 530 to 353. <ref type="table" target="#tab_1">Table 2</ref> also shows the breakdown of the network-related functions, based on function names that contain each substring. Packet handling and the bridge in the test VM (br , skb, packet, napi) are common to all scenarios, whereas the higher-level network stack functions (leftmost 6 columns) are replaced with lower-level tap functions (tun).</p><p>Comparing tap and kvm, we see that even a partial   <ref type="table" target="#tab_2">Table 3</ref> shows the breakdown of the virtualizationrelated functions.</p><p>The qemu and kvm bars correspond to VMs, and as such can be roughly viewed as providing insight into what the kernel code usage would look like if a full libOS was added to a process. The qemu result is in some sense a best case, with the smallest kernel code usage, because it uses emulation (in userspace) instead of additional kernel mechanisms (KVM) to implement virtualization. In fact, using virtualization support via KVM increases the kernel code usage by over 1.5 times, from 268 in qemu to 443 in kvm, 120 of which we have classified as virtualization. We expect that a full libOS implementation (instead of just the network stack as in tap) would yield similar results to qemu.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Discussion and Related Work</head><p>Generality: The obvious question for libOS approaches is how complete the libOS implementation is. POSIX compatibility is often discussed in the context of libOSes. OSv <ref type="bibr" target="#b16">[17]</ref> can support complex applications including those running with the JVM. Furthermore, metrics exist to help design libOSes for completeness <ref type="bibr" target="#b25">[26]</ref>.</p><p>Maintenance: Kernel code is well maintained. Who will maintain the userspace equivalents? One answer could be that language communities with experience maintaining package ecosystems in their language of choice naturally embrace lower-level libraries. This is happening to some extent in the unikernel communities, such as MirageOS <ref type="bibr" target="#b21">[22]</ref> and the OCaml community. Another answer could be to reuse existing (maintained) kernels without modification. Anykernels <ref type="bibr" target="#b15">[16]</ref>, rump kernels and rumprun <ref type="bibr" target="#b0">[1]</ref> have demonstrated that, if architected in a particular way, pieces of communitysupported kernels like NetBSD can be used directly as libraries with no modifications. As another example,  Performance: When the interface to the application changes, performance can change for a few different reasons. Most obviously, although qemu shows the smallest kernel code use in Section 4, it is not a practical approach because of the performance implications of full emulation. In a throughput experiment <ref type="table" target="#tab_3">(Table 4</ref>) with a MirageOS HTTPS web server under a load of 1000 connections per second we observe similar throughput from kvm and tap but confirm the inefficiencies of qemu losing 91% of the performance. The mechanism itself also affects performance, for example, we have measured improvements from 2355 to 1094 cycles when comparing vmexits from the virtualization mechanism to sysenters for the process mechanism. Moreover, the level of the interface may affect the number of interface crossings; for example, a libOS may cross for each and every packet, whereas a native process may only perform one crossing for a large stream write. Finally, the quality of implementation may differ between libOS implementations and native kernel implementations (e.g., a highly-optimized network stack like the one in Linux, vs. a home-grown stack). As discussed above, it is possible that native kernel implementations can be reused in libOSes.</p><p>Metrics for isolation: We have largely focused on kernel code usage as a metric for isolation. However, there are many other metrics to consider. For example, a better metric for security may not be the size of the code reachable by the interface, but how many vulnerabilities are expected to be found in the code. Lock-in-pop <ref type="bibr" target="#b19">[20]</ref> is a system that uses libOS techniques to restrict kernel usage to popular code paths. Alternatively, an isolation mechanism may need to consider data sharing rather than code coverage, in which taint-tracking techniques may help. <ref type="bibr" target="#b11">[12]</ref> </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Conclusion</head><p>When thinking about isolation for the cloud, we should not view virtualization mechanisms as necessary but see them for what they are: overly complex ways to achieve a low-level interface. It is time to shed complexity and move on to a safer cloud without virtualization.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: (a) A libOS can have a low-level interface to the host, without the kernel complexity of a VM. For example, the application can implement its own user-level TCP/IP library (like lwip [9]). (b) Kernel functionality can be implemented in user-level components, such as FUSE [2] filesystems through microkernelification.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: The number of unique kernel functions accessed when serving HTTP. tcp inet ip sock sk net tun br skb packet napi total qemu 2 1 1 4 8 12 7 11 33 0 4 83 kvm 0 0 3 3 9 9 6 11 25 0 0 66 tap 2 1 1 4 9 12 7 11 33 0 4 84 socket 62 14 16 34 30 25 0 13 35 1 4 234</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="false"><head>) . The first two configurations are Name How much LibOS? Networking Description qemu all tap VM (unikernel) running on QEMU in emulation mode. kvm all tap VM (unikernel) running on QEMU with KVM. tap network stack tap Unix process using MirageOS network stack. socket none sockets Unix process built with MirageOS using host network stack.and kvm use the same imageprocesses. Both tap and socket are built with MirageOS, but tap uses the MirageOS network stack while socket uses the</head><label>.</label><figDesc>Linux host's network stack. Comparing these configurations should allow us to ob- serve the reduction in the kernel code usage achieved by applying a libOS technique, even if it is just on the net- work stack. To compute kernel code usage, we count the number of functions in the kernel that are invoked through an interface using the Linux kernel's ftrace functionality.</figDesc><table>Table 1: MirageOS configurations for kernel code usage experimentation. 
+
+VMs. Both qemu , however 
+one is run in emulation mode (qemu) while the other is 
+run with KVM assistance (kvm). Comparing these con-
+figurations should allow us to estimate the effects of us-
+ing KVM on the kernel code usage. The second two 
+configurations are </table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_1" validated="false"><head>Table 2 : Breakdown of network-related functions.</head><label>2</label><figDesc></figDesc><table></table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_2" validated="false"><head>Table 3 :</head><label>3</label><figDesc></figDesc><table>Breakdown of virtualization-related functions. 
+
+application of libOS techniques is enough to produce a 
+lower kernel code usage than traditional KVM/QEMU 
+virtualization. In particular, tap, through the use of the 
+libOS network stack, has a kernel code usage of about 
+80% of that of kvm, with 353 and 443 total calls respec-
+tively. </table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_3" validated="false"><head>Table 4 : Requests/second for HTTPS server under vari- ous configurations.</head><label>4</label><figDesc></figDesc><table>Stackmap [28] uses the Linux kernel's network stack in 
+userspace. 
+</table></figure>
+
+			<note place="foot" n="1"> For example, using virtualization mechanisms, a monitor may implement guards, whereas using process mechanisms, system call whitelisting (e.g., seccomp) may implement them.</note>
+
+			<note place="foot" n="2"> Although out of the scope of this paper, we note that new interface mechanisms are emerging with enclave technologies such as Intel Software Guard Extensions (SGX) [8]. Our point still applies: the interface level used on them is completely arbitrary.</note>
+
+			<note place="foot" n="3"> This observation holds in the other direction as well: virtualization mechanisms can be used for high-level interfaces, as in Dune [4].</note>
+		</body>
+		<back>
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title level="m" type="main">The rumprun unikernel and toolchain for various platforms</title>
+		<ptr target="https://github.com/rumpkernel/rumprun" />
+		<imprint>
+			<date type="published" when="2015-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title level="m" type="main">The reference implementation of the linux fuse (filesystem in userspace) interface</title>
+		<ptr target="https://github.com/libfuse/libfuse" />
+		<imprint>
+			<date type="published" when="2018-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arpaci-Dusseau</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">H</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arpaci-Dusseau</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">C</forename><surname>Operating</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Systems</surname></persName>
+		</author>
+		<title level="m">Three Easy Pieces, 0.91 ed. Arpaci-Dusseau Books</title>
+		<imprint>
+			<date type="published" when="2015-05" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Dune: Safe user-level access to privileged CPU features</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Belay</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Bittau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Mashtizadeh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Terei</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Mazi`eresmazi` Mazi`eres</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kozyrakis</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX OSDI</title>
+		<meeting>of USENIX OSDI<address><addrLine>Hollywood, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2012-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">QEMU, a fast and portable dynamic translator</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bellard</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX Annual Technical Conf. (FREENIX Track</title>
+		<meeting>of USENIX Annual Technical Conf. (FREENIX Track<address><addrLine>Anaheim, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2005-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title level="m" type="main">Includeos: A minimal, resource efficient unikernel for cloud services</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bratterud</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Walla</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A.-A</forename><surname>Haugerud</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Engel-Stad</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">E</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Begnum</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<monogr>
+		<title level="m" type="main">Page faults in user space</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Corbet</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+		<ptr target="https://lwn.net/Articles/615086/" />
+		<imprint>
+			<date type="published" when="2014-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<monogr>
+		<title level="m" type="main">Intel sgx explained. IACR Cryptology ePrint Archive</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Costan</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Devadas</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2016" />
+			<biblScope unit="page">86</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Design and implementation of the lwip tcp/ip stack</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dunkels</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Swedish Institute of Computer Science</title>
+		<imprint>
+			<biblScope unit="volume">2</biblScope>
+			<biblScope unit="page">77</biblScope>
+			<date type="published" when="2001" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">An historical examination of open source releases and their vulnerabilities</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Edwards</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chen</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2012 ACM Conference on Computer and Communications Security</title>
+		<meeting>the 2012 ACM Conference on Computer and Communications Security<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="183" to="194" />
+		</imprint>
+	</monogr>
+	<note>CCS &apos;12, ACM</note>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Exokernel: An operating system architecture for application-level resource management</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Engler</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">R</forename><surname>Kaashoek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">F</forename><surname>And O&amp;apos;toole</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">W</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of ACM SOSP (Copper Mountain</title>
+		<meeting>of ACM SOSP (Copper Mountain</meeting>
+		<imprint>
+			<date type="published" when="1995-12" />
+		</imprint>
+		<respStmt>
+			<orgName>CO</orgName>
+		</respStmt>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<monogr>
+		<title level="m" type="main">Towards practical taint tracking</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ermolinskiy</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Katti</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Shenker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Fowler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mccauley</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+		<idno>UCB/EECS-2010-92</idno>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+		<respStmt>
+			<orgName>EECS Department, University of California, Berkeley</orgName>
+		</respStmt>
+	</monogr>
+<note type="report_type">Tech. Rep.</note>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">A new programming interface for scalable network i/o</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Han</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Marshall</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Chun</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B.-G</forename><surname>And Ratnasamy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Megapipe</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 10th USENIX Conference on Operating Systems Design and Implementation</title>
+		<meeting>the 10th USENIX Conference on Operating Systems Design and Implementation<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="135" to="148" />
+		</imprint>
+	</monogr>
+	<note>OSDI&apos;12, USENIX Association</note>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Formal specification and verification of data separation in a separation kernel for an embedded system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Heitmeyer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">L</forename><surname>Archer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Leonard</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">I</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mclean</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 13th ACM Conference on Computer and Communications Security</title>
+		<meeting>the 13th ACM Conference on Computer and Communications Security<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2006" />
+			<biblScope unit="page" from="346" to="355" />
+		</imprint>
+	</monogr>
+	<note>CCS &apos;06, ACM</note>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">mtcp: a highly scalable user-level tcp stack for multicore systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeong</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Woo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Jamshed</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">A</forename><surname>Jeong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Ihm</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Han</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Park</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">NSDI</title>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="volume">14</biblScope>
+			<biblScope unit="page" from="489" to="502" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kantee</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">T</forename><surname>Al</surname></persName>
+		</author>
+		<title level="m">Flexible operating system internals: the design and implementation of the anykernel and rump kernels</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kivity</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Laor</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Costa</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Enberg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Harel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Marti</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zolotarov</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename></persName>
+		</author>
+		<title level="m">OSv optimizing the operating system for virtual machines</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Formal verification of an OS kernel</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Klein</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Elphinstone</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Heiser</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Andronick</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Cock</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Derrin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Elkaduwe</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Engelhardt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Kolanski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Norrish</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Sewell</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Tuch</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Winwood</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of ACM SOSP</title>
+		<meeting>of ACM SOSP<address><addrLine>Big Sky, MT</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2009-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Intel virtualization technology: Hardware support for efficient processor virtualzation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Leung</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Neiger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Rodgers</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Santoni</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Uhlig</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Intel Technology Journal</title>
+		<imprint>
+			<biblScope unit="volume">10</biblScope>
+			<date type="published" when="2006-08" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Lock-in-pop: securing privileged operating system kernels by keeping on the beaten path</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">I</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Dolan-Gavitt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Weber</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cappos</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Annual Technical Conference USENIX ATC</title>
+		<imprint>
+			<date type="published" when="2017" />
+			<biblScope unit="volume">17</biblScope>
+			<biblScope unit="page" from="1" to="13" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Scalable kernel tcp design and implementation for shortlived connections</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lin</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Mao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>He</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shi</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">SIGOPS Oper. Syst. Rev</title>
+		<imprint>
+			<biblScope unit="volume">50</biblScope>
+			<biblScope unit="page" from="339" to="352" />
+			<date type="published" when="2016-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">Unikernels: Library operating systems for the cloud</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Madhavapeddy</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Mortier</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Rotsos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Scott</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Singh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Gazagnaire</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Smith</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Hand</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Crowcroft</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of ACM ASPLOS</title>
+		<meeting>of ACM ASPLOS<address><addrLine>Houston, TX</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2013-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">My vm is lighter (and safer) than your container</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Manco</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Lupu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Schmidt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Mendes</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Kuenzer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Sati</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Yasukata</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Raiciu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Huici</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 26th Symposium on Operating Systems Principles</title>
+		<meeting>the 26th Symposium on Operating Systems Principles<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="218" to="233" />
+		</imprint>
+	</monogr>
+	<note>SOSP &apos;17, ACM</note>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<monogr>
+		<title level="m" type="main">Code complete. Pearson Education</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mcconnell</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2004" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<monogr>
+		<title level="m" type="main">Muen: An x86/64 separation kernel for high assurance</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Reto</forename><surname>Buerki</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adrian-Ken</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Rueegsegger</surname></persName>
+		</author>
+		<ptr target="http://muen.sk" />
+		<imprint>
+			<date type="published" when="2018-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">A study of modern linux api usage and compatibility: what to support when you&apos;re supporting</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tsai</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C.-C</forename><surname>Jain</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Abdul</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><forename type="middle">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Porter</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">E</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Eleventh European Conference on Computer Systems</title>
+		<meeting>the Eleventh European Conference on Computer Systems</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2016" />
+			<biblScope unit="page">16</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">A virtualized separation kernel for mixed-criticality systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">West</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Missimer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Danish</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Trans. Comput. Syst</title>
+		<imprint>
+			<biblScope unit="volume">34</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<biblScope unit="page">41</biblScope>
+			<date type="published" when="2016-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<analytic>
+		<title level="a" type="main">Stackmap: Low-latency networking with the os stack and dedicated nics</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yasukata</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Honda</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Santry</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eggert</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX Annual Technical Conference</title>
+		<imprint>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="43" to="56" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

@@ -1,0 +1,1402 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T04:28+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Spectre Returns! Speculation Attacks using the Return Stack Buffer</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Esmaeil</forename><forename type="middle">Mohammadian</forename><surname>Koruyeh</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Computer Science and Engineering Department</orgName>
+								<orgName type="institution">University of California</orgName>
+								<address>
+									<settlement>Riverside</settlement>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Khaled</forename><forename type="middle">N</forename><surname>Khasawneh</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Computer Science and Engineering Department</orgName>
+								<orgName type="institution">University of California</orgName>
+								<address>
+									<settlement>Riverside</settlement>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chengyu</forename><surname>Song</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">Computer Science and Engineering Department</orgName>
+								<orgName type="institution">University of California</orgName>
+								<address>
+									<settlement>Riverside</settlement>
+								</address>
+							</affiliation>
+						</author>
+						<author role="corresp">
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nael</forename><surname>Abu-Ghazaleh</surname></persName>
+							<email>naelag@ucr.edu</email>
+							<affiliation key="aff0">
+								<orgName type="department">Computer Science and Engineering Department</orgName>
+								<orgName type="institution">University of California</orgName>
+								<address>
+									<settlement>Riverside</settlement>
+								</address>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Spectre Returns! Speculation Attacks using the Return Stack Buffer</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>The recent Spectre attacks exploit speculative execution, a pervasively used feature of modern microprocessors, to allow the exfiltration of sensitive data across protection boundaries. In this paper, we introduce a new Spectre-class attack that we call SpectreRSB. In particular, rather than exploiting the branch predictor unit, SpectreRSB exploits the return stack buffer (RSB), a common pre-dictor structure in modern CPUs used to predict return addresses. We show that both local attacks (within the same process such as Spectre 1) and attacks on SGX are possible by constructing proof of concept attacks. We also analyze additional types of the attack on the kernel or across address spaces and show that under some practical and widely used conditions they are possible. Importantly, none of the known defenses including Ret-poline and Intel&apos;s microcode patches stop all SpectreRSB attacks. We believe that future system developers should be aware of this vulnerability and consider it in developing defenses against speculation attacks. In particular, on Core-i7 Skylake and newer processors (but not on In-tel&apos;s Xeon processor line), a patch called RSB refilling is used to address a vulnerability when the RSB under-fills; this defense interferes with SpectreRSB&apos;s ability to launch attacks that switch into the kernel. We recommend that this patch should be used on all machines to protect against SpectreRSB.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Speculative execution is a microarchitectural technique used pervasively to improve the performance of all modern CPUs. Recently, it has been shown that speculatively executed instructions can leave measurable side-effects in the processor caches and other shared structures even when the speculated instructions do not commit and their direct effects are not visible. Moreover, since these instructions are speculative, normal permission checks do not take effect until the instruction is committed. The recent Spectre attack <ref type="bibr" target="#b23">[23,</ref><ref type="bibr" target="#b12">13,</ref><ref type="bibr" target="#b31">31]</ref> has shown that this behavior can be exploited to expose information that is otherwise inaccessible. In the two variants of Spectre attacks, attackers either mistrain the branch predictor unit or directly pollute it to force the speculative execution of code that can enable exposure of the full memory of other processes and hypervisor.</p><p>Chen et al. demonstrated that known Spectre variants are able to expose information from SGX enclaves <ref type="bibr" target="#b2">[3]</ref>. New variants of Spectre that utilize other triggers for speculative execution have been introduced including speculative store bypass <ref type="bibr" target="#b17">[17]</ref>.</p><p>In this paper, we introduce a new attack vector Spectre like attacks that are not prevented by deployed defenses. Specifically, the attacks exploit the Return Stack Buffer (RSB) to cause speculative execution of the payload gadget that reads and exposes sensitive information. The RSB is a processor structure used to predict return address by pushing the return address from a call instruction on an internal hardware stack (typically of size 16 entries). When the return is encountered, the processor uses the top of the RSB to predict the return address to support speculation with very high accuracy.</p><p>We show that the RSB can be easily manipulated by user code: a call instruction, causes a value to be pushed to the RSB, but the stack can subsequently be manipulated by the user so that the return address no longer matches the RSB. We describe the behavior of RSB in more details in Section 3.</p><p>In Section 4, we show an RSB based attack that accomplishes the equivalent of Spectre variant 1 through manipulation of the RSB instead of mistraining the branch predictor; we use this scenario to explain the principles of the attack, even though it may not be practical. The RSB is shared among hardware threads that execute on the same virtual processor enabling inter-process (or even inter-vm) pollution of the RSB. Thus, in Section 5, we develop an attack that targets a different thread or process on the same machine. In Section 6, we present a third type of SpectreRSB: an attack against an SGX compartment where a malicious OS pollutes the RSB to cause a misspeculation that exposes data outside an SGX compartment. This attack bypasses all software and microcode patches on our SGX machine.</p><p>Section 7 overviews another potential attack targeting an unmatched return in the kernel code; we present this attack for completeness because it relies on a number of ingredients that are difficult to find in practice.</p><p>We show how these attacks interact with deployed defenses concluding that several practical deployments are vulnerable to SpectreRSB. Thus, we believe that SpectreRSB is as a dangerous speculation attack, that in some instances is not mitigated by the primary defenses against Spectre. It extends our understanding of the threat surface of speculation attacks, allowing future defenses to more effectively mitigate their risks. We discuss implications of the attack in Section 8.</p><p>Section 9 overviews related work, while Section 10 presents some concluding remarks. Disclosure: We reported these attacks to the security team at Intel. Although we did not demonstrate attacks on AMD and ARM processors, they also use RSBs to predict return addresses. Therefore, we also reported our results to AMD and ARM.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Speculation Attacks and Defenses</head><p>Speculative execution has been an important part of computer architecture starting from the 1950s. The IBM Stretch processor implemented a predict not-taken branch predictor to avoid stalling a processor pipeline when a branch is encountered <ref type="bibr" target="#b0">[1]</ref>. Computer architecture advanced rapidly starting in the early 1980s leading to rapid increase in the amount of speculation that is exploited with aggressive out-of-order execution. This speculation is supported by sophisticated branch predictor designs <ref type="bibr" target="#b41">[41,</ref><ref type="bibr" target="#b18">18,</ref><ref type="bibr" target="#b35">35]</ref> that are highly successful in predicting both the branch direction and its target address. In particular, the number of pipeline stages in production CPUs has continued to grow to the point where modern pipelines commonly have between 15 and 25 stages. With out-of-order execution, when a branch instruction stalls (e.g., due to a cache miss on which it depends), instructions that follow the branch are continuously being issued. Thus, the speculation window where instructions are getting executed speculatively can be large, typically limited by the size of structures such as the reorder buffer, which can hold a few hundred instructions.</p><p>Speculation is designed to not affect the correctness of a program. Although branch mispredictions occur and speculative instructions can ignore execution faults (e.g., permission error for memory access) these semantics were not considered harmful as mis-speculation will eventually be detected and the erroneously executed instructions will be squashed, leaving no directly visible changes to the program state held in structures such as registers and memory. Micro-architectural structures such as caches and Translation Look-aside Buffers (TLB) are affected by speculative operations, but the contents of such structures typically only affect performance, not the correctness of a program. In fact, prior work has shown that there are beneficial prefetching side-effects to speculatively executed instructions even those that are eventually squashed <ref type="bibr" target="#b33">[33]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">Speculation Attacks</head><p>Spectre attacks have recently shown that the speculation behavior of modern processors can be exploited. In general, these attacks exploit four properties:</p><p>• P1: branch prediction validation happens in deep in the CPU pipeline. As a result, speculative instructions near the branch can access unprivileged memory locations.</p><p>• P2: speculative instructions leave side-effects in micro-architectural structures such as caches, which can be inferred using well-known timing side channel attacks like Flush+Reload <ref type="bibr" target="#b40">[40]</ref> and Prime+Probe <ref type="bibr" target="#b29">[29]</ref>.</p><p>• P3: the branch predictor can be mistrained (Spectre 1), or directly polluted (Spectre 2). It is shared across all programs running on the same physical core <ref type="bibr" target="#b12">[13,</ref><ref type="bibr" target="#b23">23,</ref><ref type="bibr" target="#b5">6]</ref>, allowing code running in one privilege domain to manipulate branch prediction in another domain (e.g., kernel, VM, hypervisor, another process, or SGX enclave). Our attacks replace this step with speculation control through the RSB.</p><p>• P4: permission checks are performed deep in the pipeline and execution fault is generated only if the instruction is committed, enabling speculative instructions to access data outside its privilege domain;</p><formula xml:id="formula_0">if (offset &lt; array1_size) y = array2[array1[offset] * 64];</formula><p>Figure 1: Spectre attack variant 1</p><p>Spectre (Variant 1) is presented in <ref type="figure">Figure 1</ref>. In this code, a victim process reads values from array1 using the offset provided by the attacker. Then, the resulting value is used to perform an access into array2. As we discussed above, accesses into the array2 can be used by the attacker to deduce the value of the index. The index, in its turn, is controlled by the attacker since attacker controls the offset. Therefore, the attacker can use a carefully selected value of offset to read arbitrary memory address which then will result in cache access observable by the attacker. However, the if statement ensures there are no out of bounds memory accesses allowed. Unfortunately, the attacker can exploit speculative execution and behavior of branch predictor to force the victim process to perform an out of bounds memory access in the following way:</p><p>a) The attacker mistrains the branch predictor by executing the code several times with the value of the offset such that the if statement is true (branch instruction not-taken). b) Next, to make the speculative window larger, the attacker evicts array1 size from the cache, so that the CPU has to load the value from memory. Since the speculation result will not be resolved until this value arrives, forcing it to come from memory expands the size of the speculation window to allow more elaborate speculative gadgets to be executed.</p><p>c) Finally, the attacker chooses the malicious offset such that it be larger than array1 size. The trained branch predictor unit predicts the branch not-taken, so that the CPU executes two memory accesses speculatively and discloses the secret value through the cache side channel.</p><p>Prior work <ref type="bibr" target="#b5">[6]</ref> had shown that the branch predictor is shared among processes on the same core. So, one thread can pollute it for another across protection boundaries (including across VMs). Thus, the attacker can poison the branch target predictor for the victim and force it to speculatively execute the gadget which reveals the sensitive data within the victim. This is a dangerous attack because it allows cross process/cross VM Spectre attacks.</p><p>The closely related Meltdown attack relies on the fact that a permission check for memory access during normal out-of-order execution of an instruction can happen late in the instruction execution due to pipelining and instruction reordering (P4) allowing the CPU to load the privileged data until the permission is later checked. Unlike Spectre variants, Meltdown does not rely on using misspeculation. Since an exception eventually will be raised, this attack requires the ability to tolerate and recover from the raised exception.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">Defenses against Meltdown/Spectre</head><p>After the disclosure of Spectre and Meltdown in January, 2018 <ref type="bibr" target="#b12">[13,</ref><ref type="bibr" target="#b23">23,</ref><ref type="bibr" target="#b27">27]</ref>, a number of defenses were suggested.</p><p>Intel proposed defenses: Intel released a whitepaper <ref type="bibr" target="#b13">[14]</ref> suggesting three types of defenses.</p><p>• To mitigate Spectre V1 attack, Intel recommends inserting a LFENCE instruction after the branch as a barrier to stop speculative execution. This defense mechanism has now been adopted by compilers such as GCC <ref type="bibr" target="#b30">[30]</ref> and MSVC <ref type="bibr" target="#b32">[32]</ref>. However, this does not prevent attacks where the attacker controls the program and does not use LFENCE instructions.</p><p>• To mitigate Spectre V2 attack, Intel introduced three new processor interfaces through microcode updates <ref type="bibr" target="#b16">[16]</ref>:</p><p>-Indirect Branch Restricted Speculation (IBRS) prevents software running in higher privileged mode from using prediction results from software running in lower privileged mode.</p><p>-Single Thread Indirect Branch Predictors (STIBP) prevents code executing on one logical processor from impacting the indirect branch prediction of code executing on another logical processor.</p><p>-Indirect Branch Predictor Barrier (IBPB) stops software running before the barrier from affecting the indirect branch prediction of software running after the barrier.</p><p>• To mitigate Meltdown, Intel recommends unmapping more privileged domain (kernel space) during the execution of less privileged software, which has been adopted by all popular operating systems, including Windows, Linux, and macOS. This is the KPTI defense described below.</p><p>Kernel Page-Table Isolation (KPTI): Gruss et. al <ref type="bibr" target="#b10">[11]</ref> introduced a protection technique called KAISER to protect against side channel attacks bypassing kernel level address space randomization (KASLR) <ref type="bibr" target="#b11">[12]</ref>. The protection is based on unmapping kernel pages while in user mode, and remapping them on a mode switch to the kernel. As a result, misspeculation from user code is not able to access kernel memory, preventing Meltdown. It has been reported that KPTI can introduce substantial performance overhead <ref type="bibr" target="#b9">[10]</ref>. KPTI cannot prevent attacks within the same privilege mode (e.g., to access memory outside a sandbox) <ref type="bibr" target="#b1">[2,</ref><ref type="bibr" target="#b34">34]</ref>.</p><p>Return Trampoline (retpoline): retpoline <ref type="bibr" target="#b37">[37]</ref> is a software-based mitigation technique against indirect branch target injection attack (i.e., Spectre V2). It "exploits" two properties of the branch target prediction engine: (1) when executing a ret instruction, the predictor will utilize the return stack buffer (RSB) instead of the BTB; and (2) RSB cannot be polluted by attackers. The retpoline technique essentially swaps indirect branches for returns and deliberately pollutes the RSB with a useless gadget to control speculative execution. Retpoline protection requires access to source code and recompilation.</p><p>RSB refilling (also known as RSB stuffing) <ref type="bibr" target="#b14">[15]</ref>: on Intel's Core i7 processors starting from Skylake (which are called Skylake+), an underfill condition in the RSB where a return occurs when the RSB is empty causes the processor to speculate the return address through the branch predictor. Thus, defenses deployed to protect indirect branches against Spectre variant 2 fail in this situations since return instructions can cause a misspeculation through the branch predictor. To counter this situation, Skylake+ processors also implement RSB refilling (a software patch): every time there is a switch into the kernel, the RSB is intentionally filled with the address of a benign delay gadget (similar to Retpoline) to avoid the possibility of misspeculation. RSB refilling interferes with SpectreRSB, although it was designed for a completely different purpose. However, we note that all Core i7 processors prior to Skylake are not patched with RSB refilling and that different processor lines, importantly including the Intel Xeon which are the primary platform used on Intel-based cloud computing systems and servers, are also unpatched, leaving them vulnerable to SpectreRSB.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Attack Principles: Reverse Engineering the Return Stack Buffer</head><p>In this section, we explain the operation of the Return Stack Buffer (RSB), which is the microprocessor structure our attacks exploit to implement speculation attacks that bypass all existing defenses. On modern processors, sophisticated branch predictors are used to predict the direction and target of conditional and indirect branches and calls. Return instructions challenge such predictors because the return address depends on the call location from which a function invoked, which for many functions that are called from different locations of a program can lead to poor branch predictor performance. For example, consider a function such as printf() which may be called from many different locations of a program.</p><p>Relying on the previous history of where it returned to can lead to very low prediction performance through the branch predictor. We verify each of these mechanisms on two Intel processors (a Haswell and a Skylake).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">RSB Overview</head><p>To overcome this problem, the return address is predicted using the RSB as follows. The RSB is a hardware stack buffer where the processor pushes the return addresses every time a call instruction is executed and uses that as a return target prediction when the matching return is encountered. <ref type="figure">Figure 2a</ref> shows an example of the state of the RSB after two function calls (F1 and F2) have been executed. The figure also shows the state of the software stack for the program where the stack frame information and the return address of the function are stored. <ref type="figure">Fig- ure 2b</ref> shows how the values on these stacks are used when the return instruction from function F2 is executed. At this point, the return address from the fast shadow stack is used to speculate about the return address location quickly. The instructions executed at this point are considered speculative. Meanwhile, the return address is fetched from the software stack as part of the teardown of the function frame. The return address is potentially in main memory (not cached) and is received several hundred cycles later. Once the return address from the software stack is resolved, the result of the speculation is determined: if it matches the value from the RSB, the speculated instructions can be committed. If it does not, then a misspeculation has occurred and the speculatively executed instructions must be squashed. This behavior is similar to speculation through the branch predictor, except it is triggered by return instructions. Note that the misspeculation window could be substantially larger since the return could be issued out of order, and other dependencies have to be resolved before it is committed.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">RSB sources of misspeculation</head><p>The RSB misspeculates when the return address value in the RSB does not match the return address value in the software stack, leading the program to misspeculate to the address in the RSB. If this misspeculation can be triggered intentionally by an attacker, spectre like attacks become possible through the RSB. Thus, in this subsection, we explain the sources of misspeculation through the RSB, and discuss whether they provide a vector for attackers to trigger speculation attacks. We label these sources as S1 to S4 to be able to refer to them in the attack descriptions. S1: Overfill or Underfill of the RSB due to limited structure size: The RSB structure is typically sized to match common nesting depths of call stacks in programs.</p><p>On low-end machines, the RSB can be as shallow as 4 entries in size. More typically, on desktops, it is in the range of 16 entries, and for server class processors, it can be larger (e.g., 24 entries on the AMD Ryzen <ref type="bibr" target="#b7">[8]</ref>). As illustrated in <ref type="figure" target="#fig_0">Figure 3</ref>, when the RSB overfills, it typi-  cally overwrites the older entries in the stack. Eventually, when the stack is unrolled as the nested calls return, we reach the function whose value has been overwritten causing an underfill of the stack (in <ref type="figure" target="#fig_0">Figure 3</ref>, the entry for F1 got overwritten).</p><p>In an underfill, there is no value available on the RSB to guide speculation. Different CPUs handle this situation differently. For example, the Intel CPUs that we checked switch over to the branch predictor if the RSB is empty, which can be used to trigger attacks through the branch predictor <ref type="bibr" target="#b25">[25]</ref>. However, AMD appears not to follow this strategy. S2: Direct pollution of the RSB: This is the primary vector that we use in our proof of concept attacks. Call instructions implicitly push a return address to the RSB and the software stack. However, an attacker can then replace the address on the software stack (by writing directly to that location), or just remove it altogether (as shown in <ref type="figure">Figure 4a</ref>). In this case, the value in the RSB remains and does not match a value on the software stack causing misspeculation when a return is executed (as shown in <ref type="figure">Figure 4b)</ref>  <ref type="figure">Figure 4</ref>: Example of direct pollution of the RSB attacker can control the misspeculation address. It is also possible to convert a call instruction into a push and jmp, in which case a return value exists on the software stack that is not matched by a value in the RSB. A return could also be replaced by a pop and a jump, causing a value to remain in the RSB that has been removed from the software stack. S3: Speculative pollution of the RSB: speculatively executed calls push a value on the stack, although the details are specific to the architecture. Once misspeculation is discovered the call is squashed but the speculatively pushed return address remains on the RSB. This provides the opportunity for a malicious attacker to push a return address that is outside the address space accessible by the program (e.g., a kernel address) without raising an exception or having to handle the side effects of a call. 1 S4: RSB use across execution contexts: on a context switch the RSB values left over from an executing thread are reused by the next thread. Once we switch to a new thread, if the thread executes a return, then it will misspeculate to an address provided by the original thread. The same is true with a switch over to the Operating System (provided RSB refilling is not implemented), or to an SGX context.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">SpectreRSB: Basic attack example</head><p>In this section, we illustrate the attack principles by showing a basic speculation attack launched from a process to part of its address space that it cannot directly access (similar to Spectre variant 1 <ref type="bibr" target="#b12">[13]</ref>). This attack represents the simplest instance of SpectreRSB and therefore we use it to explain the attack in detail. It is unlikely to be practical: it is difficult to implement the gadget to manipulate the stack using high level sandboxing primitives to allow the attack to break sandbox boundaries. On an unpatched machine, this attack enables the attacker to read kernel memory via the Meltdown bug. However, KPTI prevents using it to allow user code to read kernel data. We note that this attack does not rely on any speculation through branches or the branch predictor. For this reason, the attack bypasses defenses that focus only on securing speculation through the branch predictor. Most of our experiments were conducted on the machines shown in <ref type="table" target="#tab_2">Table 1</ref>; the i7-6700 machine is a Core i7 Skylake with SGX2. <ref type="figure">Figure 5</ref> presents an overview of a basic SpectreRSB attack. The attack starts at line 22 with the call to speculative, with an argument which is the memory address of the sensitive data to be read. speculative calls gadget, which serves two purposes: (1) the return address is pushed to the RSB (the return address is to line 17 where we have the payload gadget to be executed speculatively); and (2) we jump to the (inline assembly) function gadget which will manipulate the software stack to create the mismatch between the RSB and the software stack. In this case, gadget cleans up the effects of the function call to itself, popping off the frame including the return address.</p><p>At this point, before the return, the stack state is consistent with a return from speculative back to main. However, the RSB holds a return value from gadget to speculative. Thus, in line 12 when the return executes, the CPU speculatively executes at line 17. The flush of the top of the stack (line 10) ensures that the true value of the return address will be fetched from memory rather than from the caches creating a large specuaddresses using S2 without raising an exception, but may be able to do that using S3 (we note that PhysMap is marked as non-executable in most recent Linux distributions.)  <ref type="figure">Figure 5</ref>: SpectreRSB basic attack example lation window. Note that the speculation window based on the return. Speculative execution at line 17 reads the secret which can be any mapped address even if inaccessible to the user process during normal execution and then communicates it out through the flush reload cache side channel by accessing a data dependent index in the Array (line 18). Finally, the real return value is obtained, and the misspeculation is squashed, returning us to line 23, where we probe the cache to identify which data dependent cache set was accessed to expose the value of the secret.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Attacks across different threads/processes</head><p>In this section, we investigate different vectors of SpectreRSB which exploit S4 (RSB use across execution context) to pollute the RSB. These attacks potentially allow an attacker to attack another process (Similar to Spectre V2), perhaps even across VMs, making the attack dangerous on the cloud. In general, these attacks require a machine not implementing RSB refilling (pre-Skylake, or Xeon, for example), to make sure that a context switch does not overwrite the polluted addresses from the RSB <ref type="figure" target="#fig_1">(Figure 6</ref>).</p><p>The attacker establishes co-location with the victim on the same core similar to Spectre 2. The attack pat-  <ref type="formula">(1)</ref> after a context switch to the attacker, s/he flushes shared address entries (for flush reload). The attacker also pollutes the RSB with the target address of a payload gadget in the victim's address space; (2) the attacker yields the CPU to the victim; (3) The victim eventually executes a return, causing speculative execution at the address on the RSB that was injected by the attacker. Steps 4 and 5 switch back to the attacker to measure the leakage.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1">Attack 2a: Attack across two colluding threads</head><p>In this attack, the attacker and the victim are two colluding threads following the steps in <ref type="figure" target="#fig_1">Figure 6</ref>. In the first attack, we let the two threads synchronize using futex operations to control their interleaving. The RSB pollution happens in the first thread which also flushes the top of the stack of the second thread, while the return happens in the second. The attack succeeded, proving that SpectreRSB works from one thread to another. However, since the return is in user mode, we cannot read kernel data. For the attack to be useful, we should either launch an attack such that the victim colluding thread returns while in the kernel (enabling us to read kernel data while its memory is mapped), or work across process boundaries such that the victim thread is a different process and we leak its sensitive data (attack 2c).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2">Attack 2b: Attack with two colluding threads with return from inside kernel</head><p>Next, we wanted to see if we can use this attack to cause a return while the victim thread is in the kernel mode in step 3. To ensure this, we have the colluding victim execute a blocking system call, which typically has them deep inside a call stack in the kernel before blocking. The attacker after polluting the RSB, waits for the victim to unblock, perhaps even triggering the event that unblocks it. At this point the victim continues execution inside the kernel, and recurses back out of its call stack, with one or more returns, triggering the vulnerability. This attack requires a machine without SMEP enabled. We demonstrated the attack with SMEP disabled.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.3">Attack 2c: Attacks across Process boundary</head><p>The attacks above assume two colluding threads. In principle, it can be generalized across different address spaces, but this requires overcoming some challenges. First, the attacker has to be able to identify gadgets existing in the victim binary instead of being able to use their own. This may also require them to recover the ASLR offset of the victim, but there are a number of existing attacks that make that possible. However, once these gadgets are found, the same attack pattern can follow by first polluting the RSB, then using eviction to remove the top of the stack containing the return address from the cache to extend the speculation window. Synchronization is difficult, but can be simplified if the attacker is able to trigger operations in the victim (e.g., if the victim is a server accepting connections). We did not create a PoC of this attack.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">SpectreRSB Atack 3: Attacks on SGX</head><p>Having established attack 1 of the SpectreRSB where the attacker pollutes the RSB for its own process to cause misspeculation, we next investigate whether SpectreRSB attacks work on SGX compartments (similar to SGXSpectre <ref type="bibr" target="#b2">[3]</ref>).</p><p>In this attack we consider, a malicious untrusted user code manipulates the RSB to try to cause misspeculation inside the enclave. In this attack, we pollute the RSB with the target address of a payload gadget from untrusted user code (this can equally be done by a malicious OS). Note that the gadget could be in the untrusted user code since user code and SGX enclaves share the same address space. The next step is to do an enclave call to switch it the trusted execution mode. The enclave call has to have an unmatched return to cause speculation execution at the address that was injected from the untrusted code. Finally, the untrusted code after returning from the enclave call can check the cache to record the leakage. Triggering an unmatched return: the RSB assumes that strictly paired call-return behavior. In attacks that cross execution boundaries, the attacker pollutes the RSB, but would then like to trigger a return in the victim process code (or OS/SGX code) to which they have no access. However, if the attacker manages to catch the victim inside of a function call, then when the victim executes again, it will encounter an unmatched return. This could rely on timing or a blocking call inside of a function that will cause the scheduler to unschedule the victim. In this Proof of Concept attack, we placed an unmatched return directly in the enclave, but we expect to be able to do that using the strategies above for other enclaves.</p><p>Attack results: This attack successfully works on fully patched machines. The attack bypasses all software and microcode patches:it bypasses Retpoline since no indirect jumps are used. It bypasses the microcode patches since they do not appear to limit speculation through the RSB. It bypasses RSB refilling (which is only implemented on Skylake+, but not on the Xeon processors) since no mode switches to the kernel are triggered during the attack. Thus, SGX is vulnerable to SpectreRSB even on fully patched machines.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Potential Attack 4: From user to Kernel</head><p>In this section, we briefly discuss the possibility of another attack where user code pollutes the RSB and then triggers an unmatched return in the kernel (we call this attack 4). This attack is likely to be difficult, if not impossible, so we describe it only for completeness. The main insight is that a return from the kernel to a polluted address in the RSB will cause speculation while in kernel mode. This means that the kernel address space is still mapped, allowing us to read from kernel. This attack assumes the following ingredients: (1) that the RSB is shared between the user and the kernel: we find that this is the case on two Intel processors; (2) We need to be able to trigger an unmatched return in the kernel. Although some programming constructs such as tail recursion, continuations, setjmp/longjmp and others can break call-return semantics, we have not attempted to find such unmatched returns in the kernel; and (3) We need to figure out the stack address of the kernel, and evict it from the cache. This last step is necessary to make sure that the speculation window is sufficiently large to execute a useful gadget speculatively (without this, we can only execute a gadget a few instructions long speculatively). Luckily, the mapping between the stack kernel address and the physical address is deterministic in Linux on x86-64 (it uses the Physmap address directly instead of double mapping it). This makes deriving the conflict set straightforward once we identify the kernel stack address.</p><p>We explore a proof of concept attack with an unmatched return in a kernel module that we build. Later, we discuss concrete possibilities for how to make this happen with multiple threads. The attack is shown in <ref type="figure" target="#fig_2">Figure 7</ref>, and works only on an unpatched machine or a machine not implementing RSB refilling. After polluting the RSB in steps 1-3, and flushing the top of the kernel stack in step 4, before issuing a system call to our kernel module with the unmatched return . The mis- matched return triggers a misspeculation to step 7 to execute in supervisor mode. This attack does not work on patched Skylake+ processors due to RSB refilling but works on the Xeon machine. We also discover that Supervisor Mode Execution Prevention (SMEP) checks are not speculatively bypassed since the speculative program counter is known at the time of speculation. Thus, the attack as shown requires SMEP to be disabled to enable the kernel to return to user code. An alternative strategy to bypass this limitation is to try to use the return address of the gadget in PhysMap (as discussed under S3 in Section 3), but most Linux distributions disable execution of PhysMap addresses. We only demonstrated the attack with SMEP disabled. We also assumed that we know the address of the kernel stack pointer to flush it in step 4.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="8">Discussion and Mitigations</head><p>In the first attack, a process launches an attack within the same address space either on the kernel or on data outside of its software containment. An attack from user mode to the kernel is possible in the original spectre: the BTB is poisoned, and then an indirect jump in the kernel space triggers the misspeculation to the payload. This attack is prevented by the Retpoline defense which only covers BTB poisoning, and assumes that the user code is compiled to use Retpoline. Importantly, none of the Intel microcode patches seem to restrict speculation through the RSB. In attack 2 of SpectreRSB, we attempted to carry out the attack across execution threads. Attack 2a demonstrates a practical attack across two colluding threads in the same process. Attack 2b, shows how two colluding threads can cooperate to make an attack like attack 4 more predictably execute a return in kernel mode. Finally, Attack 2c in principle can carry out a SpectreRSB attack across different processes, bypassing all known defenses. Although we did not demonstrate this attack completely yet, we believe that none of the defenses stop  Cross-process Attack 3</p><p>Return in SGX Attack 4</p><p>Kernel from user it and it should be considered a dangerous threat vector on the cloud. The attack on SGX bypasses all known defenses, including RSB refilling, and should be considered a dangerous open vulnerability on SGX systems. Changing the microcode patches to protect speculation through the RSB, or implementing RSB refilling upon entrance to SGX enclaves can potentially mitigate this vulnerability.</p><p>In Attack 4, our intuition was that a SpectreRSB attack that causes a return in the kernel to misspeculate would defeat both KPTI (in kernel mode, the kernel pages are available) and Retpoline (which only protects indirect jumps and calls, but not returns). While this is generally true, we discovered a number of complications that can be overcome under some conditions. RSB refilling, which is implemented on Intel Skylake+ processors, stops the attack. On other processors, SMEP prevents a return to a gadget in user space, however, a return to a gadget in kernel space if one can be identified is possible. Finally, we need to be able to determine the address of the top of the kernel stack in order to be able to evict, to increase the speculation window.</p><p>To mitigate SpectreRSB, we suggest that all processors, not just Skylake+ immediately support the RSB refilling patch which should interfere with all attacks that require a context switch to the kernel (attacks 3 and 4). Adding RSB refilling on an SGX enclave entrance should also be considered to stop attack 2. We also suggest that Intel microcode patches consider extending protection to the RSB, and not just the branch predictor. We summarize the proposed SpectreRSB attacks as well as their ability to bypass defenses in <ref type="table" target="#tab_4">Table 2</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="9">Related Work</head><p>In addition to the defenses against Meltdown and Spectre discussed in Section 2, we overview other potential defenses, as well as newly published related attacks. We first overview some of the defenses against side channel attacks on CPU caches, which are the primary channel used by the Meltdown and Spectre attacks to communicate privileged data out. We show that due to the fact that their threat model assumptions do not hold in speculation attacks, they fail to mitigate these attacks. Moreover, although making the cache secure protects the published proof of concept attacks, other side channels exist and it is straightforward to switch to them to communicate speculative data. Thus, a principled solution against speculation attacks should not rely on closing any particular side channel.</p><p>Software defenses against side channel attacks assume that the programmer and/or compiler are interested in preventing leakage from their program. In contrast, part of our threat model is an attacker that either writes the code to generate leakage, or identifies potential unintended code gadgets to cause the leakage. Thus, we believe that software side channel attacks are unlikely to provide beneficial defenses against speculation attacks. Hardware assisted cache side channel defenses: Since speculation attacks rely on a microarchitectural covert channel in the payload gadget to communicate the data out, defenses against side channel attacks are a potential approach to mitigate speculation attacks. One simple technique to make caches immune to side channel attacks is static partitioning to create isolation <ref type="bibr" target="#b4">[5]</ref>. Domnitser et al. propose a dynamically partitioned cache, providing isolation to limit leakage but also allowing some contention for performance <ref type="bibr" target="#b3">[4]</ref>. We note that partitioning does not prevent leakage from within the same process such as the attacks under Spectre variant 1 and Meltdown.Locking of critical data <ref type="bibr" target="#b38">[38,</ref><ref type="bibr" target="#b24">24,</ref><ref type="bibr" target="#b28">28]</ref> in the cache prevents it from being replaced by the attacker's prime or flush operations. The solution requires support from the OS, programming language, and compiler to mark the critical data, in addition to a bit for each cache line to indicate whether it is locked. The notion of sensitive data does not exist in the context of speculative attacks unless all out of bounds data is marked as sensitive (which would be impossible to fit in the caches). Randomization, exemplified by NewCache <ref type="bibr" target="#b39">[39]</ref>, randomizes the victim selection process on cache replacements, so that the attacker cannot glean useful information from its cache misses. The solution requires an index remapping table, extra bits in the cache to indicate which lines are subject to the random victim selection, and also support from the software layers to mark such critical data <ref type="bibr" target="#b39">[39]</ref>. <ref type="bibr">Kayaalp et al. [19]</ref> propose a defense that relaxes the inclusion property, which is a necessary component of the LLC attacks. Again, since an attack can be launched within the same process, neither randomization nor relaxed inclusion help with attacks within the same process (such as SpectreRSB attack 1 and 3, or the Meltdown bug). Hardware Solutions: It is almost certain that future generations of CPUs will be designed to mitigate Meltdown and Spectre class attacks. To protect against Meltdown, it is possible to move the permission checks earlier in the pipeline, preventing the temporary load of the secret data. It is likely that AMD and ARM already implement this defense. Protecting against Spectre (including SpectreRSB) is substantially more difficult. To this end, SafeSpec <ref type="bibr" target="#b22">[22]</ref> proposes using shadow hardware structures where speculative data resides. If the instructions fetching the data commit, the data is moved from these structures to the permanent structures (e.g., caches or TLBs). On the other hand, if an instruction is squashed, the data is discarded from the shadow structures. As a result, speculatively accessed data is never visible to committed instructions. SafeSpec requires additional space to store the shadow state, but results in modest improvements in the processor performance, while completely closing this class of vulnerabilities. PoisonIvy <ref type="bibr" target="#b26">[26]</ref> is an architectural solution to track speculative data and prevent it from being exposed outside of the chip. The threat model focuses on accessing data while speculating on integrity verification. They seek to prevent the data from being speculatively read and therefore observed by a physical attacker that monitors the memory bus. PoisonIvy supports this capability by using information flow tracking to track data that is generated past a speculative check or data that is dependent on it. PoisonIvy does not prevent side channel leakage from speculatively accessed data. PoisonIvy results in approximately 20% slowdown in CPU performance. Both of these proposals require deep redesign of the processor architecture and therefore cannot protect current systems. Other attacks: Since the disclosure of the Spectre/Meltdown attacks, two closely relevant attacks have also been reported <ref type="bibr" target="#b36">[36,</ref><ref type="bibr" target="#b2">3]</ref>. Utilizing a verification tool, Trippel et.al. <ref type="bibr" target="#b36">[36]</ref> discovered that by leveraging the invalidation message of cache coherence protocols, it is possible to replace Flush+Reload with Prime+Probe to retrieve the content fetched by speculative instructions. In the SGXPECTRE attack, Chen et al. <ref type="bibr" target="#b2">[3]</ref> demonstrated that it is possible to steal secret information from an SGX enclave using Spectre attack principles. <ref type="bibr">Evtyushkin et al. presented</ref> BranchScope, an attack that can pollute the direction predictor (rather than the target predictor) component of the branch predictor unit <ref type="bibr" target="#b6">[7]</ref>. Branchscope is likely to be less potent than attacks that poison the branch target buffer since it only controls the binary prediction of branch taken or not taken. It has not been demonstrated to be useful in a speculation attack, although it is possible that it can be. Although not a speculative attack, Branch Shadowing <ref type="bibr" target="#b25">[25]</ref> empties the RSB to force returns inside of an SGX compartment to use the branch predictor, leaving a side channel footprint (observable through a side channel attack on the branch target buffer) enabling the control flow to be tracked. Recently, a so called variant 4 of Spectre was disclosed <ref type="bibr" target="#b17">[17]</ref> which uses speculative store bypass: a speculation technique where load instructions speculatively execute without checking the load store queue for a preceding store. This technique represents another trigger for speculation, but it is not clear whether it can be used in practical attacks yet.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="10">Concluding Remarks</head><p>In this paper, we introduced a new type of speculation attacks (SpectreRSB) that is triggered by the Return Stack Buffer (RSB), rather than the branch predictor unit. The RSB is used to predict the address of return instructions. We demonstrated a number of vectors that allow an attacker to cause RSB misspeculation. Using these techniques, we construct a number of attack vectors including attacks within the same process, attacks on SGX enclaves, attacks on the kernel, and attacks across different threads and processes. SpectreRSB bypasses all published defenses against Spectre, making it a highly dangerous vulnerability.</p><p>Interestingly, there is a patch that was proposed to protect against the behavior of Intel Core i7 Skylake generation and newer processors called RSB refilling. RSB refilling interferes with SpectreRSB attacks that experience at least one mode switch from user to kernel. We recommend that this patch should be deployed immediately across all processor generations (and not just Skylake+). In the long run, we believe that these patches are ad hoc and that new attack vectors will continue to emerge. Current systems are fundamentally insecure unless speculation is disabled. However, we believe that it is possible to design future generations of CPUs that retain speculation but also close speculative leakage channels, for example by keeping speculative data in separate CPU structures than committed data.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: Example of overfill of RSB</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 6 :</head><label>6</label><figDesc>Figure 6: Attack 2: Basic Attack Flow</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 7 :</head><label>7</label><figDesc>Figure 7: Attack 4: Basic Attack Flow</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_1" validated="false"><head>.</head><label></label><figDesc></figDesc><table>By controlling the call address, the 
+
+main: 
+call F1 
+ret 
+F1: 
+call F2 
+ret 
+F2: 
+pop F2 frame 
+ret 
+
+F1 return 
+
+F2 return 
+
+code 
+
+RSB 
+
+F1 frame 
+
+F2 frame 
+
+Software stack 
+
+F2 frame 
+
+(a) Removing the current return 
+address from the software stack 
+
+main: 
+call F1 
+ret 
+F1: 
+call F2 
+ret 
+F2: 
+pop F2 frame 
+ret 
+
+F1 return 
+
+F2 return 
+
+code 
+
+RSB 
+
+F1 frame 
+
+Software stack 
+
+miss-matched 
+return address 
+
+(b) Return address in the RSB 
+and the software stack do not 
+match 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_2" validated="false"><head>1 .</head><label>1</label><figDesc></figDesc><table>Function gadget() 
+2. { 
+3. 
+push %rbp 
+4. 
+mov %rsp, %rbp 
+5. 
+pop %rdi 
+//remove frame/return address 
+6. 
+pop %rdi 
+//from stack stopping at 
+7. 
+pop %rdi 
+//next return address 
+8. 
+nop 
+9. 
+pop %rbp 
+10. 
+clflush (%rsp) //flush the return address 
+11. 
+cpuid 
+12. 
+retq 
+//triggers speculative return to 17 
+13. } 
+//committed return goes to 23 
+14. Function speculative(char *secret_ptr) 
+15. { 
+16. 
+gadget(); 
+//modify the Software stack 
+17. 
+secret = *secret_ptr; //Speculative return here 
+18. 
+temp &amp;= Array[secret * 256]; //Access Array 
+19. } 
+20. Function main() 
+21. { 
+22. 
+speculative(secret_address); 
+23. 
+for (i = 1 to 256) 
+//Actual return to here 
+24. 
+{ 
+25. 
+t1 = rdtscp(); 
+26. 
+junk = Array[i * 256]; //check cache hit 
+27. 
+t2 = rdtscp(); 
+28. 
+} 
+29. } 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_3" validated="false"><head>Table 1 : Experiment Environment</head><label>1</label><figDesc></figDesc><table>CPU Model 
+Kernel version 
+kernel patch 
+Intel patch 
+Machine1 
+Intel Xeon(R)-E51620 
+4.15.0-22-generic 
+Retpoline, Kpti 
+
+Machine2 Intel Core(TM)-i7-6700 
+4.4.117 
+Retpoline, Kpti, RSB refilling 
+
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_4" validated="false"><head>Table 2 :</head><label>2</label><figDesc></figDesc><table>Attack senarios vs. defense mechanisms (attack can bypass defence or otherwise). KPTI prevents reads 
+from user mode to kernel memory but not reads from user to user or from kernel to kernel. 
+
+Attack no 
+Attack Name 
+lfence IBRS STUBP IBPB retpoline RSB refilling SMEP/SMAP 
+Attack 1 
+Same-process 
+
+
+
+
+
+
+
+Attack 2a Colluding threads (user) 
+
+
+
+
+
+
+
+Attack 2b Colluding threads (kernel) 
+
+
+
+
+
+
+
+Attack 2c 
+</table></figure>
+
+			<note place="foot" n="1"> We did not use this vector, but its conceivable to use it to bypass Supervisor Mode Execution Prevention (SMEP) [9] to jump to a kernel gadget. For example, the user may attempt to jump to user code in PhysMap implementing a ret2dir [21] rather than a ret2usr [20] attack; the difficulty is that the user cannot pollute the RSB with kernel</note>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgements</head><p>The authors would like to thank the reviewers, and especially the paper's shepherd Daniel Gruss, for their valuable comments and suggestions which substantially improved the paper. This paper was made possible by NPRP grant 8-1474-2-626 from the Qatar National Research Fund (a member of Qatar Foundation). The statements made herein are solely the responsibility of the authors.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">The engineering design of the Stretch computer</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bloch</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Eastern Joint IRE-AIEE-ACM Computer Conference</title>
+		<imprint>
+			<date type="published" when="1959" />
+		</imprint>
+	</monogr>
+	<note>Papers Presented at the</note>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Fast byte-granularity software fault isolation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Castro</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Costa</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Martin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J.-P</forename><surname>Peinado</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Akritidis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Donnelly</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Barham</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>And Black</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM SIGOPS 22nd symposium on Operating systems principles</title>
+		<meeting>the ACM SIGOPS 22nd symposium on Operating systems principles</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="45" to="58" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chen</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Xiao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Lin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lai</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">H</forename></persName>
+		</author>
+		<idno type="arXiv">arXiv:1802.09085</idno>
+		<title level="m">SGXPECTRE attacks: Leaking enclave secrets via speculative execution</title>
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+<note type="report_type">arXiv preprint</note>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Non-monopolizable caches: Lowcomplexity mitigation of cache side-channel attacks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Domnitser</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Jaleel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Loew</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Abu-Ghazaleh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ponomarev</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">In ACM Transactions on Architecture and Code Optimization</title>
+		<imprint>
+			<date type="published" when="2012-01" />
+			<publisher>TACO</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Partitioned cache architecture as a side-channel defense mechanism</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Page</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">In Crypt. ePrint Arch</title>
+		<imprint>
+			<date type="published" when="2005" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Jump over ASLR: Attackiung branch predictors to bypass aslr</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Evtyushkin</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Ponomarev</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Abu-Ghazaleh</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. IEEE International Symposium on Microarchitecture (MICRO)</title>
+		<meeting>IEEE International Symposium on Microarchitecture (MICRO)</meeting>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">BranchScope: A new side-channel attack on directional branch predictor</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Evtyushkin</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Riley</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Abu-Ghazaleh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ponomarev</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Twenty-Third International Conference on Architectural Support for Programming Languages and Operating Systems</title>
+		<meeting>the Twenty-Third International Conference on Architectural Support for Programming Languages and Operating Systems</meeting>
+		<imprint>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="693" to="707" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<monogr>
+		<title level="m" type="main">The microarchitecture of Intel, AMD and VIA CPUs. an optimization guide for assembly programmers and compiler makers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fog</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+		<ptr target="http://www.agner.org/optimize/microarchitecture.pdf" />
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<monogr>
+		<title level="m" type="main">Technology insight: Intel next generation microarchitecture codename ivy bridge</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">George</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Piazza</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jiang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename></persName>
+		</author>
+		<ptr target="http://www.intel.com/idf/library/pdf/sf_2011/SF11_SPCS005_101F.pdf" />
+		<imprint>
+			<date type="published" when="2011-09" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<monogr>
+		<title level="m" type="main">KAISER meltdown initial performance regressions</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gregg</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Kpti/</surname></persName>
+		</author>
+		<ptr target="http://www.brendangregg.com/blog/2018-02-09/kpti-kaiser-meltdown-performance.html" />
+		<imprint>
+			<date type="published" when="2018-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">KASLR is dead: long live KASLR</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gruss</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Lipp</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Schwarz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Fellner</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Mau-Rice</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mangard</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">International Symposium on Engineering Secure Software and Systems</title>
+		<imprint>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="161" to="176" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Prefetch side-channel attacks: Bypassing SMAP and Kernel ASLR</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gruss</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Maurice</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Fogh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Lipp</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Man-Gard</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM SIGSAC Conference on Computer and Communications Security (CCS</title>
+		<meeting>the ACM SIGSAC Conference on Computer and Communications Security (CCS</meeting>
+		<imprint>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="368" to="379" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<monogr>
+		<title level="m" type="main">Reading privileged memory with a side-channel</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Horn</surname></persName>
+		</author>
+		<ptr target="https://googleprojectzero.blogspot.com/2018/01/reading-privileged-memory-with-side.html" />
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<monogr>
+		<title level="m" type="main">Intel analysis of speculative execution side channels</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Intel</surname></persName>
+		</author>
+		<ptr target="https://newsroom.intel" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<monogr>
+		<title level="m" type="main">A branch target injection mitigation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Intel</forename><surname>Retpoline</surname></persName>
+		</author>
+		<ptr target="https://software.intel" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<monogr>
+		<title level="m" type="main">Retpoline-A-Branch-Target-Injection-Mitigation. pdf</title>
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<monogr>
+		<title level="m" type="main">Speculative execution side channel mitigations</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Intel</surname></persName>
+		</author>
+		<ptr target="https://software.intel.com/sites/default/files/managed/c5/63/336996-Speculative-Execution-Side-Channel-Mitigations.pdf" />
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<monogr>
+		<title level="m" type="main">Speculative store bypass bug cve</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Intel</forename><surname>Corp</surname></persName>
+		</author>
+		<ptr target="https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2018-3639" />
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+<note type="report_type">CVE 2018-3639</note>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Dynamic branch prediction with perceptrons</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jiménezjim´jiménez</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lin</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. International Symposium on HighPerformance Computer Architecture (HPCA</title>
+		<meeting>International Symposium on HighPerformance Computer Architecture (HPCA</meeting>
+		<imprint>
+			<date type="published" when="2001" />
+			<biblScope unit="page" from="197" to="206" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">RIC: relaxed inclusion caches for mitigating LLC side-channel attacks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kayaalp</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Khasawneh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><forename type="middle">N</forename><surname>Esfeden</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">A</forename><surname>El-Well</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Abu-Ghazaleh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Ponomarev</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jaleel</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Design Automation Conference (DAC</title>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Lightweight kernel protection against return-to-user attacks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kemerlis</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Portokalidis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Keromytis</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Kguard</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX Security Symposium</title>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">ret2dir: Rethinking kernel isolation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kemerlis</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><forename type="middle">P</forename><surname>Polychronakis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Keromytis</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">D</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">23rd USENIX Security Symposium (USENIX Security 14)</title>
+		<meeting><address><addrLine>San Diego, CA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="957" to="972" />
+		</imprint>
+	</monogr>
+	<note>USENIX Association</note>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<monogr>
+		<title level="m" type="main">Banishing the spectre of a meltdown with leakage-free speculation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Khasawneh</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><forename type="middle">N</forename><surname>Koruyeh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">M</forename><surname>Song</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Ev-Tyushkin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Ponomarev</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Abu-Ghazaleh</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Safespec</surname></persName>
+		</author>
+		<idno type="arXiv">arXiv:1806.05179</idno>
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+<note type="report_type">arXiv preprint</note>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kocher</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Genkin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Gruss</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Haas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Hamburg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Lipp</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Mangard</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Prescher</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Schwarz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yarom</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename></persName>
+		</author>
+		<idno type="arXiv">arXiv:1801.01203</idno>
+		<title level="m">Spectre attacks: Exploiting speculative execution</title>
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">Hardware-software integrated approaches to defend against software cache-based side channel attacks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kong</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Aclicmez</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O</forename><surname>Seifert</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhou</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Int. Symp. on High Performance Comp. Architecture (HPCA</title>
+		<imprint>
+			<date type="published" when="2009-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">Inferring fine-grained control flow inside SGX enclaves with branch shadowing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lee</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Shih</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M.-W</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gera</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Peinado</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">26th USENIX Security Symposium, USENIX Security</title>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">Safe speculation for secure memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lehman</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">S</forename><surname>Hilton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lee</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">C</forename><surname>Poisonivy</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">IEEE/ACM International Symposium on Microarchitecture (MICRO) (2016)</title>
+		<imprint>
+			<biblScope unit="page" from="1" to="13" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lipp</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Schwarz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Gruss</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Prescher</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Haas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Mangard</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Kocher</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Genkin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Yarom</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hamburg</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Meltdown</surname></persName>
+		</author>
+		<idno type="arXiv">arXiv:1801.01207</idno>
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Catalyst: Defeating last-level cache side channel attacks in cloud computing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Liu</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Ge</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Q</forename><surname>Yarom</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Mckeen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Rozas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Heiser</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lee</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. 22nd IEEE Symposium on High Performance Computer Architecture (HPCA)</title>
+		<meeting>22nd IEEE Symposium on High Performance Computer Architecture (HPCA)</meeting>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<analytic>
+		<title level="a" type="main">Last-level cache side-channel attacks are practical</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Liu</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Yarom</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Ge</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Q</forename><surname>Heiser</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lee</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">B</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Security and Privacy (SP)</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="605" to="622" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">U</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename></persName>
+		</author>
+		<ptr target="https://gcc.gnu.org/ml/gcc-patches/2018-01/msg00422.html" />
+		<title level="m">Spectre bug disclosure</title>
+		<imprint>
+			<date type="published" when="2018" />
+			<biblScope unit="volume">86</biblScope>
+			<biblScope unit="page" from="2017" to="5715" />
+		</imprint>
+	</monogr>
+	<note>patch 0/5</note>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<monogr>
+		<title level="m" type="main">Analyzing the security implications of speculative execution in CPUs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Maisuradze</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>And Rossow</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Speculose</surname></persName>
+		</author>
+		<idno type="arXiv">arXiv:1801.04084</idno>
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+<note type="report_type">arXiv preprint</note>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<monogr>
+				<ptr target="https://blogs.msdn.microsoft.com/vcblog/2018/01/15/spectre-mitigations-in-msvc/" />
+		<title level="m">MICROSOFT. Spectre mitigations in MSVC</title>
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<analytic>
+		<title level="a" type="main">An analysis of the performance impact of wrong-path memory references on out-of-order and runahead execution processors</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mutlu</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O</forename><surname>Patt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><forename type="middle">N</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kim</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Armstrong</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">N</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Transactions on Computers</title>
+		<imprint>
+			<biblScope unit="volume">54</biblScope>
+			<biblScope unit="page" from="1556" to="1571" />
+			<date type="published" when="2005" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<analytic>
+		<title level="a" type="main">Adapting software fault isolation to contemporary cpu architectures</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sehr</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Muth</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Biffle</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Khimenko</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Pasko</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Schimpf</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yee</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chen</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX Security Symposium</title>
+		<imprint>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="1" to="12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Seznec</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Tage-Sc-L Branch Predictors</surname></persName>
+		</author>
+		<ptr target="https://hal.inria.fr/hal-01086920/document" />
+		<title level="m">Proc. of the 4th Championship on Branch Prediction</title>
+		<meeting>of the 4th Championship on Branch Prediction</meeting>
+		<imprint>
+			<date type="published" when="2014-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b36">
+	<monogr>
+		<title level="m" type="main">Meltdownprime and spectreprime: Automatically-synthesized attacks exploiting invalidation-based coherence protocols</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Trippel</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Lustig</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Martonosi</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+		<idno type="arXiv">arXiv:1802.03802</idno>
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+<note type="report_type">arXiv preprint</note>
+</biblStruct>
+
+<biblStruct xml:id="b37">
+	<monogr>
+		<title level="m" type="main">Retpoline: a software construct for preventing branch-target-injection</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Turner</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename></persName>
+		</author>
+		<ptr target="https://support.google.com/faqs/answer/7625886" />
+		<imprint>
+			<date type="published" when="2018" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b38">
+	<analytic>
+		<title level="a" type="main">New cache designs for thwarting software cache-based side channel attacks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lee</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. International Symposium on Computer Architecture (ISCA)</title>
+		<meeting>International Symposium on Computer Architecture (ISCA)</meeting>
+		<imprint>
+			<date type="published" when="2007-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b39">
+	<analytic>
+		<title level="a" type="main">A novel cache architecture with enhanced performance and security</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lee</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. International Symposium on Microarchitecture (MICRO)</title>
+		<meeting>International Symposium on Microarchitecture (MICRO)</meeting>
+		<imprint>
+			<date type="published" when="2008-12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b40">
+	<analytic>
+		<title level="a" type="main">Flush+ reload: A high resolution, low noise, l3 cache side-channel attack</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yarom</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Falkner</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX Security Symposium</title>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="719" to="732" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b41">
+	<analytic>
+		<title level="a" type="main">Alternative implementations of two-level adaptive branch prediction</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yeh</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T.-Y</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Patt</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><forename type="middle">N</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM SIGARCH Computer Architecture News</title>
+		<imprint>
+			<date type="published" when="1992" />
+			<biblScope unit="volume">20</biblScope>
+			<biblScope unit="page" from="124" to="134" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

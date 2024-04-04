@@ -1,0 +1,1390 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T03:06+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Software Defined Traffic Measurement with OpenSketch</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Minlan</forename><surname>Yu</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lavanya</forename><surname>Jose</surname></persName>
+							<affiliation key="aff1">
+								<orgName type="institution">Princeton University</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<affiliation key="aff0">
+								<orgName type="laboratory">Rui Miao † † University of Southern California</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Software Defined Traffic Measurement with OpenSketch</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Most network management tasks in software-defined networks (SDN) involve two stages: measurement and control. While many efforts have been focused on network control APIs for SDN, little attention goes into measurement. The key challenge of designing a new measurement API is to strike a careful balance between generality (supporting a wide variety of measurement tasks) and efficiency (enabling high link speed and low cost). We propose a software defined traffic measurement architecture OpenSketch, which separates the measurement data plane from the control plane. In the data plane, OpenSketch provides a simple three-stage pipeline (hashing, filtering, and counting), which can be implemented with commodity switch components and support many measurement tasks. In the control plane, OpenSketch provides a measurement library that automatically configures the pipeline and allocates resources for different measurement tasks. Our evaluations of real-world packet traces, our prototype on NetFPGA, and the implementation of five measurement tasks on top of OpenSketch, demonstrate that OpenSketch is general, efficient and easily programmable.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Recent advances in software-defined networking (SDN) have significantly improved network management. Network management involves two important stages: (1) measuring the network in real time (e.g., identifying traffic anomalies or large traffic aggregates) and then (2) adjusting the control of the network accordingly (e.g., routing, access control, and rate limiting). While there have been many efforts on designing the right APIs for network control (e.g., OpenFlow <ref type="bibr" target="#b24">[29]</ref>, ForCES <ref type="bibr">[1]</ref>, rulebased forwarding <ref type="bibr" target="#b28">[33]</ref>, etc.), little thought has gone into designing the right APIs for measurement. Since control and measurement are two important halves of network management, it is important to design and build a new software-defined measurement architecture. The key challenge is to strike a careful balance between generality (supporting a wide variety of measurement tasks) and efficiency (enabling high link speed and low cost).</p><p>Flow-based measurements such as NetFlow <ref type="bibr">[2]</ref> and sFlow <ref type="bibr" target="#b38">[42]</ref> provide generic support for different measurement tasks, but consume too resources (e.g., CPU, memory, bandwidth) <ref type="bibr" target="#b23">[28,</ref><ref type="bibr" target="#b13">18,</ref><ref type="bibr" target="#b14">19]</ref>. For example, to identify the big flows whose byte volumes are above a threshold (i.e., heavy hitter detection which is important for traffic engineering in data centers <ref type="bibr" target="#b1">[6]</ref>), NetFlow collects flow-level counts for sampled packets in the data plane. A high sampling rate would lead to too many counters, while a lower sampling rate may miss flows. While there are many NetFlow improvements for specific measurement tasks (e.g., <ref type="bibr" target="#b44">[48,</ref><ref type="bibr" target="#b14">19]</ref>), a different measurement task may need to focus on small flows (e.g., anomaly detection) and thus requiring another way of changing NetFlow. Instead, we should provide more customized and dynamic measurement data collection defined by the software written by operators based on the measurement requirements; and provide guarantees on the measurement accuracy.</p><p>As an alternative, many sketch-based streaming algorithms have been proposed in the theoretical research community <ref type="bibr" target="#b2">[7,</ref><ref type="bibr" target="#b7">12,</ref><ref type="bibr" target="#b42">46,</ref><ref type="bibr" target="#b3">8,</ref><ref type="bibr" target="#b15">20,</ref><ref type="bibr" target="#b43">47]</ref>, which provide efficient measurement support for individual management tasks. However, these algorithms are not deployed in practice because of their lack of generality: Each of these algorithms answers just one question or produces just one statistic (e.g., the unique number of destinations), so it is too expensive for vendors to build new hardware to support each function. For example, the Space-Saving heavy hitter detection algorithm <ref type="bibr" target="#b3">[8]</ref> maintains a hash table of items and counts, and requires customized operations such as keeping a pointer to the item with minimum counts and replacing the minimum-count entry with a new item, if the item does not have an entry. Such al-gorithms require not only a customized switch chip (or network processor) to implement, but also are hard to change for a better solution in the future. Instead, we should design a simple, efficient data plane that is easy to implement with commodity switch components, while leaving those customized data analysis to the software part in the controller.</p><p>Inspired by OpenFlow which enables simple and efficient control of switches by separating control and data functions, we design and implement a new softwaredefined traffic measurement architecture OpenSketch. OpenSketch provides a generic and efficient measurement solution, by separating the measurement control and data plane functions <ref type="figure" target="#fig_0">(Figure 1</ref>). Like OpenFlow, OpenSketch keeps the data plane simple to implement and flexible to configure, while enabling flexible and easy programming for different measurement tasks at the controller. OpenSketch's measurement support, together with OpenFlow-like control support, can form a complete measure and control loop for software-defined networking. We expect that OpenSketch will foster more network management solutions using measurement data and theoretical innovations in measurement algorithms.</p><p>We made two major contributions in OpenSketch: First, OpenSketch redesigns the measurement APIs at switches to be both generic and efficient. Unlike flow-based measurement, OpenSketch allows more customized and thus more efficient data collection with respect to choosing which flow to measure (using both hashing and wildcard rules), which data to measure (more than just byte/packet counters, such as the average flow size), and how to store the measurement data (more compact data structures rather than simple five tuples plus per-flow counters). We design a three-stage data plane pipeline that supports many measurement tasks with simple configurations, operates at high link speed with limited memory, and works with commodity hardware components.</p><p>Second, OpenSketch makes measurement programming easier at the controllers by freeing operators from understanding the complex switch implementations and parameter tuning in diverse sketches. We build a measurement library which automatically configures the data plane pipeline for different sketches and allocates the switch memory across tasks to maximize accuracy. The OpenSketch measurement library also makes it easier for operators to apply new theoretical research results of sketches and streaming algorithms upon commodity switch components.</p><p>We compare OpenSketch with NetFlow and streaming algorithms using packet traces from CAIDA <ref type="bibr" target="#b37">[41]</ref>, and show that OpenSketch provides a good accuracymemory tradeoff. We build an OpenSketch data plane prototype on NetFPGA, which shows no additional overhead on switch data plane. Both OpenSketch data and control plane codes are publicly available <ref type="bibr" target="#b0">[5]</ref>.</p><p>Although OpenSketch is sketch-based, it can support a wide variety of measurement tasks because different sketches already support tasks including counting a set of flows, measuring various traffic statistics, and identifying specific flows. In order to make OpenSketch simple enough to implement with commodity hardware and operate at line rate, OpenSketch does not support all the traffic measurement tasks. For example, the OpenSketch data plane does not provide complex data structures (e.g, binary search tree used in some sketches <ref type="bibr" target="#b4">[9]</ref>) or directly support all measurement algorithms (e.g., flow size distribution). Instead, we rely on the software in the controller to implement these complex data structures and algorithms using simpler sketches in the data plane.</p><p>With our OpenSketch platform, we implement five measurement tasks (e.g., heavy hitter detection, flow size distribution calculation) using the measurement library with 15-170 lines of code.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Background on Sketches</head><p>Sketches are compact data structures used in streaming algorithms to store summary information about the state of packets. Compared to flow-based counters, sketches have two key properties:</p><p>(1) Low memory usage: The size of summary information (sketch outputs) is significantly smaller than the input size. For example, the bitmap <ref type="bibr" target="#b16">[21]</ref> is a simple sketch that maintains an array of bits to count the number of unique elements (e.g., IP source addresses). We hash each item in a stream of elements to one of the b bits in the bitmap and set the bit to 1. The number of unique elements can be estimated by b × ln(b/z) where z is the number of unset bits. Another example is the Count-Min sketch, which maintains a two dimensional array A of counters with width w and depth k. Each entry in the array is initially zero. For each element x, we perform the k pair-wise independent hash functions and increment the counts at A[i, h i (x)](i = 1..k). To get the frequency for an element x, we just perform the same k hash functions, get k counters from the Count-Min sketch, and report the minimum counter among them.</p><p>(2) Provable tradeoffs of memory and accuracy: Sketches often provide a provable tradeoff between memory and accuracy, though the definition of accuracy depends on the actual sketch function. For a bitmap of b bits, the error in the estimated countˆncountˆ countˆn compared to the real value n is SD(</p><formula xml:id="formula_0">ˆ n/n) ≈ √ e ρ − ρ − 1/(ρ √ b)</formula><p>, where ρ is the average number of flows that hash to a bit <ref type="bibr" target="#b16">[21]</ref>. In the Count-Min sketch, the relative error in terms of total count is ε cm = e ×t × H cm /C cm , where H cm is the number of hash functions and the e is Euler's constant, t is the number of bytes per counter, and C cm is its total memory in bytes. Note that the bound is for the worst-case traffic and thus independent of the traffic characteristics. If we have a better understanding of the traffic then we can have a tighter bound for the memory-accuracy tradeoff. For example, for the Count-Min sketch, if we can estimate the distribution skew of the elements in the stream (e.g., a Zipfian parameter of α), we can have a tighter estimation of the error rate (e × t × H cm /C cm ) max(1,α) <ref type="bibr" target="#b9">[14]</ref>.</p><p>Example measurement solutions built on sketches: Sketches can be used for many measurement tasks such as heavy hitters detection <ref type="bibr" target="#b3">[8]</ref>, traffic change detection <ref type="bibr" target="#b32">[36]</ref>, flow size distribution estimation <ref type="bibr" target="#b22">[27]</ref>, global iceberg detection <ref type="bibr" target="#b20">[25]</ref>, and fine-grained delay measurement <ref type="bibr" target="#b30">[35]</ref>. For example, to count the number of unique sources accessing a web server via port 80, we can simply filter the traffic based on port 80 and then use a bitmap to count the number of unique source addresses. Another example is heavy hitter detection <ref type="bibr" target="#b3">[8]</ref>, which is important for traffic engineering in data centers <ref type="bibr" target="#b1">[6]</ref>. Heavy hitters are those large flows that consume more than a fraction T of the link capacity during a time interval. To identify heavy hitters, we first use a Count-Min sketch to maintain the counts for each flow. Then, we identify potential flows that hashed to heavy counters in a reversible sketch <ref type="bibr" target="#b32">[36]</ref>, and verify their actual count using the Count-Min sketch. <ref type="bibr">1</ref> </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">OpenSketch Data Plane</head><p>In this section, we first describe the design of OpenSketch data plane. We want to be generic and support various measurement tasks but we also want to be efficient and save switch memory (TCAM, SRAM) and use only a few simple hash functions. Next, we discuss how to implement such a data plane with commodity switch <ref type="bibr">1</ref> To insert an element in the reversible sketch, we perform multiple modular hash functions on the same key, and increment counters at multiple places. To get the original key, we reverse the modular hash values of the heavy bins, intersect them to get a small set of potential keys. We discuss the technical details of implementing and using reversible sketch in our technical report <ref type="bibr" target="#b40">[44]</ref>. hardware at line rate. Finally, we use several example sketches to show how to configure the simple data plane to meet different requirements.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Generic and efficient data plane</head><p>A measurement data plane consists of two functions: picking the packets to measure and storing/exporting the measurement data. OpenSketch allows more customized and efficient ways to pick which packets and which data to measure by leveraging a combination of hashing and wildcard rules. OpenSketch also allows more flexible collection of measurement data by breaking the tight bindings between flows and counters. It reduces the amount of data to store and export using more compact data structures.</p><p>Picking the packets to measure: OpenSketch shows that a combination of hashing and classification can support a wide variety of ways of picking which packets to measure. Hashes can be used to provide a compact summary of the set of flows to measure. For example, to count the traffic to a set of servers, we can use hashing to provide a compact representation of the set of servers (e.g., Bloom filter). To count the number of redundant packets with the same content, we can hash on the packet body into a short fingerprint rather than store and compare the entire packet body every time. Hashes also enable a provable accuracy and memory tradeoff.</p><p>Classification is also useful for focusing on some specific flows. For example, a cloud operator may need to identify the popular flows from a specific tenant or identify the DDoS attack targets within a list of web servers. Therefore, we need a classification stage to measure different flows with different number of counters or with different levels of accuracy. For example, if there is too much traffic from the IP address 192.168.1.1, we can filter out packets from 192.168.1.1/32 i.e. use one counter to count traffic from the specific IP and another to count remaining traffic of interest from the subnet 192.168.1.0/24. For classifying flows, we can specify wildcard rules that match packets on flow fields and allow some bits in the flow fields to be "don't care". For example, the rule can match packets on source IP prefix 192.168.1.0/24, where the lower 8 bits are "don't care" bits.</p><p>Storing and exporting the data: OpenSketch uses a small table with complex indexing. Each entry in the table only contains the counters without the flow fields. These counters can be associated with different entities like a microflow, a wildcard flow, or even a hash value. In this way, OpenSketch allows more flexible data collection with much less memory than traditional flow-based To get such flexibility and memory saving, OpenSketch requires more complex indexing using the hashing and classification modules. Fortunately, these complex indexes are easy to calculate using commodity switch components. For those measurement tasks that need to identify specific flows, the controller can maintain the mappings between counters and flows for classification-based indexing, or reverse engineer the flows from the hash values for hash-based indexing (e.g., using reversible hashing <ref type="bibr" target="#b32">[36]</ref>).</p><p>OpenSketch data plane: OpenSketch data plane has three stages: a hashing stage to reduce the measurement data, a classification stage to select flows, and a counting stage to accumulate traffic statistics <ref type="figure" target="#fig_1">(Figure 2)</ref>. We use the bitmap as an example to show how the data plane works. Suppose we use the bitmap to count the number of unique source IP addresses to a given destination subnet (say 192.168.1.0/24): First, the hashing stage picks the packet source field and calculates a single hash function. Next, the classification stage picks the packet destination field and filters all the packets matching the rule (dst : 192.168.1.0/24 → 1). Each rule has an index field, which can be used to calculate the counter location in the counting stage. For example, those packets in the subnet get the index "1", which means counting; the other packets get the default index "-1" and are not counted. Finally, the counting input function calculates the index of the bit to be updated using the hash value of the source field. The corresponding position in the counting table for the bitmap is marked as 1.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Build on existing switch components</head><p>OpenSketch data plane can be easily implemented with commodity switch components:</p><p>A few simple hash functions: OpenSketch relies on hashing to pick the right packets to measure with provable memory and accuracy tradeoffs. However, sketches may need a different number of hash functions or different types of hash functions, and may operate on different packet fields. For example, the Count-Min sketch requires k (e.g., 3) pairwise independent hash functions. On the other hand bitmaps <ref type="bibr" target="#b39">[43]</ref> and the PCSA sketch <ref type="bibr" target="#b17">[22]</ref> require a truly random hash function (i.e. each item is hashed uniformly on its range and completely independently of others).</p><p>Fortunately, our experiences of implementing various sketches show that 4-8 three-wise or five-wise independent hash functions are enough for many measurement requirements, and can be implemented efficiently in hardware <ref type="bibr" target="#b29">[34,</ref><ref type="bibr" target="#b35">39]</ref>. Moreover, simple hash functions can make use of the entropy in the traffic to approximate even truly random hash functions well <ref type="bibr" target="#b26">[31]</ref>.</p><p>We can also reduce the number of hash functions by allowing multiple sketches to share the same set of hash functions.</p><p>A few TCAM entries for classification: Classification can be easily implemented with high-speed memory TCAMs (Ternary Content-Addressable Memory), which already exist in today's switches to store ACLs (Access Control Lists). TCAMs can match packets with multiple rules in parallel and perform actions based on the rule with the highest priority. Each rule contains the matching fields (including 0's, 1's, and"don't care" bits) and actions (such as incrementing a counter and pointing to a SRAM address).</p><p>TCAMs are expensive and power hungry, and thus only have a limited number of entries in most switches (e.g., at most thousands of entries <ref type="bibr" target="#b11">[16]</ref>). Since OpenSketch leverages a combination of hashing and classification to select packets, it does not maintain individual flow entries in the TCAM and thus significantly reduces the number of TCAM entries to support most measurement tasks. In addition to simple wildcard matching on packet fields, we allow TCAM entries to match on hash values and leverage the "don't care" bits to perform other operations such as set checking. We will show our detailed design for supporting different sketches in the next subsection.</p><p>Flexible counters in SRAM: We store all the counters in the SRAM, because SRAMs are much cheaper, more energy-efficient, and thus larger than TCAMs. Leveraging the provable memory-accuracy tradeoffs in sketches, we can make sure that the sketches always fit in the switch SRAM independent of the traffic pattern.</p><p>However, different sketches require different numbers and sizes of counters: the bitmap contains an array of 0's and 1's, while the Count-Min sketch <ref type="bibr" target="#b8">[13]</ref> contains several counters for a single packet. We introduce a list of logical tables in the SRAM (e.g., in <ref type="figure" target="#fig_1">Figure 2</ref> we show three logical tables of different colors). These tables can represent different counters in the same sketch (e.g., k tables for the Count-Min Sketch) or different sketches in the same SRAM. Since all the counters stored in the SRAM can be easily accessed by their addresses, we use a single physical address space to identify the counters in all the logical tables. Based on the table id and the relative counter position in the table, we can easily locate the counter position in the SRAM. On those SRAMs that have 6-8 read/write ports <ref type="bibr" target="#b12">[17]</ref>, these counters can even be updated at the same time.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">Supporting diverse sketches</head><p>OpenSketch data plane can support a wide variety of sketches by leveraging a smart combination of hashing, classification, and counting. Here we only discuss a few sketches, for which an implementation in OpenSketch is not obvious. We show more sketch examples such as hash tables, Count-Min sketches, and wildcard filters in <ref type="bibr" target="#b40">[44]</ref>. The goal of this subsection is not to show the detailed tricks of implementing a specific sketch, but to show the power of the simple OpenSketch data plane in implementing many complex sketches.</p><p>Bit checking operations: Many sketches require more complex bit checking operations than simply comparing the packet fields to a pre-defined rule. For example, the Bloom filter, which is used to filter packets based on a predefined set, requires checking if k positions are 1 or not (based on k hash values calculated from the packets). The DFAs (Deterministic Finite Automaton) <ref type="bibr" target="#b5">[10,</ref><ref type="bibr" target="#b34">38]</ref> and regular expressions <ref type="bibr" target="#b25">[30]</ref>, which are often used for network intrusion detection, require converting one packet state to another.</p><p>To implement such sketches in OpenSketch data plane, we can leverage the hashes and the wildcard bits in TCAMs. For example, to check if a packet's source port belongs to a predefined set of source ports with Bloom filters, we first calculate the Bloom filter array B of 0's and 1's (e.g., 0001101101) of the pre-defined set. Next, we calculate the k hash functions on each incoming packet's source port and generate the packet's array P (e.g., 0001000001). Now we need to check if all the 1's positions in P are also 1's in B. Although such complex bit checking is not supported by TCAM, we can match P with B * , where B * replaces all the 1's in B with * (e.g., B * =000**0**0*) <ref type="bibr" target="#b18">[23]</ref>. Then we can match P against B * . The 0 in B * correspond to bits that were not set by any packet in B. If P has a 1 where B * has a 0, then we can conclude that P is not in B. But if P matches the TCAM entry B * , there is a chance that P is in B, and we say the packet matches the Bloom filter.</p><p>Picking packets with a given probability: Many sketches require picking packets with different probabilities. For example, the PCSA sketch (Probabilistic Counting with Stochastic Averaging) <ref type="bibr" target="#b17">[22]</ref> provides a way to count the number of unique values of a header field(s) The basic idea is to sample packets into different bins with power-of-two ratios (e.g., 1/2, 1/4, ...1/2 n ). If there's a packet that falls in the bin i, then that means there are at least 2 i different values. Other streaming algorithms may require sampling packets at a given rate (not necessarily power-of-two) to reduce the measurement overhead.</p><p>To support this probabilistic packet selection using only simple uniform hash functions in OpenSketch, we choose to combine these hashes with a few TCAM entries. For example, to implement power of two probabilities, we first calculate the hash value for a packet field using the uniform hash function. Next, we compare the hash value with TCAM rules such as R 1 : 0 * * * ... → 1; R 2 : 10 * * ... → 2; R 3 : 110 * ... → 3; etc. There is a 1/2 chance that a hash value matches rule R 1 , 1/4 for R 2 , an so on. We can further combine these rules to implement other more complex probabilities.</p><p>Picking packets with different granularity: Many streaming algorithms (such as flow size distribution <ref type="bibr" target="#b22">[27]</ref>, counting distinct destinations with the multiresolution bitmap <ref type="bibr" target="#b16">[21]</ref>, and latency tracking with arbitrary loss <ref type="bibr" target="#b21">[26]</ref>) often make tradeoffs between flow space coverage and accuracy. If they cover a smaller flow space, they can devote more counters to more accurately measure the covered space, but the measurement result is less representative for the entire flow space. If they cover a larger flow space, the result is more representative but less accurate. Therefore, many algorithms require different levels of coverage in the flow space. For example, the algorithm to measure flow-size distribution <ref type="bibr" target="#b22">[27]</ref> hashes on the packets and maps the hash value to different sizes of ranges ([0,1/2],[1/2, 3/4]), ...) and measures the flow sizes within these ranges. The multi-resolution bitmap <ref type="bibr" target="#b16">[21]</ref> uses a similar idea to count the number of unique elements in each range. However, all these algorithms assume customized hardware.</p><p>Instead, we design a new multi-resolution classifier that can be easily implemented with TCAM and used in different measurement programs. The multi-resolution classifier uses lg(n) TCAM entries to represent different ranges in the flow space, where n is the range of the flowspace: R 1 : 0 * * * ... → 1; R 2 : 10 * * ... → 2; R 3 : 110 * ... → 3; etc. Operators simply need to glue the multi-resolution classifier before their other measurement modules to increase the accuracy of their measurements with a good flow space coverage.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">OpenSketch Controller</head><p>With OpenSketch providing a simple and efficient data plane, operators can easily program measurement algorithms and even invent new measurement algorithms by gluing different sketches together. The OpenSketch controller provides a sketch library with two key components: A sketch manager that automatically configures the sketches with the best memory-accuracy tradeoff; and a resource allocator that divides switch memory resources across measurement tasks.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">Programming measurement tasks</head><p>Although OpenSketch is sketch-based, it can support a wide variety of measurement tasks because: (1) There are already many sketches for tasks ranging from counting a set of flows, measuring various traffic statistics, to identifying specific flows. (2) Even when some traffic characteristics are not directly supported by sketches, we can still install simpler sketches and implement the complex data analysis part in software in the controller.</p><p>As shown in <ref type="table">Table 1</ref>, we have implemented several measurement programs by simply gluing building blocks together. The algorithms to measure flow size distribution and to count traffic leverage different sketches (e.g., multi-classifier sketches and Bloom filters) to pick the right packets to measure. The heavy hitter detection and superspreader/DDoS detection algorithms leverage Count-Min sketches and k-ary sketches to count specific traffic characteristics. Although there are no sketches that directly measure traffic changes or flow size distribution, we can still rely on sketches to get basic counters (e.g., flow size counters) and leave it to the controller to analyze these counters (e.g., calculate the distribution).</p><p>We take the superspreader/DDoS detection as an example to show how to use OpenSketch to implement a measurement task. Superspreaders are those hosts that send packets to more than k unique destinations during a time interval. The goal of superspreader detection is to detect the sources that send traffic to more than k distinct destinations, and ensure that the algorithm does not report the sources with ≤ k/b destinations, with high probability ≥ 1 − δ <ref type="bibr" target="#b36">[40]</ref>. The streaming algorithm for detecting superspreaders <ref type="bibr" target="#b36">[40]</ref> samples source-destination pairs and inserts them into a hash table, which requires a customized ASIC to implement in the data plane.</p><p>Combining Count-Min sketch and bitmap. Given the building blocks in the OpenSketch measurement library, we implement this superspreader algorithm using a combination of the bitmap, Count-Min sketch, and reversible sketch. Ideally, we would like to use a sketch to count the number of unique destinations for each source. However, the Count-Min sketch can only count the number of packets (not unique destinations) for each source, while the bitmap can only provide a single count of the total number of unique destinations but not individual counters for each source. Therefore, we combine the CountMin sketch and the bitmap to count the number of unique destinations that each source sends: We replace the normal counters in Count-Min sketch with bitmaps to count the unique number of destinations instead of the number of packets. Since the superspreaders algorithm requires us to report a source if the number of retained destinations is more than r, we need a bitmap that can count up to around r destinations. Similarly, we combine reversible sketches with bitmaps to track the superspreader sources.</p><p>Sampling source-destination pairs to reduce memory usage: One problem of simply using the sketches is that the trace can still have a large number destinations, leading to large memory requirement to get a reasonable accuracy. To reduce memory usage, we choose to sample and measure only a few source-destination pairs. Similar to the streaming algorithm <ref type="bibr" target="#b36">[40]</ref>, we sample the packet at rate c/k, and report all source IPs that have more than r destinations, where c and r are defined as a constant, given b and δ as shown in <ref type="figure" target="#fig_1">Figure 2</ref> in <ref type="bibr" target="#b36">[40]</ref>. For example, when we set b = 2 and δ = 0.2, we get r = 33 and c = 44.83.</p><p>Although we use the same sampling solution as the work in <ref type="bibr" target="#b36">[40]</ref>, there are three key differences: (1) We use Count-Min sketches instead of hash tables, which reduces memory usage with a slightly higher error rate. Count-Min sketches are especially beneficial when there are only a few heavy sources (contacting many destinations) and many light sources (contacting a few destinations), because there are fewer collisions between the heavy and light sources. (2) the work in <ref type="bibr" target="#b36">[40]</ref>     Querying in the control plane. <ref type="figure">Figure 3</ref> shows the data analysis part of the superspreader detection program. We first look at the reversible sketch to identify the sources with counts more than r using the distinct counts from the bitmaps and compile a list of heavy bins. The reversible sketch "reverse-hashes" these bins to identify potential superspreader sources. The reversible sketch uses modular hash functions and doesn't provide any accuracy guarantees for the sources. So we next query the Count-Min sketch to verify the counts of the candidate sources. If the count is above the threshold r, then we report the source as a superspreader.</p><p>Although we have shown several examples that operators can easily program in OpenSketch, there are still many open questions on how to provide full language support for many other measurement programs. We leave this for future work.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Automatic config. with sketch manager</head><p>Picking the right configurations in the measurement data plane is notoriously difficult, because it depends on the available resources at switches, the accuracy requirements of the measurement tasks, and the traffic distribution. To address these challenges, OpenSketch builds a sketch manager: The sketch manager automatically picks the right sketch to use given the measurement requirements and configures the sketches for the best accuracy given the provable memory-accuracy tradeoffs of individual sketches and the relations across sketches. Furthermore, the sketch manager may automatically install new sketches in the data plane to learn traffic statistics to better configure the sketches.</p><p>We take the superspreader problem as an example:</p><p>Picking the right sketch for a function. Given the provable tradeoffs between error rate and memory size, the sketch manager automatically picks the right sketch if there are multiple sketches providing the same functions. In superspreader detection, given memory size m bits and the threshold r, there are two common data structures for distinct counters: the PCSA whose error rate is 0.78 񮽙 ⌈log r⌉/m, and the bitmap whose error rate is 񮽙 (e r/m − r/m − 1)/(r 2 /m). The operator can simply use "distinct counter" as the virtual sketch in his program. The sketch manager can automatically pick the right sketch of distinct counters to materialize the virtual sketch. For example, if there are m = 149 bits for distinct counters and r = 33, the error rate is 14.5% for PCSA, and 6% for bitmap. Therefore, the manager picks bitmap for the superspreader problem.</p><p>Allocating resources across sketches.</p><p>In OpenSketch, operators can simply configure the sketches required for their programs without detailed configurations. The sketch manager can automatically allocate resources across sketches within the measurement program, given the memory-error tradeoffs of individual sketches. For the superspreader example, the manager automatically formulates the following optimization problem: configuring the sketch parameters (the number of bits in each bitmap m, the number of hash functions H, and the number of counters for each hash function M in the Count-Min sketch), to minimize the error rate of the superspreader detection, given the total memory size C ss , the threshold r, the sampling ratio c/k, and the estimated number of distinct src-dst pairs N.</p><formula xml:id="formula_1">Min ε ss = (ε bm r + ε cm × N × c/k)/r (1) s.t. ε bm = 񮽙 (e r/m − r/m − 1)/(r 2 /m) (2) ε cm = e(1 + ε bm )/M cm (3) C ss = H cm M cm m ≤ C total (4) m f illup ≤ m ≤ m max<label>(5)</label></formula><p>Eq.</p><p>(1) describes the goal of the optimization problem, which is to minimize the error rate of the combination of Count-Min Sketch and bitmap, which is at most (ε bm r +ε cm ×N ×c/k)/r for counts &lt; r as proved in <ref type="bibr" target="#b19">[24]</ref>. Eq. <ref type="formula">(2)</ref> and Eq.(3) define the error rate of the bitmap and the Count-Min sketch. Eq.(4) describes the memory constraints: The combination of Count-Min sketch and bitmap should take less memory than that available at the switch. Eq.(5) bounds the number of bits m used in bitmap. As suggested in <ref type="bibr" target="#b39">[43]</ref>, we set m f illup to be the minimum m such that m ≥ 5 񮽙 e r/m − r/m − 1, which is the minimum size to guarantee the bitmap doesn't fill up with high probability. We also set m max = 10r, which is large enough so that the relative error is less than 1% for distinct counts up to r = 100.</p><p>Note that we do not consider the reversible sketches in the optimization. This is because the reversible sketch usually has a fixed size of 5 hash tables each with 4096 (distinct) counters as suggested by <ref type="bibr" target="#b32">[36]</ref>. In our evaluations with real packet traces we found that for δ = 0.2, 2 reversible sketches of 98-bit bitmaps (a total of 0.5 MB) was often large enough to not miss any sampled superspreaders (thus the false negative rate is caused by sampling, same as the streaming algorithm). In addition, the false positives of reversible sketches are not important because we always check with Count-Min sketch which provides more accurate counts.</p><p>We can easily solve the optimization problem to configure sketches automatically. Suppose we want to find k = 200 superspreaders with b = 2 and a probability of at most δ = 0.2 false positives and negatives. We set the sampling rate at c/k = 44.83/200 and report sources with at least r = 33 distinct destinations retained. Suppose the the maximum number of distinct source destination pairs on the link is N = 400, 000, and we have 1900KB available for the combination of Count-Min sketch and bitmap. Then solving the optimization problem, we find that we can minimize the error when the bitmap has m = 46 bits, the CM has 3 hash functions and 109,226 counters per hash function.</p><p>Installing new sketches to learn traffic statistics. As shown above, some memory-accuracy tradeoffs require understandings of traffic characteristics to have a more accurate configurations of the sketches. For example, in the superspreader example, we need to have an estimation of the maximum number of source-destination pairs N. In this case, OpenSketch requires operators to given a rough estimation based on experiences (e.g., operators can simply give n 2 for a network of n nodes.)</p><p>The sketch manager can then automatically install new sketches to help understand such traffic characteristics. For example, to count the unique pairs of source and destination, the manager installs a new distinct counter and periodically checks its value. If the difference between the counting result and the original estimation is above a pre-defined threshold, then the manager re-optimizes the resource allocation problem.</p><p>Though we described the sketch manager in the context of finding superspreaders, functions like picking the right sketch and allocating resources across sketches (which don't interact in complex ways) can easily be automated for other measurement tasks too.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.3">Resource allocation across tasks</head><p>When OpenSketch supports multiple measurement tasks simultaneously, it is important to optimize the accuracy of the measurement tasks given the limited resources in the data plane (e.g., the number of hashing modules, the TCAM and SRAM sizes). Therefore, we build a resource allocator in OpenSketch which automatically allocates resources across measurement tasks. Operators simply need to specify the relative importance of accuracy among the tasks. For example, to allocate resources across heavy hitter and superspreader detection, operator can simply specify a weight β ∈ [0, 1]. β = 1 means operators care most about heavy hitter detection and β = 0 means the other way.</p><p>The challenge is to allocate resources across tasks without considering the detailed implementation of each task. We propose to modularize the resource allocation problem using optimization decomposition. The basic idea is to introduce a price λ to indicate the relative resource usage and then leave it to each task to optimize their own accuracy based on the resource allocation.</p><p>For example, operators may want to detect heavy hitters using a Count-Min sketch and to detect superspreaders using a combination of Count-Min sketch and bitmaps simultaneously. We first formulate the main allocation problem: Given the total switch SRAM memory C total , the resource allocator allocates the memory across the two measurement tasks (Eq. <ref type="formula">(7)</ref>) to minimize the weighted error (Eq. <ref type="formula">(6)</ref>). For Superspreaders, the error rate ε ss and space used by the building blocks C ss are as described in 1-4. For heavy hitters the error rate is ε hh = e/M hh cm and the space used is C hh = H hh cm × M hh cm , where H hh cm is the number of hash functions and M hh cm is the number of counters per hash.</p><formula xml:id="formula_2">Min ε all = (1 − β )ε ss + β ε hh (6) s.t. C ss + C hh ≤ C total (7) given β ,C total</formula><p>Next, we solve the resource allocation problem in a modularized way by first converting the problem into its dual problem:</p><formula xml:id="formula_3">Max min((1 − β )ε ss + λ (C ss − C max /2)) + min(β ε hh + λ (C hh − C max /2))<label>(8)</label></formula><formula xml:id="formula_4">s.t. λ ≥ 0</formula><p>We can then easily decompose the dual problem into two sub-problems corresponding to the two tasks superspreader and heavy hitter detection (The two sub problems are omitted for brevity). Iteratively, the master problem sets a price λ for the space used the two tasks. Each task minimizes its objective at the given price, and the master problem updates its price according to how much extra space was used by the tasks (using the subgradient method). When the price eventually converges to the optimal value, we get the resource allocation across the two tasks and the parameter configurations for each task. <ref type="bibr">2</ref> In general, the optimization decomposition technique allows the resource allocator to allocate space efficiently between two tasks without any knowledge of how they're implemented, it only needs to know their relative importance to the operator. <ref type="figure" target="#fig_3">Figure 4</ref> shows the key components in our prototype: In the data plane, we implemented the three-stage pipeline (hashing, classification, and counting) on NetFPGA; in the control plane, we implemented the OpenSketch library which includes a list of sketches, the sketch manager, and the resource allocator. <ref type="bibr">2</ref> Note that such optimization decomposition only works for convex functions. But the superspreader problem is not convex in terms of number of counters M ss cm and the bitmap size m. We work around this by iterate the size of bitmap from m f illup to m max , and thus make the problem convex with a fixed m. Data plane: We implement a OpenSketch switch prototype on NetFPGA to understand its efficiency and complexity in real hardware deployment. We insert our measurement modules into the reference switch pipeline, including Header Parser, Hashing, Wildcard Lookup, and SRAM Counter. Since we simply pull packet headers to collect the statistics without changing the packet bus, there is no effect on packet forwarding latency and throughput. As a packet enters, the Header Parser pulls the related fields from the packet header, which are then hashed by hash functions in parallel. We then pass the packet header and hash values to the Wildcard Lookup, where we implement wildcard rule matching in parallel. For each matched rule, we update the corresponding counters in the SRAM Counter. We use the entire 4.5 MB on-board SRAM to store the counters. To answer the OpenSketch queries from the controller, we implement a userspace software to query these counters via IOCTL calls, which then collects all the counters through PCI interface.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Prototype Implementation</head><p>Controller: We implement seven sketches in c++ in the controller, including bitmap, PCSA sketch, hash table, multi-resolution classifier, bloom filter, count-min sketch, and reversible sketch. Each sketch has two functions for the measurement programs to use: configure to specify the packet fields, the memory constraint, and the number of hash functions to use and query to periodically get the statistics. We also implement the sketch manager to configure these sketches and the resource allocator to divide resources across measurement tasks.</p><p>The measurement program in the controller can periodically query the sketches about the statistics (e.g., the distinct counts from bitmap, the flows from reversible sketches). According to the received statistics, the measurement programs may install new sketches or change the accuracy requirements accordingly. The sketches automatically queries the data plane to get the counters in order to generate the right statistics to the measurement program. Each time after reporting the counters, the OpenSketch data plane resets the counters as zero in order to monitor the traffic statistics at the next measurement interval. The history statistics are maintained in the controller and written to the disk if necessary. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Evaluation</head><p>To evaluate the balance between generality and efficiency, we use packet-trace driven simulations to compare OpenSketch with NetFlow and other streaming algorithms for several measurement tasks using CAIDA packet traces. To evaluate the feasibility of implementing OpenSketch with commodity switch components, we run stress tests with our OpenSketch prototype. Both our simulator and prototype are available at <ref type="bibr" target="#b0">[5]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6.1">Data plane generality and efficiency</head><p>Evaluation setup We build a trace-driven simulator of an OpenSketch implementation of heavy hitters and superspreaders, and compare it to NetFlow with packet sampling, and a superspreader streaming algorithm <ref type="bibr" target="#b36">[40]</ref>. We use a one-hour packet trace collected at a backbone link of a Tier-1 ISP in San Jose, CA, at 12pm on Sept. 17, 2009 <ref type="bibr" target="#b37">[41]</ref>. We collect the counters at the end of every measurement interval and reset the counters to measure the next interval. We configure the parameters in our evaluation based on recommended values from literature <ref type="bibr" target="#b15">[20,</ref><ref type="bibr" target="#b33">37]</ref>. We set the measurement interval as 5 seconds and run for 120 measurement intervals to ensure the metrics converge.</p><p>OpenSketch provides a better memory-accuracy tradeoff than NetFlow. Since both OpenSketch and NetFlow provide general support for diverse measurement tasks, a natural question arises: which one works better? We compare the two using the heavy hitter detection problem because NetFlow, which uses packet sampling, can easily catch large flows and is expected to work well. We set the threshold T as 0.5% of the link capacity to find a few large senders in the traffic with a heavytail distribution. The sketch-based heavy hitter algorithm uses two building blocks: the Count-Min sketch and the reversible sketch, which are described in <ref type="bibr" target="#b40">[44]</ref>. These sketches are automatically configured by the sketch manager. We conservatively assume each counter (in both sketches) uses 4 Bytes, though in practice for counting up to N = 2 million packets, a counter needs only lg(N) &lt; 3 bytes. For NetFlow with packet sampling, the operator can set the sampling rate according to how much memory is available at the router. We conservatively assume that NetFlow uses 32 Bytes per flow entry (as in <ref type="bibr" target="#b15">[20]</ref>) and count the actual number of flow entries used by NetFlow.</p><p>Figure 5 (a) shows the false positives and false negatives for identifying heavy hitters. OpenSketch has no false-negatives with 85KB memory, and no false positives when the switch has 600KB memory. In contrast, NetFlow needs 724KB memory to achieve 3% false positives and 3% false negatives. <ref type="figure">Figure 5</ref> (b) compares the error rate in estimating the volume of detected heavy hitters. Like in <ref type="bibr" target="#b15">[20]</ref>, we define the error rate as the relative error (the average error of each heavy hitter's volume) divided by the size of the threshold for fair comparison. We can see that with 600KB memory, the error rate for OpenSketch is 0.04%, which is far less than NetFlow.</p><p>OpenSketch achieves comparable accuracy to the streaming algorithms, while providing generality. Although OpenSketch supports most sketch-based streaming algorithms, it does not support those streaming algorithms that require complex actions in the data plane. We compare our OpenSketch-based algorithm with these streaming algorithms to understand the tradeoff between accuracy and generality.</p><p>Heavy hitter detection: We first compare the two theoretical bounds of OpenSketch-based heavy hitter algorithm and the space-saving streaming algorithm proposed in <ref type="bibr" target="#b3">[8]</ref>. <ref type="bibr">3</ref> Figure 5 (c) shows that to achieve the same 0.5% error rate, OpenSketch requires 1354KB memory while the streaming algorithm only takes 160KB. However, OpenSketch can further improve its accuracy when it understands the traffic skew (i.e., the Zipfian parameter α in Sec 2) from either operators or by installing a hash table (similar to the flow size distribution problem in Table 1). For example, if OpenSketch knows that the skew parameter is α = 1.4, it only needs to configure 142KB memory, which is less than the streaming algorithm.</p><p>Superspreader detection: We also compare the accuracy of OpenSketch with the one-level superspreader detection algorithm <ref type="bibr" target="#b36">[40]</ref> in <ref type="figure">Figure 6</ref>. <ref type="bibr">4</ref> We set k = 200, b = 2, and δ = 0.05. We conservatively assume it takes 8 Bytes to store each src-dst pair in a hash table and 6 Bytes to store each source-counts pair in a second hash table The total space used by the two hash tables for the sampled source destination pairs is the memory size (assuming no hash conflicts).</p><p>The streaming algorithm requires an average of 1MB memory to achieve a false positive rate of 0.1% and a false negative rate of 0.3%. For OpenSketch, we use the arrows to show the pairs of false positives (+) and false negatives (X) with different size combination of CountMin sketches and bitmaps calculated by our sketch manager. With the same 1MB memory, OpenSketch achieves 0.9% false positive rate and 0.3% false negative rate. Note that there are only 29 superspreaders on average during each measurement interval and thus the differences between OpenSketch and the streaming is only 1 superspreader at some intervals. OpenSketch can reach the same false positive and false negative rate as the streaming algorithm when it has 2.4MB memory.</p><p>Many measurement tasks can be implemented on top of OpenSketch platform with simple controller code and limited data plane resources: We have implemented five measurement tasks on top of OpenSketch <ref type="table" target="#tab_2">(Table 2</ref>). The implementation is simple because we only configure existing building blocks and analyze the collected data to report the results. The configuration part takes about 10-25 lines of code and the analysis part takes at most 150 lines of code.</p><p>We also show the amount of data plane resources we need for each measurement task according to simulations and theoretical analysis. We only need 4-10 hash functions, less than 30 TCAM entries, and tens of megabytes SRAM to support most measurement tasks. For example, the flow size distribution task needs 3 TCAM entries for its multi-resolution classifier to index into one of three hash tables each of which covers a fraction ( 1 2 , 1 4 , 1 8 ) of the flowspace. We can glue the building blocks together to count traffic in different ways. For example, we can count how many distinct senders contact a set of 200 destination address using a PCSA sketch and a Bloom Filter. We need 10 TCAM entries to store the destinations, each entry corresponds to a Bloom Filter for 20 addresses. For packets that pass the filter, PCSA counts the distinct senders (up to ∼ 2 17 ) using 17 TCAM entries and 1KB of SRAM.</p><p>Resource allocation across measurement tasks: <ref type="figure" target="#fig_5">Fig- ure 7</ref> shows how OpenSketch allocates memory resources for two measurement tasks: heavy hitter and superspreader detection with different weight β , given the total memory size 4MB. With a lower β , we devote more resources to superspreaders to ensure its low error rate <ref type="bibr" target="#b0">5</ref> . When we increase the β to 1 (heavy hitters have higher weights), heavy hitter detection gets more memory resources and thus higher accuracy.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6.2">Prototype evaluation</head><p>OpenSketch has no effect on data plane throughput: We deploy our NetFPGA based prototype into a Dell inspiron 530 machine (2 CPU cores and 2 GB DRAM). We connect 4 servers to the 4 Ethernet ports on NetFPGA. We first measure the throughput of OpenSketch switch. We set TCP flows across all four 1GE ports on NetFPGA. The OpenSketch prototype switch can achieve full 1GE throughput among four ports with different packet sizes (64, 512, and 1500 Bytes) without any packet losses. This is because the OpenSketch data plane pipeline does not interrupt the forwarding pipeline in the original switch, and the delay of each measurement pipeline component is smaller than packet incoming rate even for the 64Byte packets. As a result, the packets do not need to stay in the queue for measurement processing.</p><p>OpenSketch measurement performance is not affected by multiple hash functions, multiple wildcard rules, but is limited by counter updates. We setup a TCP flow between two servers across NetFPGA, and measure the processing delay of collecting statistics from single packet. We vary the number of hash functions from 1 to 8, and set the number of wildcard rules from 32 to 1024, respectively. The average delay is always 104 ns across all settings. This is because both hash functions and wildcard rules are implemented in parallel in hardware. However, the delay is affected by the number of counters we update for each packet. When we update 5 counters per packet in SRAM (which is the maximum number of updates a sketch may need), the processing delay increases to 200ns. This is because our SRAM can only be read and written sequentially. The performance can be improved with when fabrication of 6 to 8 read ports for an on-chip Random Access Memory is attainable with today's embedded memory technology <ref type="bibr" target="#b12">[17]</ref>.   the later three tasks are based on theoretical analysis in <ref type="bibr" target="#b32">[36,</ref><ref type="bibr" target="#b22">27,</ref><ref type="bibr" target="#b18">23,</ref><ref type="bibr" target="#b17">22]</ref>. The error rate is defined as: the relative error for heavy hitters, the false positive and false negative percentages for superspreaders, the relative error for traffic change detection, the weighted mean relative difference in simulation <ref type="bibr" target="#b22">[27]</ref> for flow size distribution, and the overall false positive probability of the Bloom Filter for counting traffic (the distinct counter is configured for 10% relative error.))</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Related Work</head><p>Programmable measurement architectures: In addition to NetFlow, there are other works that share our goal of building a configurable or programmable measurement architecture. ProgME <ref type="bibr" target="#b41">[45]</ref> allows operators to specify flowsets and the switches count the packets in these flowsets. Gigascope <ref type="bibr" target="#b10">[15]</ref> is a programmable packet monitor that supports queries on packet streams and automatically splits queries between the data plane and the control plane. In contrast, OpenSketch chooses sketches as the basis of the measurement architecture. Therefore, OpenSketch provides more compact data structures to store statistics with a provable memory-accuracy tradeoff, while supporting a wide range of measurement tasks. The paper <ref type="bibr" target="#b33">[37]</ref> extends NetFlow by using two sampling primitives (flow sampling and sample-and-hold) as the minimalist measurement support in switches, independent of the measurement tasks. Operators can only passively process the collected data for their measurement tasks. Other companies <ref type="bibr">[3]</ref> build new hardware to provide more line-speed counters at switches. In contrast, OpenSketch allows operators to proactively configure different sketches and thus can best use the data plane with guaranteed accuracy for specific measurement tasks. OpenSketch also allows multiple measurement tasks to run at the same time.</p><p>Other flexible switch architecture: Software defined networks provide simple APIs at switches and allow the controller to program the switches based on the APIs. PLUG <ref type="bibr" target="#b6">[11]</ref> provides flexible lookup modules for deploying routing protocols. OpenSketch shares the same goal of separating the data plane which processes packets, from the control plane that configures how to process the packets. However, existing proposals for software defined networks are not a good fit for measurement tasks. Recent work <ref type="bibr" target="#b11">[16,</ref><ref type="bibr" target="#b27">32]</ref> has recognized the problems of supporting different measurement tasks in OpenFlow <ref type="bibr">[4]</ref>, such as limited on-chip memory and large communication overhead between the controller and switches. Instead of incremental improvements on OpenFlow, we design a new software defined traffic measurement architecture that provides general and efficient measurement support at switches.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="8">Conclusion</head><p>Like OpenFlow, which enables a simple, efficient way to control switches by separating the data and control plane, OpenSketch enables a simple and efficient way to collect measurement data. It uses data-plane measurement primitives based on commodity switches, and a flexible control plane so that operators can easily implement variable measurement algorithms. OpenSketch makes sketches more practical by bridging the gap between theoretical research in streaming algorithms and practical measurement requirements and constraints of switches, and makes sketches more flexible in supporting various measurement tasks.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: Software defined traffic measurement</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: OpenSketch switch data plane tables. Moreover, OpenSketch can easily export the table to the controller with small bandwidth overhead. To get such flexibility and memory saving, OpenSketch requires more complex indexing using the hashing and classification modules. Fortunately, these complex indexes are easy to calculate using commodity switch components. For those measurement tasks that need to identify specific flows, the controller can maintain the mappings between counters and flows for classification-based indexing, or reverse engineer the flows from the hash values for hash-based indexing (e.g., using reversible hashing [36]).</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>1 :</head><label>1</label><figDesc>Figure 3: The querying function in superspreader detection</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: OpenSketch Architecture</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_4"><head></head><label></label><figDesc>Figure 5: Heavy hitter detection with OpenSketch, NetFlow, and space-saving streaming algorithm</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_5"><head>Figure 7 :</head><label>7</label><figDesc>Figure 6: Superspreader detection (false positives (+), false negatives (x))</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="false"><head>bits totally. If we set a threshold r = 33, we only need a bitmap ofof the link capacity during a time in- terval Count-Min sketch to count volume of flows, re- versible sketch to identify flows in Count-Min with heavy counts Superspreader/DDoS A k-superspreader is a host that contacts more than k unique destinations during a time interMin sketch to estimate counts for different sources, bitmap to count distinct destinations for each Count-Min sketch counter, reversible sketch to identify sources in Count-Min sketch with heavy distinct countsresolution classifier to index into hash table at right granularity; hash table to count volume of flows mapped to itto maintain the set of destinations; PCSA to maintain distinct count of sources</head><label></label><figDesc>uses 32 bits to store destination IPs for each pair of source and destination while the bitmap stores only O(r)</figDesc><table>Measurement Tasks 
+Definitions 
+Building Blocks 
+
+Heavy Hitters [13] 
+
+Identify large flows that consume more than a 
+fraction T -
+val. A DDoS victim is a host that is contacted 
+by more than k unique sources. 
+
+Count-Traffic changes 
+detection [36] 
+
+Identify flows whose absolute contribution to 
+traffic changes are the most over two consecu-
+tive time intervals 
+
+k-ary sketch and reversible sketches for consecu-
+tive intervals to identify heavy changes 
+
+Flow size dist. [27] 
+
+Indicate the portion of flows with a particular 
+flow size 
+
+multi-Count traffic 
+Count the distinct number of source addresses 
+who send traffic to a set of destinations 
+
+Bloom filter </table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_1" validated="false"><head>Table</head><label></label><figDesc></figDesc><table></table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_2" validated="false"><head>table ( e</head><label>(</label><figDesc></figDesc><table>.g., looking 
+up the src-dst pair in the hash table, inserting a new entry 
+if it cannot find one and discarding the packet otherwise, 
+removing entries if the hash table is full, etc.). 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_4" validated="false"><head>Table 2 :</head><label>2</label><figDesc>Implementing measurement tasks in OpenSketch (The numbers for the first two are based on our simulations. The numbers for</figDesc><table></table></figure>
+
+			<note place="foot" n="3"> This is the error with 95% confidence.</note>
+
+			<note place="foot" n="4"> The paper [40] also proposes a two-level detection algorithm that only works better than one-level algorithm when there are lots of sources contacting only a few destinations. OpenSketch can also introduce another sampling layer as the two-level algorithm to further improve its accuracy.</note>
+
+			<note place="foot" n="5"> Note that here we are considering the error rate for superspreader counters. A 10-20% error rate is enough to ensure low false positive/negative rates.</note>
+		</body>
+		<back>
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Opensketch Code Release</surname></persName>
+		</author>
+		<ptr target="https://github.com/lavanyaj/opensketch.git" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Al-Fares</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Radhakrishnan</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Raghavan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Huang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Vahdat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Hedera</surname></persName>
+		</author>
+		<title level="m">Dynamic flow scheduling for data center networks. In NSDI</title>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">The space complexity of approximating the frequency moments</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alon</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Matias</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Szegedy</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">STOC</title>
+		<imprint>
+			<date type="published" when="1996" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Fast data stream algorithms using associative memories</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bandi</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Metwally</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Agrawal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Abbadi</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">E</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM SIGMOD</title>
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Counting distinct elements in a data stream</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bar-Yossef</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Jayram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">S</forename><surname>Kumar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Sivakumar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Trevisan</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename></persName>
+		</author>
+		<idno>RANDOM &apos;02</idno>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 6th International Workshop on Randomization and Approximation Techniques</title>
+		<meeting>the 6th International Workshop on Randomization and Approximation Techniques<address><addrLine>London, UK, UK</addrLine></address></meeting>
+		<imprint>
+			<publisher>Springer-Verlag</publisher>
+			<date type="published" when="2002" />
+			<biblScope unit="page" from="1" to="10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">CompactDFA: Generic state machine compression for scalable pattern matching</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bremler-Barr</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Hay</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Koral</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">INFOCOM</title>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">PLUG: Flexible lookup modules for rapid deployment of new protocols in high-speed routers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Carli</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">D</forename><surname>Pan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Kumar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Estan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sankaralingam</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGCOMM</title>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Finding hierarchical heavy hitters in streaming data</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cormode</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Korn</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Muthukrishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Srivastava</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Knowledge Discovery from Data</title>
+		<imprint>
+			<date type="published" when="2008-01" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">An improved data stream summary: The count-min sketch and its applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cormode</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Muthukrishnan</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">J. Algorithms</title>
+		<imprint>
+			<date type="published" when="2005" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Summarizing and mining skewed data streams</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cormode</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Muthukrishnan</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIAM Conference on Data Mining</title>
+		<imprint>
+			<date type="published" when="2005" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Gigascope: A stream database for network applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cranor</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Johnson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Spataschek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shkapenyuk</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGMOD</title>
+		<imprint>
+			<date type="published" when="2003" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Scaling flow management for high-performance networks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Curtis</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">R</forename><surname>Mogul</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">C</forename><surname>Tourrilhes</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Yalagandula</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Sharma</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Baner-Jee</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Devoflow</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGCOMM</title>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Special purpose SRAMs smooth the ride</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dipert</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">EDN</title>
+		<imprint>
+			<date type="published" when="1999" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Estimating flow distributions from sampled flow statistics</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Duffield</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Lund</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thorup</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM SIGCOMM</title>
+		<imprint>
+			<date type="published" when="2003" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Building a better netflow</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Estan</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Keys</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Moore</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vargh-Ese</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM SIG-COMM</title>
+		<imprint>
+			<date type="published" when="2004" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<monogr>
+		<title level="m" type="main">New directions in traffic measurement and accounting</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Estan</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Varghese</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2002" />
+			<publisher>ACM SIG-COMM</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">Bitmap algorithms for counting active flows on high speed links</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Estan</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Varghese</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fisk</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">IMC</title>
+		<imprint>
+			<date type="published" when="2003" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Probabilistic counting algorithms for data base applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Flajolet</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Martin</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">N</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">J. Comput. Syst. Sci</title>
+		<imprint>
+			<biblScope unit="volume">31</biblScope>
+			<biblScope unit="page" from="182" to="209" />
+			<date type="published" when="1985-09" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Small subset queries and Bloom filters using ternary associative memories, with applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Goel</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gupta</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM SIGMETRICS</title>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Robust sketching and aggregation of distributed data streams</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hadjieleftheriou</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Byers</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">W</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kollios</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Boston University</title>
+		<imprint>
+			<date type="published" when="2005" />
+		</imprint>
+	</monogr>
+<note type="report_type">Tech. rep.</note>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Uncovering global icebergs in distributed monitors</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Huang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Lall</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Chuah</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C.-N</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><forename type="middle">U</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">IEEE IWQoS</title>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">Every microsecond counts: Tracking fine-grain latencies with a loss difference aggregator</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kompella</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Levchenko</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Snoeren</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Varghese</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM SIGCOMM</title>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<monogr>
+		<title level="m" type="main">Data streaming algorithms for efficient and accurate estimation of flow size distribution</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kumar</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Sung</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+		<editor>SIG-METRICS</editor>
+		<imprint>
+			<date type="published" when="2004" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Is sampled data sufficient for anomaly detection?</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mai</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Chuah</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C.-N</forename><surname>Sridharan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Ye</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 6th ACM SIGCOMM conference on Internet measurement</title>
+		<meeting>the 6th ACM SIGCOMM conference on Internet measurement<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2006" />
+			<biblScope unit="page" from="165" to="176" />
+		</imprint>
+	</monogr>
+	<note>IMC &apos;06, ACM</note>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">Enabling innovation in campus networks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mckeown</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Anderson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Balakrish-Nan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Parulkar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Peterson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rex-Ford</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Shenker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Turner</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Openflow</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Computer Communication Review</title>
+		<imprint>
+			<date type="published" when="2008-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">Fast regular expression matching using small TCAMs for network intrusion detection and prevention systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Meiners</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">R</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Patel</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Norige</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Torng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Liu</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">X</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX Security Symposium</title>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">Why simple hash functions work: Exploiting the entropy in a data stream</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mitzenmacher</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vadhan</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SODA</title>
+		<imprint>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mogul</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">C</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Congdon</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Hey</surname></persName>
+		</author>
+		<title level="m">you darned counters!: get off my asic! In Proceedings of the first workshop on Hot topics in software defined networks</title>
+		<meeting><address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="25" to="30" />
+		</imprint>
+	</monogr>
+	<note>HotSDN &apos;12, ACM</note>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Building extensible networks with rule-based forwarding</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Popa</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Ratnasamy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stoica</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI</title>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<analytic>
+		<title level="a" type="main">The power of simple tabulation hashing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P ˇ Atrasçuatrasçu</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thorup</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">J. ACM</title>
+		<imprint>
+			<biblScope unit="volume">59</biblScope>
+			<biblScope unit="page">50</biblScope>
+			<date type="published" when="2012-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">Sketching the delay: tracking temporally uncorrelated flow-level latencies</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanju`assanju` Sanju`as-Cuxart</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Barlet-Ros</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Duffield</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kompella</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">R</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the</title>
+		<meeting>the</meeting>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<monogr>
+				<title level="m">ACM SIGCOMM conference on Internet measurement conference</title>
+		<meeting><address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2011" />
+			<biblScope unit="page" from="483" to="498" />
+		</imprint>
+	</monogr>
+	<note>IMC &apos;11, ACM</note>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">Reversible sketches for efficient and accurate change detection over network data streams</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Schweller</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Gupta</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Parsons</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chen</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">IMC</title>
+		<imprint>
+			<date type="published" when="2004" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<analytic>
+		<title level="a" type="main">Revisiting the case for a minimalist approach for network flow monitoring</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sekar</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Reiter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">K</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">IMC</title>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<analytic>
+		<title level="a" type="main">Similarity search and locality sensitive hashing using TCAMs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shinde</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Goel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Gupta</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dutta</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGMOD</title>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<analytic>
+		<title level="a" type="main">Tabulation-based 5-independent hashing with applications to linear probing and second moment estimation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thorup</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">SIAM J. Comput</title>
+		<imprint>
+			<biblScope unit="volume">41</biblScope>
+			<biblScope unit="page" from="293" to="331" />
+			<date type="published" when="2012-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b36">
+	<analytic>
+		<title level="a" type="main">New streaming algorithms for fast detection of superspreaders</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Venkataraman</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Song</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Gibbons</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">B</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Blum</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Network and Distributed System Security Symposium</title>
+		<imprint>
+			<date type="published" when="2005" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b37">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Walsworth</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Aben</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Kc</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Claffy</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">And</forename><surname>Andersen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>The</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Caida</forename><surname>Anonymized</surname></persName>
+		</author>
+		<ptr target="http://www.caida.org/data/passive/passive_2009_dataset.xml" />
+		<imprint>
+			<date type="published" when="2009-09-17" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b38">
+	<analytic>
+		<title level="a" type="main">sflow: Towards resource-efficient and agile service federation in service overlay networks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">I</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Distributed Computing Systems, International Conference on 0</title>
+		<imprint>
+			<date type="published" when="2004" />
+			<biblScope unit="page" from="628" to="635" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b39">
+	<analytic>
+		<title level="a" type="main">A linear-time probabilistic counting algorithm for database applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Whang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K.-Y</forename><surname>Vander-Zanden</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">T</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Taylor</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">M</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Trans. Database Syst</title>
+		<imprint>
+			<biblScope unit="volume">15</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="208" to="229" />
+			<date type="published" when="1990-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b40">
+	<monogr>
+		<title level="m" type="main">Software defined traffic measurement with opensketch</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><forename type="middle">U</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jose</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Miao</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+<note type="report_type">Technical Report</note>
+</biblStruct>
+
+<biblStruct xml:id="b41">
+	<analytic>
+		<title level="a" type="main">ProgME: Towards programmable network measurement</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yuan</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Chuah</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C.-N</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mohapatra</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM SIGCOMM</title>
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b42">
+	<analytic>
+		<title level="a" type="main">Online identification of hierarchical heavy hitters: Algorithms, evaluation, and applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Singh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Sen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Duffield</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lund</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">IMC</title>
+		<imprint>
+			<date type="published" when="2004" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b43">
+	<analytic>
+		<title level="a" type="main">Design of a novel statistics counter architecture with optimal space and time efficiency</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhao</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Q</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Liu</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM SIGMETRICS</title>
+		<imprint>
+			<date type="published" when="2006" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b44">
+	<monogr>
+		<title level="m" type="main">Sampling and filtering techniques for IP packet selection</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zseby</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">T</forename><surname>Al</surname></persName>
+		</author>
+		<ptr target="http://www.ietf.org/internet-drafts/draft-ietf-psamp-sample-tech-07.txt" />
+		<imprint>
+			<date type="published" when="2005-07" />
+		</imprint>
+	</monogr>
+	<note>Work in progress</note>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

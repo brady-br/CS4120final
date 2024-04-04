@@ -1,0 +1,1183 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:57+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">SplitKV: Splitting IO Paths for Different Sized Key-Value Items with Advanced Storage Devices</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shukai</forename><surname>Han</surname></persName>
+							<email>hanshukai@ict.ac.cn</email>
+							<affiliation key="aff0">
+								<orgName type="department">SKL Computer Architecture</orgName>
+								<orgName type="institution" key="instit1">ICT</orgName>
+								<orgName type="institution" key="instit2">University of Chinese Academy of Science</orgName>
+								<address>
+									<region>CAS</region>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dejun</forename><surname>Jiang</surname></persName>
+							<email>jiangdejun@ict.ac.cn</email>
+							<affiliation key="aff0">
+								<orgName type="department">SKL Computer Architecture</orgName>
+								<orgName type="institution" key="instit1">ICT</orgName>
+								<orgName type="institution" key="instit2">University of Chinese Academy of Science</orgName>
+								<address>
+									<region>CAS</region>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jin</forename><surname>Xiong</surname></persName>
+							<email>xiongjin@ict.ac.cn</email>
+							<affiliation key="aff0">
+								<orgName type="department">SKL Computer Architecture</orgName>
+								<orgName type="institution" key="instit1">ICT</orgName>
+								<orgName type="institution" key="instit2">University of Chinese Academy of Science</orgName>
+								<address>
+									<region>CAS</region>
+								</address>
+							</affiliation>
+						</author>
+						<title level="a" type="main">SplitKV: Splitting IO Paths for Different Sized Key-Value Items with Advanced Storage Devices</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Modern advanced storage devices, such as modern NVMe SSD and non-volatile memory based persistent memory (PM), provide different access features when data size varies. Existing key-value stores adopt unified IO path for all key-value items, which cannot fully exploit the advantages of different advanced storage devices. In this paper, we propose to split IO paths for different sized key-value items. We let small key-value items be written directly to PM and then migrated to SSD. Meanwhile, large key-value items are directly written to SSD. We present and discuss design choices towards challenging issues of splitting IO paths. We build SplitKV, a key-value store prototype to show the benefits of splitting IO paths. The preliminary results show SplitKV outperforms RocksDB, KVell, and NoveLSM under small-large KV mixed workloads.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Persistent Key-Value (KV) stores are widely deployed as a key component of storage infrastructure in today's data centers. Persistent KV stores usually serve interactive applications, such as web search <ref type="bibr" target="#b7">[7,</ref><ref type="bibr" target="#b20">20]</ref>, e-commerce <ref type="bibr" target="#b9">[9]</ref>, and social networks <ref type="bibr" target="#b12">[12]</ref>. Thus, KV stores are required to provide fast access of data for ensuring service quality for upper-level applications <ref type="bibr" target="#b10">[10,</ref><ref type="bibr" target="#b17">17,</ref><ref type="bibr" target="#b26">26]</ref>. A few recent works have analyzed the real-world KV store workloads and reported that the size of key-value items varies from a couple of bytes to hundreds of kilobytes <ref type="bibr" target="#b2">[4,</ref><ref type="bibr" target="#b20">20,</ref><ref type="bibr" target="#b33">33]</ref>. More importantly, small key-value items are dominant in real-world workloads <ref type="bibr" target="#b2">[4]</ref>. For example, the average value sizes of three workloads in Facebook, including social graph, distributed KV store, and AI/ML services, are 126.7 B, 42.9 B, and 46.8 B.</p><p>Over the past decade, a number of research efforts are made to design and optimize block device based key-value stores <ref type="bibr" target="#b6">[6,</ref><ref type="bibr" target="#b23">23,</ref><ref type="bibr" target="#b25">25,</ref><ref type="bibr" target="#b27">27,</ref><ref type="bibr" target="#b28">28,</ref><ref type="bibr" target="#b30">30]</ref>. Conventional block devices, such as hard disk drives and low-end/medium-end solid state drives (SSDs), provide better performance when serving sequential access with large granularity, Log-Structured Merge Tree (LSM-Tree) structure <ref type="bibr" target="#b24">[24]</ref> is widely adopted in existing KV stores <ref type="bibr" target="#b12">[12,</ref><ref type="bibr" target="#b14">14]</ref>. LSM-Tree converts random writes to sequential writes to make full use of maximum bandwidth.</p><p>Recently, advanced storage devices exhibit different features compared to conventional block devices, which provides new design choices for building high-performance KV stores. On one hand, non-volatile memory based persistent memory, such as Intel DC persistent memory (Intel DC PM <ref type="bibr" target="#b0">[1]</ref>), provides byte-addressable access and sub-microsecond latency for directly persisting data. A few recent works propose to adopt persistent memory to remove write-ahead log and reduce (de-)serialization overhead <ref type="bibr" target="#b18">[18,</ref><ref type="bibr" target="#b19">19]</ref>. On the other hand, modern NVMe SSD, such as Intel Optane SSD <ref type="bibr">[3]</ref>, sustains high throughput with sub-millisecond latency and provides similar performance for both sequential and random accesses. This motivates research effort to batch KV requests and write to SSD directly without commit log and sorting on disk <ref type="bibr" target="#b21">[21]</ref>.</p><p>In this paper, we take the insight that KV items with different sizes benefit differently from PM and modern fast SSD (e.g. Optane SSD). <ref type="table">Table 1</ref> shows the write latencies of PM and Optane SSD. Writing 64 B data to PM outperforms writing it to Optane SSD by 79.2x. However, the write latency gaps between PM and SSD decrease when the data size increases. For example, when writing 16 KB or above, the gap decreases under 3x. Existing KV stores adopt unified IO path for all KV items. However, this design choice cannot fully exploit the advantages of these advanced storage devices. Thus, we explore to split IO paths for different sized KV items. We let small KV items be written to PM directly and migrated to SSD later. As for large KV items, we directly write them to SSD.</p><p>Although providing different IO paths to different sized KV items sounds intuitive, applying it to build KV store faces several challenges. First, the size boundary to distinguish small and large KV items needs to carefully decide. Writing KV items directly on PM benefits from lower write latency than writing to SSD. However, these KV items require to be flushed to SSD later at the cost of competing PM read bandwidth as <ref type="bibr">well</ref>    to carefully decide the size boundary of small/large KV items to balance the benefit of writing PM and the migration cost. Second, due to the PM space limitation, small KV items still need to be migrated to SSD. On one hand, accessing small KV items in SSD suffers from read/write amplification. Especially, it causes degraded performance when reclaiming invalid small KV items on SSD. Byte-addressable PM allows in-place-update for small KV items. Thus, one needs to carefully figure out cold KV items and migrate them to SSD to help reduce read/write amplification. On the other hand, KV migration affects the foreground query operations on both PM and SSD. It is necessary to design well-controlled migration to avoid negative impact on KV store performance.</p><p>Third, taking the querying process of a KV store into account, index searching and updating contribute a significant part to the accessing performance, especially when KV item accessing only needs sub-microsecond on PM. Thus, it is non-trivial to build a highly-efficient indexing for SplitKV for managing small KV items on PM and large ones on SSD.</p><p>In this paper, we build a key-value store prototype SplitKV to explore the advantages of splitting IO paths for different sized key-value items. We explore the design choices for the above first and second issues and discuss the third one. We show the preliminary results of SplitKV against conventional LSM-Tree based RocksDB, Optane SSD based KVell, and PM based NoveLSM. Under small-large mixed workloads, SplitKV improves throughput by up to 7.8x ,and reduce average write latency by up to 14.4x.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Background and Related Works</head><p>Existing KV stores make design choices to fully adapt to the access features of underlying storage devices.</p><p>LSM-Tree based KV store. Considering the performance of sequential access is faster than that of random access in earlier storage devices (e.g. hard disk drives and earlier solid state drives), Log Structured Merge Tree is widely adopted in KV stores to convert random writes to sequential writes <ref type="bibr" target="#b24">[24]</ref>. LSM-Tree first writes KV items to in-memory buffer. When the buffer is full, the KV items are sorted and flushed to disk. This is beneficial to write-intensive workloads, which fully exploits the fast sequential access of earlier storage devices. However, LSM-Tree based KV store suffers from costly data compaction and slow data read. Recently, a number of research efforts are made to optimize LSM-Tree based KV stores <ref type="bibr" target="#b6">[6,</ref><ref type="bibr" target="#b13">13,</ref><ref type="bibr" target="#b23">23,</ref><ref type="bibr" target="#b25">25,</ref><ref type="bibr" target="#b27">27,</ref><ref type="bibr" target="#b30">30]</ref>.</p><p>Modern NVMe SSD based KV store. Compared to earlier storage device, modern NVMe SSD (e.g. Intel Optane SSD) provides higher bandwidth and lower access latency. Especially, modern NVMe SSD provides similar performance for random and sequential accesses. Conventional LSM-Tree based KV stores show CPU bottleneck instead of storage device bottleneck when running on Optane SSD <ref type="bibr">[3]</ref>. Thus, KVell <ref type="bibr" target="#b21">[21]</ref> proposes several design choices to reduce operations incurring CPU overhead. For example, KVell adopts exclusive data structures to reduce conflicts between threads, and batches requests to reduce the number of syscalls. Moreover, KVell does not sort data to avoid costly CPU operations.</p><p>Persistent Memory based KV store. Non-Volatile Memories (NVMs), such as 3D XPoint <ref type="bibr" target="#b1">[2]</ref>, Phase Change Memory (PCM) <ref type="bibr" target="#b29">[29]</ref>, and Resistive Memory <ref type="bibr" target="#b3">[5]</ref>, provide low latency and byte-addressable access. Thus, a number of persistent KV stores are proposed to build on NVM-based persistent memory. Some works <ref type="bibr" target="#b15">[15,</ref><ref type="bibr" target="#b31">31,</ref><ref type="bibr" target="#b32">32,</ref><ref type="bibr" target="#b34">34]</ref> focus on optimizing indexing in KV stores. Meanwhile, a few works instead explore applying PM to reduce the overheads of logging and (de-)serialization in LSM-Tree based KV stores <ref type="bibr" target="#b11">[11,</ref><ref type="bibr" target="#b18">18,</ref><ref type="bibr" target="#b19">19]</ref>. Motivation Although making design choices to adapt to different features of different storage devices, existing KV store design a unified IO path for handling all KV items. As reported in <ref type="bibr" target="#b2">[4]</ref>, the size ranges of real-world KV workloads are from a couple of bytes to hundreds of kilobytes. As shown in <ref type="table">Table 1</ref>, PM is friendly to serve small data (e.g. less than 1 KB) and meanwhile this advantage is weakened when data size increases. On the contrary, modern NVMe SSD suffers from read/write amplification when serving small data (e.g. less than 4 KB). This disadvantage does not exist when data is multiple block size 1 Moreover, modern NVMe SSD behaves similarly when serving sequential and random accesses as shown in <ref type="table">Table 1</ref>. Thus, we are motivated to design different IO paths for different sized KV items in this paper.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">SplitKV</head><p>In this section, we present the design of SplitKV. <ref type="figure" target="#fig_2">Figure 2</ref> shows the system overview of SplitKV. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Size Boundary of KV Items</head><p>Unlike byte-addressable persistent memory, modern NVMe SSD provides block interface which usually requires data access with 4 KB alignment. Thus, accessing KV items that are less than 4 KB in SSD suffers from read/write amplification. Moreover, as shown in <ref type="table">Table 1</ref>    <ref type="table" target="#tab_3">Table 2</ref>, the benefit starts to decrease when a KV items is equal to or greater than 4 KB. This is because the background migration competes for more PM bandwidth for migrating larger KV items.</p><p>Thus, SplitKV sets the size boundary of a small key-value pair to be 4 KB. Any KV pair whose size is equal to or greater than 4 KB is considered to be large one. The IO path for small KV items is first writing in PM and then migrating to SSD. This not only accelerates accessing small KV items, but also provides the opportunity of applying in-place-update in PM. A KV items is directly updated in case of existing in PM. Otherwise, the updated one is written in PM as logstructuring does. Moreover, small KV items can be sorted and clustered into 4 KB blocks when migrated to SSD. When serving scan queries, SplitKV is able to read these sorted small KV pairs with a couple of 4 KB blocks and thus reduces read amplification. We show the improved scan performance of SplitKV in Section 5.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Direct Writing Small KV Items</head><p>Batch writing is widely used in block devices by increasing IO queue depth. Batch writing helps to increase KV store throughput. However, when applying batch writing to PM, one requires to buffer KV items first in DRAM, and then flush them into PM in a batch. As reported in some works <ref type="bibr" target="#b16">[16,</ref><ref type="bibr" target="#b22">22]</ref>, the write latency of PM is close to that of DRAM. Instead of bringing throughput benefit, batch writing to PM causes additional memory copy overhead. Moreover, batching data in DRAM before flushing them to SSD takes the risk of data lost in case of power failure. In order to provide data reliability, extra efforts are required, such as data logging. Thus, SplitKV directly writes a KV item into PM with IO queue depth of 1.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">Hotness-aware KV Migration</head><p>Due to the limited space of PM, KV items in PM need to be migrated to underlying SSD for reclaiming PM space. As SplitKV applies appending write to small KV items in SSD, any update to an in-SSD small KV brings expensive garbage collection. Thus, SplitKV adopts hotness-aware KV migration and figures out KV items that are less frequently accessed for migration. The hotness-aware KV migration actually works like a cache, and existing or new cache policies can be explored to filter cold KV items. In this paper, we apply a simple policy for demonstration purpose. We set a weight for each KV item by using its access count. SplitKV runs a background thread to periodically calculate the average weight of all KV items in PM. When the PM capacity usage goes beyond a certain threshold (e.g. 80%), SplitKV selects the KV items whose weights are lower than the average one. These selected KV items are then migrated to SSD. For a KV item whose weight is greater than the average one, SplitKV instead updates its weight by subtracting the average one. <ref type="figure" target="#fig_3">Figure 3</ref> shows an example. There exist 6 KV items with different weights in PM, and the average weight is 3. SplitKV selects the items with the keys of 124, 661, 724 and 60 as the cold ones as their weights are less than 3. These four KV items are flushed to SSD. The weights of the KV items with keys 423 and 123 are updated by being subtracted by 3.</p><p>The background KV migration from PM to SSD introduces extra reads to PM. In order to reduce its impact on foreground queries, one needs to control the bandwidth competition by the background migration. However, slow migration in turn results in slowed PM space reclamation. <ref type="figure" target="#fig_1">Figure 1</ref> shows the read bandwidth changes of Optane DC PM as write threads increase. We can see that about 2 write threads can saturate the write bandwidth. Meanwhile, the write bandwidth can still be sustained around 1.2 GB/s even co-running 8 read threads. However, when the number of write threads increases, the read bandwidth is first reduced and then can also sustain stable. Moreover, the read bandwidth increases with increased read threads. Thus, we by default adopt 1 background thread to execute KV migration. On one hand, this has limited impact on PM writes. On the other hand, one still can increase the background threads in case of urgent PM space reclaiming.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">KV Operations</head><p>Put When serving KV item insertion, SplitKV adopts different IO paths for different sized KV items. As for large KV items, SplitKV batches items in a queue, and then submit the whole queue. Otherwise, SplitKV directly writes small KV items in PM. After successfully writing KV item(s) in either PM or SSD, SplitKV creates the index entry(ies) in B + -Tree and returns success to upper-level applications. Update When updating a large KV item, SplitKV applies in-place-update by executing read-modify-write to the target KV item. In case of updating a small KV item, SplitKV applies in-place-update to the target KV item if it is located in PM. Otherwise, the KV item is already migrated to SSD, and SplitKV adopts out-of-place update by directly writing the updated one in PM. Then, SplitKV updates the location of the KV item in the global B + -Tree index. The KV item in SSD is marked as invalid and then recycled. We leave the garbage collection process as the future work. Get/Scan To search a KV item or a range of KV items, SplitKV first searches the B + -Tree index to locate the item(s). Then, SplitKV fetches the item(s) according to its location(s) from either PM or SSD.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Evaluation</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1">Experiment Setup</head><p>System and hardware configuration. We conduct all experiments on a server equipped with two Intel Xeon Gold 5215 CPU (2.5GHZ), 64GB memory, one Intel Optane SSD P4800 and one Intel Optane DC PM. We run CentOS Linux release 7.6.1810 with 4.18.8 kernel. Compared systems. We compare SplitKV against RocksDB <ref type="bibr" target="#b12">[12]</ref>, <ref type="bibr">KVell [21]</ref> and NoveLSM <ref type="bibr" target="#b19">[19]</ref>. We set MemTable size of RocksDB to 64MB. Note that, RocksDB does not use PM and adopts asynchronous write ahead log. KVell does not sort data on disk, and uses non-shared data structures and batches I/O requests to reduce CPU overhead. NoveLSM uses PM to reduce (de-)serialization cost and is implemented on LevelDB. We set up 8 GB persistent   MemTable and 64 MB in-DRAM MemTable for NoveLSM. For SplitKV, we set 8 GB PM for it. Workloads. We use the 6 default workloads in YCSB <ref type="bibr" target="#b8">[8]</ref> for evaluation. Workload A performs 50% reads and 50% updates; Workload B performs 95% reads and 5% updates; Workload C performs 100% reads; Workload D performs 95%reads for latest keys and 5% inserts; Workload E performs 95% range queries and 5% inserts; Workload F performs 50% reads and 50% read-modify-writes. We evaluate both uniform and zipfian distributions. All workloads include small KV items with 256 B value and large KV items with 4 KB value. All keys have a length of 8 B. We first warm up a 200 GB database and then run workloads A, B, C, D, E in turn. Each workload handles 128 GB data set, in which small/large KV items account for half respectively. We execute 5 runs for each experiment and use average results. For read-intensive workloads B, C and D, SplitKV and KVell achieved better performance than NoveLSM and RocksDB due to the adoption of the global B + -Tree index. SplitKV is able to fetch small KV items from PM instead of SSD. Thus, SplitKV improves both latency and throughput compared to KVell.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2">Evaluation Results</head><p>For workload E, SplitKV outperforms RocksDB and KVell by 1.6x and 1.7x respectively under zipfan workloads in terms of throughput. Meanwhile, SplitKV achieves lowest latency among all KV stores. KVell does not sort small KV items in SSD. This introduces read amplification to KVell when serving scan query by reading a plenty of blocks. Thus, KVell suffers from the highest latency. NoveLSM and RocksDB performs better than KVell as they sort all KV items in SSD. SplitKV does not sort large KV items in SSD which reduces CPU overhead. Meanwhile, SplitKV flushes sorted small KV items into SSD, which helps to accelerate scan performance. Therefore, SplitKV further outperforms NoveLSM and RocksDB.</p><p>Note that, compared to the results under zipfan workloads, the latency and throughput improvements of SplitKV decrease under uniform workload. This is because the current hotnessaware migration policy is difficult to figure out cold items under uniform workloads.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Conclusion</head><p>Modern NVMe SSD and persistent memory provide different access features when serving small/large data. In this paper, we propose SplitKV to provide different IO paths for different sized KV items for building KV stores with such advanced storage devices. SplitKV let small KV items be written in PM directly and then selectively migrated to SSD. As for large KV items, SplitKV directly writes them to SSD. Our preliminary evaluations show SplitKV outperforms state-of-the-art KV stores in terms of both throughput and latency.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Discussion Topics</head><p>Exploration of advanced storage devices in KV stores. Earlier storage devices prefer sequential access with large granularity than small random writes. This results in the widely adopted design choice of LSM-Tree in existing KV stores. However, LSM-Tree suffers from expensive data compaction and slow reads. A number of research efforts propose optimizations based on LSM-Tree <ref type="bibr" target="#b6">[6,</ref><ref type="bibr" target="#b13">13,</ref><ref type="bibr" target="#b23">23,</ref><ref type="bibr" target="#b25">25,</ref><ref type="bibr" target="#b27">27]</ref>. With the development of advanced storage devices, such as Intel Optane SSD and Intel Optane DC PM, it is desirable to fully discuss the impact of these devices on KV stores as well as explore their usages on designing KV stores. A few recent works, such as KVell <ref type="bibr" target="#b21">[21]</ref> and NoveLSM <ref type="bibr" target="#b19">[19]</ref>/SLM-DB <ref type="bibr" target="#b18">[18]</ref>, have explored the design choices of KV stores towards Optane SSD and Optane PM respectively.</p><p>We argue splitting IO paths for different sized KV items to match different features of advanced storage devices. Although the preliminary results show SplitKV outperforms existing KV stores, several interesting topics deserve further discussion.</p><p>(1) Handling small items. As for large KV items, KVell proposes an effective approach to handle with modern NVMe SSDs. However, small KV items cannot benefit much from such design choices. SplitKV writes small KV items first in PM to shorten its write path, but the organization and update of small KV items in SSD are still open issues. LSM-Tree may not be a well-suited choice for modern NVMe SSDs. An alternative approach is keep small items in PM as much as possible. SplitKV explores filtering KV items before they are migrated to SSD with a simple policy. This policy can be further studied to distinguish different types of KV items according to features of PM and SSD. In such doing, PM friendly KV items can be figured out and kept in PM to accelerate KV access. Meanwhile, this helps to reduce IO pressures to SSD. (2) Efficient indexing. <ref type="table">Table 1</ref> shows that PM improves write latency by almost 2 orders of magnitude compared to SSD with small granularity. However, we observe in the system level, the small-item write latency of SplitKV is only 10x faster than that of KVell which directly writes KVs to SSD (as shown in <ref type="table" target="#tab_3">Table 2</ref>). This is because the indexing contributes more overhead when accessing KV items with underlying PM. One explorable direction is to design hybrid index for data in PM and SSD. For example, a global index is adopted to locate data in both PM and SSD to provide fast read, and meanwhile a PM friendly and highly efficient index is designed to search items in PM. We leave this for our future work. (3) Flow control of PM. Migrating KV items from PM to SSD competes for PM bandwidth when reading data and meanwhile competes for SSD bandwidth when writing data. A carefully designed flow control or request scheduling is still an open issue.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: Trends of PM bandwidth. These figures show the trends of read and write bandwidth of Optane PM with changing read and write threads.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: SplitKV overview. (1) Large items are batch flushed to unsorted tables (ust) in SSD. (2) Small items are directly written to segments in PM. (3) Small items with low weights are migrated to SSD to generate sorted tables (st). (4) A global B + -Tree index is used to index KV items in both PM and SSD. The B + -Tree index is persisted in PM.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: A simple example of migrating KV items from PM to SSD.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_4"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: Normalized throughputs of different KV stores. The figure shows the throughput of different KV stores with four threads under YCSB mixed workloads.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="false"><head>as SSD write bandwidth. Thus, it is necessary</head><label></label><figDesc></figDesc><table>Random Write Latency (us) 
+Access Size 
+64 B 256 B 1 KB 4 KB 16 KB 64 KB 128 KB 1 MB 4 MB 16 MB 
+Optane SSD 
+14.09 14.09 14.09 14.09 21.44 
+45.79 
+145.58 
+532 
+2091 
+8223 
+Optane DC PM 0.18 
+0.20 
+0.43 
+1.05 
+3.90 
+15.50 
+61.88 
+247.25 1440 
+6840 
+Ratio 
+79.2 
+70.5 
+33.0 
+13.4 
+5.50 
+2.9 
+2.4 
+2.2 
+1.45 
+1.2 
+
+Table 1: Random write latencies (us) of Optane DC Persistent Memory and Optane SSD. The performance gap between 
+PM and SSD decreases when the access size increases. 
+
+0 
+
+500 
+
+1000 
+
+1500 
+
+2000 
+
+2500 
+
+0 
+1 
+2 
+3 
+4 
+5 
+6 
+7 
+8 
+
+Bandwidth 
+
+(MB/s) 
+
+write thread 
+
+read 
+write 
+
+(a) 1 read thread. 
+
+0 
+
+1000 
+
+2000 
+
+3000 
+
+4000 
+
+5000 
+
+0 
+1 
+2 
+3 
+4 
+5 
+6 
+7 
+8 
+
+Bandwidth 
+
+(MB/s) 
+
+write thread 
+
+read 
+write 
+
+(b) 4 read threads. 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_3" validated="false"><head>Table 2 :</head><label>2</label><figDesc></figDesc><table>Average write latencies (us) of writing PM and 
+writing SSD. PM + SSD indicates first writing KV items in 
+PM and then migrating them to SSD when 80% of PM is filled. 
+SSD indicates directly writing KV items to SSD. 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_4" validated="false"><head>Table 2 shows</head><label>2</label><figDesc>the average write latencies when adopting different IO paths for different sized KV items. The ratios indicate the write latency benefit of writing KVs in PM first and then migrating to SSD. As shown in</figDesc><table></table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_6" validated="false"><head>Table 3 :</head><label>3</label><figDesc></figDesc><table>Average latencies of different KV stores. This table shows the average latency (us) comparison of different KV stores 
+with single thread under YCSB mixed workloads. 
+
+0 
+
+2 
+
+4 
+
+6 
+
+8 
+
+A 
+B 
+C 
+D 
+E 
+F 
+A 
+B 
+C 
+D 
+E 
+F 
+
+Uniform 
+Zipfan 
+
+Norm.Throughput 
+RocksDB KVell SplitKV 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_7" validated="false"><head>Table 3 shows</head><label>3</label><figDesc></figDesc><table>latency results of different KV stores using 
+single thread, and meanwhile Figure 4 shows the through-
+put results normalized to RocksDB using four threads 2 . For 
+workloads A and F, SplitKV reduces latency by 14.4x, 6.9x, 
+and 3.1x compared to NoveLSM, RocksDB and KVell under 
+zipfan workloads. As for throughput, SplitKV outperforms 
+RocksDB and KVell by 5.8x and 1.6x respectively. LSM-
+Tree based NoveLSM and RocksDB perform compaction 
+to ensure ordered data and recycle invalid data. This causes 
+high write amplification and reduces performance. KVell ap-
+plies in-place-update for all KV items to avoid sorting over-</table></figure>
+
+			<note place="foot" n="1"> Here the size of a block is 4 KB, which is the default block granularity for most block devices.</note>
+
+			<note place="foot" n="2"> Note that NoveLSM only supports single thread.</note>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgments</head><p>We would like to thank the anonymous reviewers for their helpful comments. We thank Ying Wang and Huan Zhang for useful discussions. This work is supported by National Key Research and Development Program of China under grant No.2018YFB1003303, Strategic Priority Research Program of the Chinese Academy of Sciences under grant No. XDB44030200.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title level="m" type="main">Big memory breakthrough for your biggest data challenges</title>
+		<ptr target="https://www.intel.com/content/www/us/en/architecture-and-technology/optane-dc-persistent-memory.html" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title level="m" type="main">Intel and micron produce breakthrough memory technology</title>
+		<ptr target="https://www.intel.com/content/www/us/en/architecture-and-technology/intel-micron-3d-xpoint-webcast.html" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">Workload analysis of a large-scale key-value store</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Berk</forename><surname>Atikoglu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yuehai</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eitan</forename><surname>Frachtenberg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Song</forename><surname>Jiang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mike</forename><surname>Paleczny</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM SIG-METRICS/PERFORMANCE Joint International Conference on Measurement and Modeling of Computer Systems, SIGMETRICS &apos;12</title>
+		<editor>Peter G. Harrison, Martin F. Arlitt, and Giuliano Casale</editor>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="53" to="64" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><forename type="middle">G</forename><surname>Baek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">S</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Seo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">J</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">H</forename><surname>Seo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">C</forename><surname>Suh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">O</forename><surname>Park</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">S</forename><surname>Park</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><forename type="middle">K</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">U</forename><surname>Yoo</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Highly scalable nonvolatile resistive memory using simple binary oxide driven by asymmetric unipolar voltage pulses</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">T</forename><surname>Chung</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Moon</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">IEDM Technical Digest. IEEE International Electron Devices Meeting</title>
+		<imprint>
+			<date type="published" when="2004-12" />
+			<biblScope unit="page" from="587" to="590" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Hashkv: Enabling efficient updates in KV storage via hashing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">W</forename><surname>Helen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yongkun</forename><surname>Chan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">C</forename><surname>Patrick</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yinlong</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Xu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2018 USENIX Annual Technical Conference (USENIX ATC 18)</title>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="1007" to="1019" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Bigtable: A distributed storage system for structured data</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fay</forename><surname>Chang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeffrey</forename><surname>Dean</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanjay</forename><surname>Ghemawat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wilson</forename><forename type="middle">C</forename><surname>Hsieh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Deborah</forename><forename type="middle">A</forename><surname>Wallach</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Burrows</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tushar</forename><surname>Chandra</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrew</forename><surname>Fikes</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><surname>Gruber</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">7th Symposium on Operating Systems Design and Implementation (OSDI &apos;06)</title>
+		<meeting><address><addrLine>Seattle, WA, USA</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="2006-08" />
+			<biblScope unit="page" from="205" to="218" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Benchmarking cloud serving systems with ycsb</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Brian</forename><forename type="middle">F</forename><surname>Cooper</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adam</forename><surname>Silberstein</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Erwin</forename><surname>Tam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Raghu</forename><surname>Ramakrishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Russell</forename><surname>Sears</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 1st ACM Symposium on Cloud Computing, SoCC &apos;10</title>
+		<meeting>the 1st ACM Symposium on Cloud Computing, SoCC &apos;10</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="143" to="154" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Dynamo: Amazon&apos;s highly available key-value store</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Giuseppe</forename><surname>Decandia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Deniz</forename><surname>Hastorun</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Madan</forename><surname>Jampani</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gunavardhan</forename><surname>Kakulapati</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Avinash</forename><surname>Lakshman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alex</forename><surname>Pilchin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Swaminathan</forename><surname>Sivasubramanian</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Peter</forename><surname>Vosshall</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Werner</forename><surname>Vogels</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">SIGOPS Oper. Syst. Rev</title>
+		<imprint>
+			<biblScope unit="volume">41</biblScope>
+			<biblScope unit="issue">6</biblScope>
+			<biblScope unit="page" from="205" to="220" />
+			<date type="published" when="2007-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Facebook</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Myrocks</surname></persName>
+		</author>
+		<ptr target="http://myrocks.io/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Facebook</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Nvmrocks</surname></persName>
+		</author>
+		<ptr target="http://istc-bigdata.org/index.php/nvmrocks-rocksdb-on-non-volatile-memory-systems/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Facebook</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Rocksdb</surname></persName>
+		</author>
+		<ptr target="http://rocksdb.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Scaling concurrent log-structured data stores</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Guy</forename><surname>Golan-Gueta</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Edward</forename><surname>Bortnikov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eshcar</forename><surname>Hillel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Idit</forename><surname>Keidar</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Tenth European Conference on Computer Systems, EuroSys 2015</title>
+		<meeting>the Tenth European Conference on Computer Systems, EuroSys 2015</meeting>
+		<imprint>
+			<date type="published" when="2015" />
+			<biblScope unit="volume">32</biblScope>
+			<biblScope unit="page" from="1" to="32" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Google</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Leveldb</surname></persName>
+		</author>
+		<ptr target="https://github.com/google/leveldb" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Endurable transient inconsistency in byte-addressable persistent b+-tree</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Deukyeon</forename><surname>Hwang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wook-Hee</forename><surname>Kim</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">16th USENIX Conference on File and Storage Technologies (FAST 18)</title>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="187" to="200" />
+		</imprint>
+	</monogr>
+	<note>Youjip Won, and Beomseok Nam</note>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<monogr>
+		<title level="m" type="main">Basic performance measurements of the intel optane DC persistent memory module</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joseph</forename><surname>Izraelevitz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jian</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lu</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Juno</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xiao</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amirsaman</forename><surname>Memaripour</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yun</forename><forename type="middle">Joon</forename><surname>Soh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zixuan</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yi</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Subramanya</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jishen</forename><surname>Dulloor</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steven</forename><surname>Zhao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Swanson</surname></persName>
+		</author>
+		<idno>abs/1903.05714</idno>
+		<imprint>
+			<date type="published" when="2019" />
+			<publisher>CoRR</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Betrfs: A right-optimized write-optimized file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">William</forename><surname>Jannen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jun</forename><surname>Yuan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yang</forename><surname>Zhan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amogh</forename><surname>Akshintala</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><surname>Esmet</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yizheng</forename><surname>Jiao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ankur</forename><surname>Mittal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Prashant</forename><surname>Pandey</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Phaneendra</forename><surname>Reddy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Leif</forename><surname>Walsh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Bender</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Martin</forename><surname>Farach-Colton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rob</forename><surname>Johnson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bradley</forename><forename type="middle">C</forename><surname>Kuszmaul</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Donald</forename><forename type="middle">E</forename><surname>Porter</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">13th USENIX Conference on File and Storage Technologies (FAST 15)</title>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="301" to="315" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Slm-db: Singlelevel key-value store with persistent memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Olzhas</forename><surname>Kaiyrakhmet</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Songyi</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Beomseok</forename><surname>Nam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sam</forename><forename type="middle">H</forename><surname>Noh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Young</forename><surname>Choi</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">17th USENIX Conference on File and Storage Technologies (FAST 19)</title>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2019" />
+			<biblScope unit="page" from="191" to="205" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Andrea Arpaci-Dusseau, and Remzi Arpaci-Dusseau. Redesigning lsms for nonvolatile memory with novelsm</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nitish</forename><surname>Sudarsun Kannan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ada</forename><surname>Bhat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Gavrilovska</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2018 USENIX Annual Technical Conference (USENIX ATC 18)</title>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="993" to="1005" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Atlas: Baidu&apos;s key-value storage system for cloud data</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Lai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Jiang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Lin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Sun</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Hou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Cui</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Cong</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2015 31st Symposium on Mass Storage Systems and Technologies (MSST)</title>
+		<imprint>
+			<date type="published" when="2015-05" />
+			<biblScope unit="page" from="1" to="14" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">Kvell: the design and implementation of a fast persistent key-value store</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Oana</forename><surname>Baptiste Lepers</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Karan</forename><surname>Balmau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Willy</forename><surname>Gupta</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Zwaenepoel</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 27th ACM Symposium on Operating Systems Principles, SOSP 2019</title>
+		<editor>Tim Brecht and Carey Williamson</editor>
+		<meeting>the 27th ACM Symposium on Operating Systems Principles, SOSP 2019</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2019" />
+			<biblScope unit="page" from="447" to="461" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Initial experience with 3d xpoint main memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jihang</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shimin</forename><surname>Chen</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">35th IEEE International Conference on Data Engineering Workshops, ICDE Workshops 2019</title>
+		<imprint>
+			<date type="published" when="2019" />
+			<biblScope unit="page" from="300" to="305" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Wisckey: Separating keys from values in ssd-conscious storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lanyue</forename><surname>Lu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thanumalayan</forename><surname>Sankaranarayana Pillai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hariharan</forename><surname>Gopalakrishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi</forename><forename type="middle">H</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<idno>5:1-5:28</idno>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Trans. Storage</title>
+		<imprint>
+			<biblScope unit="volume">13</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<date type="published" when="2017-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">The log-structured merge-tree (lsmtree)</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Patrick</forename><forename type="middle">E</forename><surname>O&amp;apos;neil</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Edward</forename><surname>Cheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dieter</forename><surname>Gawlick</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Elizabeth</forename><forename type="middle">J</forename><surname>O&amp;apos;neil</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Acta Inf</title>
+		<imprint>
+			<biblScope unit="volume">33</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="351" to="385" />
+			<date type="published" when="1996" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">Pebblesdb: Building key-value stores using fragmented log-structured merge trees</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pandian</forename><surname>Raju</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rohan</forename><surname>Kadekodi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vijay</forename><surname>Chidambaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ittai</forename><surname>Abraham</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 26th Symposium on Operating Systems Principles, SOSP &apos;17</title>
+		<meeting>the 26th Symposium on Operating Systems Principles, SOSP &apos;17</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="497" to="514" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">TABLEFS: Enhancing metadata efficiency in the local file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kai</forename><surname>Ren</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Garth</forename><surname>Gibson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Presented as part of the 2013 USENIX Annual Technical Conference (USENIX ATC 13)</title>
+		<imprint>
+			<publisher>USENIX</publisher>
+			<date type="published" when="2013" />
+			<biblScope unit="page" from="145" to="156" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<analytic>
+		<title level="a" type="main">blsm: A general purpose log structured merge tree</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Russell</forename><surname>Sears</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Raghu</forename><surname>Ramakrishnan</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2012 ACM SIGMOD International Conference on Management of Data, SIGMOD &apos;12</title>
+		<meeting>the 2012 ACM SIGMOD International Conference on Management of Data, SIGMOD &apos;12</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="217" to="228" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<monogr>
+		<title level="m" type="main">Wiredtiger caching and eviction</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Wiredtiger</surname></persName>
+		</author>
+		<ptr target="http://source.wiredtiger.com/" />
+		<imprint>
+			<date type="published" when="2019" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<analytic>
+		<title level="a" type="main">Phase change memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">.</forename><forename type="middle">P</forename><surname>Wong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Raoux</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Liang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">P</forename><surname>Reifenberg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Rajendran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Asheghi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><forename type="middle">E</forename><surname>Goodson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Proceedings of the IEEE</title>
+		<imprint>
+			<biblScope unit="volume">98</biblScope>
+			<biblScope unit="issue">12</biblScope>
+			<biblScope unit="page" from="2201" to="2227" />
+			<date type="published" when="2010-12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">Lsmtrie: An lsm-tree-based ultra-large key-value store for small data items</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xingbo</forename><surname>Wu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yuehai</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zili</forename><surname>Shao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Song</forename><surname>Jiang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2015 USENIX Annual Technical Conference (USENIX ATC 15)</title>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="71" to="82" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<analytic>
+		<title level="a" type="main">Hikv: A hybrid index key-value store for dram-nvm memory systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fei</forename><surname>Xia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dejun</forename><surname>Jiang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jin</forename><surname>Xiong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ninghui</forename><surname>Sun</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2017 USENIX Annual Technical Conference (USENIX ATC 17)</title>
+		<imprint>
+			<date type="published" when="2017" />
+			<biblScope unit="page" from="349" to="362" />
+		</imprint>
+	</monogr>
+	<note>USENIX Association</note>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">Nv-tree: Reducing consistency cost for nvm-based single level systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jun</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Qingsong</forename><surname>Wei</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cheng</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chundong</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Khai Leong</forename><surname>Yong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bingsheng</forename><surname>He</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">13th USENIX Conference on File and Storage Technologies (FAST 15)</title>
+		<imprint>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="167" to="181" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<analytic>
+		<title level="a" type="main">Characterizing, modeling, and benchmarking rocksdb key-value workloads at facebook</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Siying</forename><surname>Zhichao Cao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sagar</forename><surname>Dong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><forename type="middle">H C</forename><surname>Vemuri</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Du</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">18th USENIX Conference on File and Storage Technologies (FAST 20)</title>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2020-02" />
+			<biblScope unit="page" from="209" to="223" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<analytic>
+		<title level="a" type="main">Write-optimized and high-performance hashing index scheme for persistent memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pengfei</forename><surname>Zuo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yu</forename><surname>Hua</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jie</forename><surname>Wu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">13th USENIX Symposium on Operating Systems Design and Implementation (OSDI 18)</title>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="461" to="476" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

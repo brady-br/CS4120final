@@ -1,0 +1,539 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:48+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Towards Fair Sharing of Block Storage in a Multi-tenant Cloud</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xing</forename><surname>Lin</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">School of Computing</orgName>
+								<orgName type="institution">University of Utah</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yun</forename><surname>Mao</surname></persName>
+							<affiliation key="aff1">
+								<orgName type="laboratory">AT&amp;T Labs -Research</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Feifei</forename><surname>Li</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">School of Computing</orgName>
+								<orgName type="institution">University of Utah</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><surname>Ricci</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department">School of Computing</orgName>
+								<orgName type="institution">University of Utah</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Towards Fair Sharing of Block Storage in a Multi-tenant Cloud</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>A common problem with disk-based cloud storage services is that performance can vary greatly and become highly unpredictable in a multi-tenant environment. A fundamental reason is the interference between work-loads co-located on the same physical disk. We observe that different IO patterns interfere with each other significantly , which makes the performance of different types of workloads unpredictable when they are executed concurrently. Unpredictability implies that users may not get a fair share of the system resources from the cloud services they are using. At the same time, replication is commonly used in cloud storage for high reliability. Connecting these two facts, we propose a cloud storage system designed to minimize workload interference without increasing storage costs or sacrificing the overall system throughput. Our design leverages log-structured disk layout , chain replication and a workload-based replica selection strategy to minimize interference, striking a balance between performance and fairness. Our initial results suggest that this approach is a promising way to improve the performance and predictability of cloud storage.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Infrastructure-as-a-Service (IaaS) cloud computing services offer virtual machines (VMs) that provide elastic computing, storage and network resources. Exemplified by Amazon EC2, IaaS clouds are attractive because they are cost-effective and simple to manage.</p><p>There are several types of storage service abstractions in the cloud, including object stores (e.g. Amazon S3), block stores (e.g. Amazon EBS), and databases (e.g. Amazon RDS and Microsoft SQL Azure). Among these options, block-level storage provides the most flexibility. Because a block device is attached as a conventional disk to a VM, applications do not need to be modified to "port" them to the cloud. A block device can be mapped to a partition of a local attached hard drive, a logical volume from a Storage Area Network (SAN), or a customized driver that leverages a storage cluster. For example, Amazon EBS not only provides block storage, but also offers high reliability by performing replication in the storage cluster.</p><p>However, these cloud-based storage services introduce a multi-tenant environment and the performance experienced by the end-users in such an environment varies, sometimes more than an order of magnitude, compared with a dedicated cluster <ref type="bibr" target="#b1">[2,</ref><ref type="bibr" target="#b17">18]</ref>. For example, Shripad and Radu pointed out that at different times of day, the performance of Amazon EBS and S3 also varied significantly <ref type="bibr" target="#b13">[14]</ref>. Such performance fluctuations are a natural consequence of sharing servers, networks, and storage among many different users. Workloads from different tenants compete for shared resources. For block storage, when two or more tenants share the same physical disk, they compete for the disk head position for I/O accesses. For instance, random workloads from one tenant can destructively interfere with sequential workloads of another tenant <ref type="bibr" target="#b6">[7]</ref>, and reads may conflict with writes <ref type="bibr" target="#b0">[1]</ref>. Such interference makes the performance experienced by applications highly unpredictable. Attackers may also use the performance anomaly as a covert channel between VMs to perform co-residence checks <ref type="bibr" target="#b15">[16]</ref>.</p><p>Ideally, when there are n similar workloads sharing the storage system, the worst-case slowdown seen by each workload should be a factor of n compared to the performance obtained when running the workload in isolation. However, the unpredictability problem makes this almost impossible: as we will show in Section 2, when different types of workloads are randomly mixed on the same physical disk, the result is an unfair distribution of system resources among tenants. This paper focuses on improving the performance predictability of block storage in clouds, which naturally leads to a storage service that provides a fair share of system resources in a multi-tenant environment. To demonstrate the problem, we first present some observations and provide several design implications in Section 2. We then present the proposed architecture of our block storage system for the cloud, the FAST (Fair Assignment for Storage Tenants) system. FAST provides a blocklevel replicated storage service for reliability, while aiming to minimize the interference between different tenants. By default, each block device is replicated to three copies in the storage cluster, using chain replication <ref type="bibr" target="#b19">[20]</ref> to ensure reliability and durability. FAST uses different disk layouts on the replicas. In particular, we adopt logstructured storage <ref type="bibr" target="#b16">[17,</ref><ref type="bibr" target="#b9">10]</ref> in one of the replicas. This converts all write operations, whether they are sequential or random from tenant's perspective, into high throughput sequential IOs to reduce interference and improve write performance. We use the conventional layout with buffered-write storage in the other replicas. FAST intelligently redirects read operations to avoid co-locating random and sequential reads and thus the unpredictable interference between these types of workloads. Finally, we present initial simulation results that validate our hypothesis that FAST's design achieves a fair share of the storage service among users in a multi-tenant cloud environment without sacrificing the overall system throughput.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Observations and Design Implications</head><p>The design of the FAST system is motivated by our observations of undesirable interference between different types of workloads when they are concurrently executed on the same physical disk. We use the FIO tool <ref type="bibr" target="#b2">[3]</ref> to generate workloads directly at the block storage level. For higher-level experiments, we use the TPC-H benchmark <ref type="bibr" target="#b18">[19]</ref> to simulate real-world application scenarios. Specifically, our objective is to evaluate the performance interference between random and sequential workloads, and between reads and writes.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">Micro-benchmark with FIO</head><p>To investigate the performance interference between workloads, we looked into all types of workloads: random read (RR), sequential read (SR), random write (RW), and sequential write (SW). Each workload is set to run for 120 seconds. The block size is set to be 4 KB and we used direct I/O to bypass operating system caches and examine disk behavior directly. The I/O queue depth is set to be 32. We measure random workloads in terms of I/O operations per second (IOPS), and use throughput to measure sequential workloads. <ref type="bibr" target="#b0">1</ref> We used a Seagate Cheetah 10,000 RPM 146 GB SCSI disk for our tests. The Product ID is ST3146707LC. The SCSI storage controller in use is LSI Logic/Symbios Logic 53c1030 PCI-X Fusion-MPT Dual Ultra320 SCSI. Each workload writes to a different 10 GB physical region of the disk.</p><p>Co-locating similar workloads. Our first set of experiments puts workloads of the same type on the same <ref type="bibr" target="#b0">1</ref> For random workloads, IOPS tells the seek interval directly while for sequential workloads, the throughput is not sensitive to buffer size. disk, varying the number of workloads from one to eight. We present the results for random read and sequential write workloads in <ref type="figure" target="#fig_0">Figure 1</ref>; trends for the other two types (not shown) are similar. As we can see, fair share in performance (hence, the system resources) is preserved: for each experiment, all workloads see similar IOPS or throughput. <ref type="bibr" target="#b1">2</ref> ® Observation 1: When co-locating the same type of workloads, each workload gets a fair share in performance and system resources.</p><p>Co-locating different types of workloads. The destructive interference from co-locating different types of workloads are presented in <ref type="figure">Figure 2</ref>. <ref type="figure">Figure 2</ref>(a) shows the IOPS achieved by an RR workload (denoted as the base workload) co-located with one instance of the four types of workloads. The ideal case for predictability and fair-sharing would be for the base workload to achieve approximately 50% of single-tenant performance. The '1/2' bar shows this ideal case for reference. <ref type="figure">Figures 2(b)</ref>, (c) and (d) represent the same results for similar experiments when we change the base workload from RR to SR, RW, and SW respectively. These figures reveal several interesting findings.</p><p>® Observation 2: A random write workload is destructive for all other types of workloads: for all base workloads, the RW bar is the lowest. This holds even for the RW workload itself.</p><p>® Observation 3: Sequential write workloads are seriously impacted by workloads of a different type. The SW bar in <ref type="figure">Figure 2</ref>(d) is the highest, indicating that a sequential workload gets its maximum performance only when it co-locates with another workload of the same type. In fact, the SW bars in all figures are the highest, i.e. all workloads increase their performance by unfairly "stealing" performance from the SW workload.</p><p>® Observation 4: When co-locating two SW workloads, the aggregated throughput is actually larger than the throughput when running a single such workload alone. We further verified that this holds for up to 8 concurrent SW workloads (not shown).</p><p>® Observation 5: It is not worth co-locating the two types of read workloads: RR and SR. Doing so brings  </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">Real-world applications</head><p>Previous results have demonstrated the interference between workloads at the block storage level. Such interference can be propagated to the application layer. To measure this effect, we used the 21 queries provided with TPC-H as a random workload 3 , and 9 queries doing in-order scans of database tables as a sequential workload. We populated a database at the scale factor of 1 (other scale factors were also tested but the results were quite similar). We ran these two workloads against this database, either in isolation or concurrently. We compare the total execution time for each workload, averaged across three runs. The results are presented in <ref type="figure" target="#fig_2">Figure 3</ref>. The random workload is labeled 'R', while the sequential workload is labeled 'S.' 'C1' bars show the execution time when each workload runs in isolation. while 'C2' bars show the time taken by each workload when the sequential and random benchmarks are run concurrently on the same disk.</p><p>Running the two workloads concurrently on the same disk increases the runtime of the random workload by only 10%: when run by itself, it takes 212 seconds, and when co-located with the sequential workload, it takes 233 seconds. However, co-location increases the runtime of the sequential workload more substantially, from 19 3 TPC-H query 18 was removed because it took too long to finish. seconds to 51, an increase of 168%. This clearly demonstrates that random workloads do interfere with sequential workloads for real-world applications.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">System Design</head><p>The FAST system offers block-level storage abstraction to VMs. Each device is presented as a virtual disk, or a virtual volume, to the VM. The OS in the VM expects the volume have the same semantics of a raw disk, and have similar performance characteristics. In particular, sequential IOs in the linear address space of a volume should have much higher throughput than random IOs.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Assumptions</head><p>In designing a block storage system with predictable performance, we make the following assumptions.</p><p>• The system is built from many inexpensive commodity components that often fail. Replication is necessary to offer high availability and durability.</p><p>• Virtual volume sizes may range from 1GB to 1TB.</p><p>The number of physical disks available in the cloud is much less than the total number of requested block devices from all tenants.</p><p>• A block device can only be attached to at most one VM at a given time as the exclusive reader and writer. Live VM migration between hosts is rare so that block device handoff does not need to be optimized. These assumptions make our system design different from many existing storage systems that have to make difficult tradeoff in design between consistency and performance.</p><p>• No assumption is made on the storage workload from VMs. The workload may be database queries made of many small random reads, or map-reduce jobs with mostly sequential IOs and some random IOs.</p><p>• All nodes in the cloud are within a single data center, interconnected by high speed Ethernet with enough bi-section bandwidth.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Architecture</head><p>There are three types of roles in our system architecture as shown <ref type="figure" target="#fig_3">Figure 4</ref>: compute nodes, name nodes, and data nodes. Each of these runs a commodity Linux machine. A compute node runs a Xen hypervisor <ref type="bibr" target="#b3">[4]</ref> that hosts VMs, and runs our block device driver in Domain-0 as the client of the storage service (the FAST client). All disk IO requests within the VM in Domain-U is redirected to the driver.</p><p>A data node stores the data of the virtual volumes. We partition every three data nodes into a replication group, in which data is replicated on every data node for reliability and availability. Volumes are divided into fixed-size chunks. Each chunk is stored in one replication group. A chunk is also lazily allocated when the first write request within the chunk range is issued. Neither the driver nor the data node caches volume data. Caches offer little benefit because the application and OS inside the VM already maintains them. The FAST clients do cache metadata, however.</p><p>Finally, a name node provides a metadata service. It manages the mappings from tenants and chunk IDs to the corresponding replication groups, replication group memberships, access control information, and leases from clients. It is also responsible for detecting failed data nodes via heartbeat messages. The name node is also in charge of allocating chunks and deciding where to place them. We choose to have a single name node to favor simple design with the same argument made in GFS <ref type="bibr" target="#b5">[6]</ref>, and leave more sophisticated architecture (e.g. Paxos based replication <ref type="bibr" target="#b12">[13]</ref>) as future work.</p><p>When a volume is attached to a compute node, the driver first contacts the name node to establish a lease on the volume, then prefetches the chunk IDs of the volume and the addresses of the related replication groups. All these information is kept in memory. The lease will be periodically refreshed until the volume is detached. After initial setup, the driver starts to serve IO requests from the VM. If a write request is received, and the chunk has not been allocated, the client will ask the name node to allocate the chunk in a replication group. Otherwise the chunk location is available from the local lookup table.</p><p>Once the chunk location is determined, the data is sent to the replica group in a chained fashion shown in <ref type="figure">Figure 5</ref>. If a read request is received, and the chunk has not been allocated, a zero-filled buffer is returned directly. Otherwise, we find the replication group of the chunk, and use our read algorithm in Section 3.3 to pick one data node out of three to retrieve the data, and then return to the VM. Any node in the replication group is able to handle it without inconsistency. This is different from the chain replication used in object storage <ref type="bibr" target="#b19">[20]</ref> where multiple readers and writers are present. As the exclusive reader and writer, the device driver keeps track of pending write byte ranges and responds to the read requests only after pending overlapping writes finish.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">Layout and Strategy</head><p>Each data node may use either conventional disk layout such that a chunk is stored in contiguous physical disk sectors, or a log-structured disk layout (log layout in short), in the same spirit of a log-structured file system <ref type="bibr" target="#b16">[17]</ref>. In the log layout, data from different tenants are interleaved in the order of the time the data is written. A B-tree index is used to maintain a table to lookup data during read given a tuple specified by chunk ID, offset in chunk and length. Compared to the conventional layout (i.e., buffered write), the log layout effectively converts all chunk write requests, including both random and sequential, into sequential operations due to the appendonly log structure. As a result, random writes from one tenant will not disruptively interfere sequential writes of another tenant who share the same physical disk.</p><p>For the three data nodes in a replication group, we designate the tail node of the replication chain to use the log layout, and the head and middle node to use the conventional layout. During replication, we only write data to the disk buffer cache on the first two nodes, but make sure to flush all data to the disk on the tail node before a write succeed reply is sent to the compute node. The write strategy guarantees that the data is replicated on all three nodes, and is persistent on the tail node at least. The probability of all data corruption on three nodes at the same time due to power loss, server crash, or malfunctioning disk hardware is very low.</p><p>We choose not to flush buffer cache on the head and middle data node immediately after write requests for two reasons. First, write requests from one tenant may collide with read requests from another tenant. Having the option to delay writes without sacrificing much durability due to replication gives us the opportunity to address the read-write conflict. Second, because we use the conventional layout on those two nodes, flushing each write request would cause write-write interference among tenants.</p><p>For each read request, we use a default-with-steal strategy to select the data node for read. By default, the device driver always sends random read requests to the head node, and sequential read request to the middle node. As such, the read workload is always competing with the same type of workload, thus receiving its fair share. However, we also allow a data node to steal read requests from others, if it is currently idling or very lightly loaded compared to others, to maximize the disk utilization. For example, if the tail node is not doing any writes, or the middle node is not doing any sequential reads, they may steal random read requests from the head node queue to improve performance. Note that the device driver itself cannot make the decision because it is only aware of the workload of its own tenant.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Initial Results</head><p>We use simulation to demonstrate the advantage of our design. We compare FAST with a traditional approach called Baseline. In Baseline, chunks are also replicated in the replication group three times, but every data node uses the conventional disk layout. The IO scheduler is not workload type aware. Instead it binds a tenant to a replica for read in a round-robin fashion for load balancing.</p><p>In the simulation, we study one replication group with 3 disks and 30 tenants. Each has exactly one chunk assigned in the group, and all start workloads at the same time. The workloads consist of 10 random read of 16 MB each (RR), 10 sequential reads of 19 MB each (SR) , 5 random writes of 20 MB (RW), and 5 sequential writes of 20 MB (SW). For Baseline, 4 RRs and 3 SRs are assigned to the head node, 3 RRs and 4 SRs to the middle node, and 3 RRs and 3 SRs to the tail node. In FAST, 10 RRs are assigned to the head node, and 10 SRs to the middle node. All SWs and RWs are performed on the head and middle node as buffered writes, and on the tail node as direct write. However, note that in FAST the 5 RWs and the 5 SWs will be converted to one single SW workload on the tail node (the one with the log structure).</p><p>We used the same disks and tools described in Section 2 to simulate the behavior of FAST and Baseline. We measured the elapsed time for each workload and present the results in <ref type="figure" target="#fig_4">Figure 6</ref>. Each bar represents the performance for one workload. The bars marked as D1, D2 and D3 are workload performance in Baseline sched- uled on the head, middle and tail node respectively. We observe that (1) for the same type of workload, FAST gives consistent and fair performance regardless of the tenancy. Baseline yields highly variable performance depending on which node the tenant is associated with; (2) for sequential read and write workloads, FAST outperforms Baseline because there is no disk seek caused by random workloads for disruption; (3) for random write requests, because FAST adopts the log layout, it significantly outputs Baseline; (4) random read workloads take longer to execute in FAST than in Baseline. This is because those workloads are fixed on the head node in our simulation for FAST. The middle node and the tail node have been idle since 20 seconds and 4 seconds respectively. We expect the performance of random read in FAST to improve greatly once we implement the steal strategy (Section 3.3) for load balancing so that the two nodes can share the workload of the head node once they are idle. But more importantly, FAST achieves a fair share of system resource with strong and consistent predictability while Baseline fails to do so.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Related Work</head><p>There are many related work on providing QoS-based resource allocation for storage, such as Stonehenge <ref type="bibr" target="#b10">[11]</ref>, Argon <ref type="bibr" target="#b20">[21]</ref>, and Aqua <ref type="bibr" target="#b11">[12]</ref>. The goal of these algorithms is to allocate throughput or bandwidth in proportion to the pre-specified weights of the clients. Further proposals provide additional support for latency-sensitive applications (SMART <ref type="bibr" target="#b14">[15]</ref>, BVT <ref type="bibr" target="#b4">[5]</ref>, pClock <ref type="bibr" target="#b7">[8]</ref>). Furthermore, mClock <ref type="bibr" target="#b8">[9]</ref> borrows the concept of reservation and limit from CPU and memory scheduling to storage in additional to the proportional weight based allocation. These work typically abstract the storage device to a single block device, such as a physical disk, a LUN or a RAID device. They rely on the lower layer to deal with replications and do not try to change the I/O behavior of the guest VMs or clients. In contrast, we propose to leverage the replication information during scheduling to optimize the performance while maintaining fairness, and use log-structured storage on selected replicas to avoid write workload conflict.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Conclusion and Ongoing Work</head><p>In this position paper, we reveal the performance interference problem among different tenants when co-locating different types of workloads in the cloud. Then we propose the design of a block storage system FAST which provides a much better fair-sharing and a higher or at least comparable performance for different workloads. Our initial results showed that the new design is effective and promising.</p><p>We are still at the early stage of the design and implementation of FAST. There are many interesting challenges we have not investigated. First, in our initial evaluations, we assume that all workloads belonging to one type have similar I/O request characteristics. We plan to investigate effects of co-locating same type of workloads but with different I/O request characteristics (e.g., in term of block size and request frequency) and build models for them. Second, we need to deal with failures, including data and name node crashes and disk corruption. Because of different disk layouts and roles, the recovery procedures for data nodes might be different. Third, for load-balancing purpose, we need to design an allocation and placement algorithm on name node to efficiently use physical resources. We might also need to consider live chunk migration across replication groups to reduce hot spot. Forth, we need to study the tradeoff of chunk size selection with realistic workload. If the size is too small, then sequential workloads will be affected. But if the size is too large, it is likely to cause hot spot in a replica group. Finally, we are in the process of building the system. We expect the interaction of the network layer and the virtualization layer with the storage layer will also impose research challenges such as performance anomalies.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: Co-locating the same type of workloads.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head></head><label></label><figDesc>Figure 2: Interference between different types of workloads</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: Performance interference in TPC-H. little improvement in IOPS for RR workloads, but the drop in throughput for SR workloads is more significant. This drop is shown by the difference between RR and SR bars in Figure 2(b).</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: Overall System Architecture</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_4"><head>Figure 6 :</head><label>6</label><figDesc>Figure 6: FAST vs. Baseline for different workloads</figDesc></figure>
+
+			<note place="foot" n="2"> A minor exception is that for all types of workloads, when we ran two workloads of the same type concurrently, one workload always gets a slightly worse performance; we believe this to be an artifact of disk geometry.</note>
+		</body>
+		<back>
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">An analysis of disk performance in vmware esx server virtual machines</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Ahmad</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">M</forename><surname>Anderson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">M</forename><surname>Holler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><forename type="middle">M</forename><surname>Kambo</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. WWC</title>
+		<meeting>WWC</meeting>
+		<imprint>
+			<date type="published" when="2003-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Armbrust</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Fox</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Griffith</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">D</forename><surname>Joseph</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">H</forename><surname>Katz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Konwinski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">A</forename></persName>
+		</author>
+		<title level="m">Patterson, A. Rabkin, and M. Zaharia. Above the Clouds: A Berkeley View of Cloud Computing</title>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+<note type="report_type">Technical report</note>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title level="m" type="main">Flexible io tester</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Axboe</surname></persName>
+		</author>
+		<ptr target="http://freecode.com/projects/fio" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Xen and the art of virtualization</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Barham</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Dragovic</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Fraser</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Hand</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Harris</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Ho</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Neugebauer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Pratt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Warfield</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. SOSP</title>
+		<meeting>SOSP</meeting>
+		<imprint>
+			<date type="published" when="2003" />
+			<biblScope unit="page" from="164" to="177" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Borrowed-virtualtime (bvt) scheduling: supporting latency-sensitive threads in a general-purpose scheduler</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><forename type="middle">J</forename><surname>Duda</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">R</forename><surname>Cheriton</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. SOSP</title>
+		<meeting>SOSP</meeting>
+		<imprint>
+			<date type="published" when="1999" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">The google file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Ghemawat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Gobioff</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S.-T</forename><surname>Leung</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. SOSP</title>
+		<meeting>SOSP</meeting>
+		<imprint>
+			<date type="published" when="2003-10" />
+			<biblScope unit="page" from="29" to="43" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Storage workload characterization and consolidation in virtualized environments</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Gulati</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Kumar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Ahma</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. VPACT</title>
+		<meeting>VPACT</meeting>
+		<imprint>
+			<date type="published" when="2009-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">pclock: an arrival curve based approach for qos guarantees in shared storage systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Gulati</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Merchant</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">J</forename><surname>Varman</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. SIGMETRICS</title>
+		<meeting>SIGMETRICS</meeting>
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">mclock: handling throughput variability for hypervisor io scheduling</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Gulati</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Merchant</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">J</forename><surname>Varman</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. OSDI</title>
+		<meeting>OSDI</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Lithium: Virtual machine storage for the cloud</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">G</forename><surname>Hansen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. SoCC</title>
+		<meeting>SoCC</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="15" to="26" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<monogr>
+		<title level="m" type="main">Stonehenge: a high-performance virtualized ip storage cluster with qos guarantees</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Huang</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2003" />
+		</imprint>
+	</monogr>
+<note type="report_type">Technical report</note>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<monogr>
+		<title level="m" type="main">Aqua: an adaptive quality of service architecture for distributed multimedia applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Krishnamurthy</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1997" />
+		</imprint>
+	</monogr>
+<note type="report_type">Technical report</note>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Paxos made simple</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Lamport</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM SIGACT News</title>
+		<imprint>
+			<date type="published" when="2003-12" />
+			<biblScope unit="volume">32</biblScope>
+			<biblScope unit="page" from="18" to="25" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<monogr>
+		<title level="m" type="main">Cloud performance benchmark series: Amazon ebs, s3, and ec2 instance local storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">J</forename><surname>Nadgowda</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Sion</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2010-10" />
+		</imprint>
+	</monogr>
+<note type="report_type">Technical report</note>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">A smart scheduler for multimedia applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Nieh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">S</forename><surname>Lam</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Computer Systems</title>
+		<imprint>
+			<biblScope unit="volume">21</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="117" to="163" />
+			<date type="published" when="2003-05" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Savage. Hey, you, get off of my cloud: exploring information leakage in third-party compute clouds</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Ristenpart</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Tromer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Shacham</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. CCS</title>
+		<meeting>CCS</meeting>
+		<imprint>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="199" to="212" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">The design and implementation of a log-structured file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Rosenblum</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">K</forename><surname>Ousterhout</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM TOCS</title>
+		<imprint>
+			<date type="published" when="1992-02" />
+			<biblScope unit="page" from="26" to="52" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Runtime measurements in the cloud: observing, analyzing, and reducing variance</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Schad</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Dittrich</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J.-A</forename><surname>Quiané-Ruiz</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. VLDB</title>
+		<meeting>VLDB</meeting>
+		<imprint>
+			<date type="published" when="2010-09" />
+			<biblScope unit="page" from="460" to="471" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<monogr>
+		<title level="m" type="main">Transaction Processing Performance Council. The tpc-h benchmark</title>
+		<ptr target="http://www.tpc.org/tpch/" />
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Chain replication for supporting high throughput and availability</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Van Renesse</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><forename type="middle">B</forename><surname>Schneider</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. OSDI</title>
+		<meeting>OSDI</meeting>
+		<imprint>
+			<date type="published" when="2004-12" />
+			<biblScope unit="page" from="91" to="104" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Argon: Performance insulation for shared storage servers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Wachs</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Abd-El-Malek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Thereska</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">R</forename><surname>Ganger</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. FAST</title>
+		<meeting>FAST</meeting>
+		<imprint>
+			<date type="published" when="2007-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

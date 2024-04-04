@@ -1,0 +1,611 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:50+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Designing an Efficient Replicated Log Store with Consensus Protocol</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jung-Sang</forename><surname>Ahn</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">eBay Inc</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Woon-Hak</forename><surname>Kang</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">eBay Inc</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kun</forename><surname>Ren</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">eBay Inc</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Guogen</forename><surname>Zhang</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">eBay Inc</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sami</forename><surname>Ben-Romdhane</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">eBay Inc</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Designing an Efficient Replicated Log Store with Consensus Protocol</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Highly available and high-performance message logging system is critical building block for various use cases that require global ordering, especially for deterministic distributed transactions. To achieve availability, we maintain multiple replicas that have the same payloads in exactly the same order. This introduces various challenging issues such as consistency between replicas after failure, while minimizing performance degradation. Replicated state machine-based consensus protocols are the most suitable candidates to fulfill those requirements , but double-write problem and different logging gran-ularity make it hard to keep the system efficient. This paper suggests a novel way to build a replicated log store on top of Raft consensus protocol, aiming at providing the same level of consistency as well as fault-tolerance without sacrificing the throughput of the system.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Nowadays logging system that guarantees strict ordering of incoming payloads plays an important role in distributed systems, for crash recovery or determining the order of distributed transactions <ref type="bibr" target="#b6">[7,</ref><ref type="bibr" target="#b7">8,</ref><ref type="bibr" target="#b11">12,</ref><ref type="bibr" target="#b16">17,</ref><ref type="bibr" target="#b19">20]</ref>. There are multiple producers putting payloads to the logging system at the same time, and multiple consumers subscribing to the system to retrieve the payloads. Since a number of clients are working on it in parallel, it is required to be efficient. In addition to that, usually this kind of logging system is a single point of failure of its subscribers, thus it has to be highly available against the failure of multiple nodes.</p><p>To achieve high availability, incoming payloads should be replicated to multiple nodes (i.e., replicas). All replicas should have exactly the same payloads in exactly the same order, so that subscribers can be distributed over different replicas for reducing the burden of the master replica. Once the master replica fails, one of the other replicas should be able to take it over quickly and then continue to serve operations. Even after failure and recovery, the original order of logs should be preserved.</p><p>Well-known consensus schemes such as Paxos <ref type="bibr" target="#b12">[13]</ref> and Raft <ref type="bibr" target="#b14">[15]</ref> might be a good solution to address such issues. Today's implementations are using state machine-based replication <ref type="bibr" target="#b18">[19]</ref>, where state machine is usually defined as a file or a back-end database that we want to make identical among all replicas. They maintain a sort of write-ahead log (WAL) which keeps a sequence of state changes, usually database mutation commands. Once a log entry (i.e., a state change) is agreed by a majority of replicas, it is committed to the state machine which results in the execution of the given database command.</p><p>However, applying state machine-based replication to logging system brings various inefficiencies that have significant impact on performance:</p><p>Double-write problem The state machine of logging system will be defined as another append-only log. Every payload will be written in WAL first, and then written again in the state machine after commit. It will end up with cutting the disk bandwidth in half.</p><p>Different granularity Clients want to commit a set of payloads at once atomically. Moreover, server also should be able to do group commit of multiple payloads to maximize network or storage throughput. Unfortunately, the basic unit of replication, consensus, and commit is a single log entry of WAL. This granularity gap either degrades the performance or makes the system complicated, as there are more things to do beyond the consensus protocol.</p><p>This paper proposes a new scheme that addresses aforementioned issues on top of Raft consensus protocol. We define two log stores: Raft log store for WAL of Raft and data log store as a state machine, and then introduce a log sharing scheme between them to avoid double-write problem, thus user payloads are written to disk only once. However, having only one copy of data may spoil the consistency of the system upon node failures. We also show that our log sharing scheme will not break the original consensus protocol by help of the characteristics of our state machine definition, which is also append-only data structure unlike normal databases. In addition to the log sharing scheme, Raft log store and data log store will have different granularity; a single Raft log entry will be associated to a set of data log entries, to replicate and commit multiple payloads at once. That process will be pipelined over multiple replicas, to maximize the throughput of the system. Our experimental results show that proposed log sharing scheme is working well along with group commit and pipelining, regardless of the number of replicas, the size of atomic batch, or the size of each payload.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Raft Consensus Protocol</head><p>Raft <ref type="bibr" target="#b14">[15]</ref> has been suggested for enhancing understandability over Paxos <ref type="bibr" target="#b12">[13]</ref>, while keeping equivalent consistency level without sacrificing efficiency. Recent distributed systems such as Apache Kudu <ref type="bibr" target="#b1">[2,</ref><ref type="bibr" target="#b13">14]</ref> and Yugabyte <ref type="bibr" target="#b3">[4]</ref> are using it for their consensus protocol over multiple replicas.</p><p>Raft adopts a strong leader policy; there is only one leader at a time. Only the leader accepts incoming write requests, and then replicates it to other non-leader replicas, called followers. Each incoming write request corresponds to a single log entry, which is stored in a separate log section. Each log entry has a unique index number (hereafter Raft log number) in a monotonically increasing order. <ref type="figure" target="#fig_0">Figure 1</ref> illustrates the overview of the protocol. Once the leader gets a write request, it appends a log entry to its log section, and then replicates the request to all other followers. When a follower receives the log entry, it also appends the log to its log section, and then returns a response back to the leader. Raft is using quorum write policy, thus the leader will commit the log entry and apply it to the state machine once it gets responses from a majority of replicas including itself. After commit, the leader replicates the committed log number to followers, and followers finally commit the log corresponding to the given log number and then apply it to their state machines. Note that a log replication request contains the committed log number of previous log replication, so that they are always pipelined and there is no specific protocol for two-phase commit.</p><p>The leader periodically sends heartbeats to all followers, and each follower has a randomized timer whose lower bound is bigger than the heartbeat interval. Whenever a follower receives heartbeat, it resets its timer with new random expiry. If the timer is expired due to no heartbeat for a while, the follower regards the situation as the death of the leader, and  then requests a vote on the election of the next leader to all the other replicas. Once a majority of replicas vote for the replica who initiated the election, the replica becomes a leader and starts to serve write requests.</p><p>To resolve conflict that can happen during the absence of leader or network disconnection, Raft maintains a special counter called term, which is increased whenever a new leader election is initiated. All followers should have the same term value as that of the current leader. Each replication request or heartbeat contains the term value of the current leader, and also each log entry keeps the term value of the time when it was generated. If the current leader receives a message with higher term from other replica, that means a new leader has been elected by a majority of replicas so that it immediately gives up the leader role and becomes follower.</p><p>Conflict usually happens when the leader succeeds to append a new log entry to its log section, but fails to replicate it to followers due to various reasons such as server crash or network isolation, and then new leader is elected and serves new logs. If the previous leader is recovered from the fault and then re-joins as a follower, the previous leader and the current leader will see different log entry whose log number is the same, as shown in <ref type="figure" target="#fig_1">Figure 2</ref>. In such case, the previous leader will find the last log entry whose term is the same as that of corresponding log entry in the current leader. And then it starts to overwrite log entries starting from that point using the current leader's log entries. In other words, the previous leader discards its local log entries that failed to reach a consensus.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Log Store Design</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Requirements and Problem Statement</head><p>To guarantee strict ordering, the requirements for log store are as follows:</p><p>1. Each payload should have a unique log sequence number (LSN), which is a non-zero positive integer. 2. All replicas should have the same data in the same LSN order. 3. LSN should be continuous; no empty number in the middle is allowed.</p><p>4. Clients may send a set of payloads in batch. They should be committed atomically, and partial commit is not allowed.</p><p>5. Clients get the response of a payload only after it is committed-i.e., x replicas have the payload, where x &gt; 񮽙 N 2 񮽙 and N is the number of replicas.</p><p>By adopting Raft, we can easily satisfy those requirements. Once a write request comes in, we first put it into the log section of Raft and then replicate. After we get acknowledges from a majority of replicas, the request is committed and applied to the state machine of Raft, which is the actual log store that we want to implement. Since Raft guarantees the same order of commit, state machines in all replicas will get the data in the same order so that we can just append them to log store sequentially. This is a typical journaling approach for traditional file systems or databases. However, it will be problematic if the back-end store is the same append-only log. We will end up having duplicate logs: Raft log and state machine, which will double the space usage, and also will halve the write throughput. Since all disk write operations are expected to be fully sequential in log store, the relative amount of degradation by double-writing will be significant, compared to other normal database systems.</p><p>We can simply avoid double-write problem by having Raft logs only, directly using a Raft log number as an LSN. However, this approach introduces a couple of challenging issues. 1) We cannot use group commit; both replication and commit will be executed on a per-Raft log basis. Partial commit is inevitable and eventually breaks the fourth requirement. 2) Raft itself generates a special log for membership or configuration change that needs to be globally consistent. Since that special log also occupies a Raft log number, it ends up with an empty LSN from the user payload's perspective, which breaks the third requirement. If we allow LSN gaps, log consumers are not able to know in advance whether the missing LSN is skipped by the system or lost in the middle, without having extra communication. It makes the overall protocol expensive.</p><p>We need more clever approach to handle such issues.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Log Sharing and Tweaked State Machine</head><p>To address aforementioned problems together, we propose a log sharing scheme. We define two local log stores: Raft log store for Raft log section and data log store for the state machine that is the actual log store to serve user payloads. Once a write request which consists of one or more payloads comes in, it is directly written to the state machine (i.e., data log store) first, skipping Raft log store. At the time we append payloads to the data log store, the data log store sequentially assigns a unique LSN to each payload. After that, we append a log entry to Raft log store, which contains a set of LSNs that need to be committed atomically. Note that the LSNs in a Raft log entry should be consecutive, and also adjacent Raft log entries should have consecutive LSNs. <ref type="figure" target="#fig_2">Figure 3</ref>(a) depicts the overview of log sharing and its replication process. For each replication task, it reads a Raft log entry to be replicated, and fetches the LSNs belonging to the Raft log. Then it re-constructs the original batch of payloads by reading the data logs corresponding to the LSNs sequentially, and the request is sent to followers. The state machines of followers will do the same thing: appending payloads to data log store first, assigning LSNs for each payload sequentially, and then appending a Raft log entry which consists of a set of LSNs it assigned, as illustrated in <ref type="figure" target="#fig_2">Figure 3(b)</ref>.</p><p>Since the data log store in each replica is locally assigning LSNs in advance before waiting for replication and Raft commit, it may cause an inconsistency of LSNs between replicas if failure happens after assigning LSNs but before getting consensus. In such case, the original Raft can simply overwrite existing Raft log entries as uncommitted logs are not applied to the state machine yet. However, we cannot use the same approach in here as payloads are already applied to the state machine before commit.</p><p>As shown in <ref type="figure" target="#fig_3">Figure 4</ref>, once a conflict happens so that one or more Raft logs have to be overwritten, we first find the smallest LSN in the conflicting Raft logs: LSN 2 in Raft log 2. Then do rollback of the data log store to the log whose LSN is right ahead 2, before overwriting Raft logs with newer term. Since the state machine is defined as a log-structured format, rolling back can be easily implemented as a simple truncation, unlike normal databases that require separate undo logging. After rollback, we can append incoming payloads from the new leader, and assign new LSNs that will be identical to what the leader has.</p><p>Since payloads are already appended to the data log store prior than Raft commit, the commit process of state machine is straightforward. The state machine of each replica maintains a cursor that indicates the last committed LSN of its data log store. All payloads whose LSN is greater than the last committed LSN should not be visible to clients, even though they already exist in the data log store. Once Raft gets consensus from quorum, it executes a commit on the agreed Raft log number. The state machine finds the last LSN in the Raft log entry, and then moves its cursor to that LSN.</p><p>There are a few more corner cases that we need to consider. If a node crashes after updating data log store but before Raft log store, we should discard the stale data in data log store on server restart, to avoid LSN inconsistency. Even without crash, both data and Raft log stores should be updated atomically; another replication request from a new leader should not interfere in the middle, and be handled sequentially after the previous one is done. Note that the safety of Raft log store should be guaranteed by Raft itself, as that part remains unchanged.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">Pipelining and Group Commit</head><p>To maximize the throughput, leader can keep accepting new payloads from clients and appending them to its data log store, while previous replication requests are still in flight. Following replication request contains the logs kept in the meantime and replicates them at once as a group commit. However, such a pipelined replication should be very careful about LSN order inversion; it can happen when previous replication request is lost in the middle while following replication request is successfully delivered to replicas.</p><p>To avoid such an issue, we only allow 2-stage pipeline for each follower as illustrated in <ref type="figure" target="#fig_4">Figure 5</ref>. The basic assumption is based on the third requirement mentioned in Section 3.1; if a log whose LSN k is successfully replicated, it implies all previous logs whose LSN x where x &lt; k already have been replicated. Thus, each replication request should contain all consecutive logs starting from the log right next to last</p><formula xml:id="formula_0">1 … 1, S2 2-4, S2</formula><p>Got response from S2</p><p>x Append a log x x-y, Sn Send logs x-y to Sn 2 3 4 5 6 7 8 9 10 5-8, S2</p><p>(a) Happy path</p><p>Packet loss (timeout)</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">… 1-8, S2 2 3 4 5 6 7 8 9 10</head><p>Ack from replica </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>1, S2</head><p>1, S3 1-2, S4 1-3, S5</p><p>2-5, S2</p><p>3-7, S4 2-6, S3</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>4-8, S5</head><p>2-12, S2 … 1 2 3 <ref type="formula">4 5 6 7 8 9 10 11 12 13 14 15 16</ref> 7-10, S3</p><p>8-11, S4 9-12, S5</p><p>1 2</p><p>Committed logs 3 4-6</p><p>Figure 6: Combined N-stage pipeline.</p><p>successful log, without skipping anything in between. <ref type="figure" target="#fig_4">Figure 5</ref>(a) presents an example of 2-stage pipeline for follower S2. Suppose that we append only one payload for each Raft log entry for simplicity. Once a new payload comes in, it is appended to the data log store with LSN 1, and the corresponding Raft log entry is also appended to the Raft log store. Then the log 1 is sent to S2. Before getting response from S2, the leader receives more payloads from clients and appends corresponding logs. At the time the response from S2 arrives to the leader, we have 3 more logs: from 2 to 4. We set the last successfully replicated LSN of S2 to 1, and accordingly the next replicate request will contain logs from 2 to 4.</p><p>However, if any failures such as packet loss happen as shown in <ref type="figure" target="#fig_4">Figure 5(b)</ref>, the leader should be able to catch it quickly and then re-send the replication request. But at this time, since the last successfully replicated LSN has not been changed, the request should contain all new logs accumulated in the meantime including the previously failed log: from 1 to 8. In this manner, we can guarantee that any logs cannot be replicated prior than previously failed logs, so that logs in all replicas should be always sequential. Now we can combine pipelines for all followers and then organize N-stage pipeline, where N denotes the number of replicas including the leader. <ref type="figure">Figure 6</ref> depicts an example when there are 4 followers: S2 to S5. If there are enough number of replicas, we can fully utilize either disk or network bandwidth. Note that a log x is committed only after the last successfully replicated LSNs of a majority of replicas become equal to or greater than x. Clients will get the response of the log if and only if it is committed by the leader.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Evaluation</head><p>We implement log store as a service for eBay's home-grown distributed database systems, based on our own Raft implementation. The communication between client and server is done by gRPC <ref type="bibr" target="#b2">[3]</ref> streaming, where client keeps sending requests asynchronously without waiting for the responses of previous requests. Each request contains one or more payloads in batch that need to be committed atomically. We deploy log store service in eBay datacenter's VMs equipped with gigabit ethernet and local SSDs. The maximum throughput of a single network stream varies with VM deployment details such as the latency between racks and physical machines, which is totally random. The average throughput between nodes that we use for evaluation is measured as 85-90 MB/s. We use three replicas including the leader, unless otherwise noted. Client is located in a separate node so that incoming traffic also consumes network bandwidth from the leader's point of view. All replicas including client are in the same datacenter.</p><p>First of all, we measure the amount of disk writes and space occupied by logs, compared to the naive approach which does not use log sharing scheme. <ref type="figure" target="#fig_5">Figure 7(a)</ref> shows the results of log sharing normalized to those of naive approach, varying the size of each payload. Both disk write and space usage become almost half by using log sharing scheme.</p><p>Next we evaluate the write throughput of log store according to the batch size that clients want to commit atomically. We generate 10,000 payloads/s traffic with the various sizes of payloads, and then measure the throughput of the amount of payloads committed by log store. <ref type="figure" target="#fig_5">Figure 7</ref>(b) depicts the results. By help of group commit, the throughput remains constant regardless of the batch size; when a batch is small, a replication request packs more batches so that it does not affect the overall performance.</p><p>After that, we explore the maximum write throughput that log store is able to handle. The same as the previous evaluation, we measure the throughput, but at this time we vary the incoming traffic from 1,000 to 128,000 payloads/s. The throughput increases proportionally according to the incoming traffic, but it is saturated at some point, as illustrated in <ref type="figure" target="#fig_5">Figure 7</ref>(c). The saturation point gets higher as payload size increases, and log store can achieve 67 MB/s with 4 KB payloads. It will be close to the maximum network throughput with enlarged payloads, since bigger payload may help increasing network utilization as well as reducing the overhead of Raft protocol due to fewer number of logs.</p><p>And then we assess the write throughput with the different number of replicas, to see if N-stage pipeline is working as expected. The incoming traffic is fixed to 32,000 payloads/s. <ref type="figure" target="#fig_5">Figure 7(d)</ref> presents the results. The dotted line plots the write throughput of log store from the client's perspective, while the solid line means the total throughput that the leader node is processing. If the incoming traffic is T , and the number of replicas including the leader is N, the leader node should handle N · T traffic: T from client and (N − 1) · T for replication. With 1 KB payloads, the throughput of log store is constant regardless of the number of replicas, as the total throughput is linearly increasing by help of pipelining. With bigger payloads, the total throughput is still increasing but not exactly proportional to the number of replicas, as the leader node and its Raft logic are burdened with processing payloads.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Related Work</head><p>Apache Kafka <ref type="bibr" target="#b0">[1]</ref> is a popular message streaming platform, which also can be used for building a replicated logging system <ref type="bibr" target="#b20">[21]</ref>. However, Kafka cluster replication does not allow group commit for a single topic, which results in significant performance degradation when there are many producers generating traffic in parallel.</p><p>Balakrishnan et al. have suggested CORFU <ref type="bibr" target="#b6">[7]</ref>, which implements a log store whose data is shared among networkattached SSDs. A global sequencer node assigns the next log index so that clients can directly access the destination SSDs where the log will be written or read. However, the sequencer may introduce a hole in the middle after failure of it, and they do not provide solid logic for conflict resolution.</p><p>Other Paxos-based approaches such as S-Paxos [9], SMARTER <ref type="bibr" target="#b9">[10]</ref>, and Spinnaker <ref type="bibr" target="#b15">[16]</ref> attempt to achieve similar goals: group commit and eliminating the extra copy of data on each node.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Conclusion</head><p>This paper suggests an efficient way to build a logging system based on Raft protocol. Raft provides an intuitive way to replicate data and to resolve conflict upon node failure, but introduces double-write and commit granularity problems if we are going to build a log store on top of it. We propose a log sharing scheme that addresses aforementioned issues. In addition to that, we show a practical way to implement group commit as well as pipelining for log replication.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Discussion Topics</head><p>Distributed log store In this paper, we only propose a single log store cluster. If we need much higher throughput to support large-scale distributed systems, a considerable option is to make the log store distributed for scaling out. However, it brings a new challenging issue: how can we partition logs while keeping their order globally consistent? We will continue to study this topic.</p><p>Extending log sharing scheme We can easily achieve log sharing on top of consensus protocol, since the state machine of log store is based on a log-structured format so that easy to execute rollback. It will be good to extend this scheme for general purpose databases to reduce the write amplification of the system. However, the rollback operation will be much more complicated than that of log store. We can simply think two options for now: 1) maintaining separate undo logs, but it will cancel the benefit of log sharing. Or, 2) using logstructured key-value stores <ref type="bibr" target="#b4">[5,</ref><ref type="bibr" target="#b5">6]</ref> or file systems <ref type="bibr" target="#b10">[11,</ref><ref type="bibr" target="#b17">18]</ref> for back-end database, but those approaches have a couple of disadvantages such as compaction overhead or degraded range query performance. We will explore this subject more.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: Raft protocol overview.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: Conflict resolution based on term. (a) Leader S1 fails to replicate log 4 and then crashes. (b) S3 is elected as a new leader with term 2, and replicates new logs 4, 5, and 6. (c) Previous leader S1 is recovered from the fault but log 4 has a conflict. (d) Since log 4 in S3 has bigger term, log 4 in S1 is overwritten by the new value.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: Log sharing and replication.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: Rollback of state machine in conjunction with Raft conflict resolution. (a) Initially data log store has 6 logs. (b) Raft log 2 conflicts with that in new leader, who has higher term 2. Find the smallest LSN from the Raft log and truncate all data logs whose LSN is equal to or greater than the identified LSN. (c) Append new payloads with new term. Now assigned LSNs will be consistent with those in the new leader.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_4"><head>Figure 5 :</head><label>5</label><figDesc>Figure 5: 2-stage pipeline for follower S2.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_5"><head>Figure 7 :</head><label>7</label><figDesc>Figure 7: Evaluation results. (a) denotes the amount of disk write and space usage normalized to those of the naive approach. (b), (c), and (d) indicate the write throughput of log store according to batch size, incoming traffic, and the number of replicas, respectively.</figDesc></figure>
+		</body>
+		<back>
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title level="m" type="main">Apache Kafka: A distributed streaming platform</title>
+		<ptr target="https://kafka.apache.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Apache</forename><surname>Kudu</surname></persName>
+		</author>
+		<ptr target="https://kudu.apache.org/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title level="m" type="main">gRPC: A high-performance, open-source universal RPC framework</title>
+		<ptr target="https://grpc.io/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">B</forename><surname>Yugabyte</surname></persName>
+		</author>
+		<ptr target="https://www.yugabyte.com/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Forestdb: A fast key-value storage system for variable-length string keys</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jung-Sang</forename><surname>Ahn</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chiyoung</forename><surname>Seo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ravi</forename><surname>Mayuram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rahim</forename><surname>Yaseen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jin-Soo</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Seungryoul</forename><surname>Maeng</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Transactions on Computers (TC)</title>
+		<imprint>
+			<biblScope unit="volume">65</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<biblScope unit="page" from="902" to="915" />
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title level="m" type="main">CouchDB: The Definitive Guide: Time to Relax</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chris</forename><surname>Anderson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jan</forename><surname>Lehnardt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Noah</forename><surname>Slater</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2010" />
+			<publisher>Reilly Media, Inc</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Corfu: A shared log design for flash clusters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mahesh</forename><surname>Balakrishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dahlia</forename><surname>Malkhi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vijayan</forename><surname>Prabhakaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ted</forename><surname>Wobbler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Wei</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John D</forename><surname>Davis</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 9th USENIX Symposium on Networked Systems Design and Implementation (NSDI)</title>
+		<meeting>the 9th USENIX Symposium on Networked Systems Design and Implementation (NSDI)</meeting>
+		<imprint>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="1" to="14" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Tango: Distributed data structures over a shared log</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mahesh</forename><surname>Balakrishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dahlia</forename><surname>Malkhi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ted</forename><surname>Wobber</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ming</forename><surname>Wu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vijayan</forename><surname>Prabhakaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Wei</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><forename type="middle">D</forename><surname>Davis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sriram</forename><surname>Rao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tao</forename><surname>Zou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aviad</forename><surname>Zuck</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Twenty-Fourth ACM Symposium on Operating Systems Principles (SOSP)</title>
+		<meeting>the Twenty-Fourth ACM Symposium on Operating Systems Principles (SOSP)</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2013" />
+			<biblScope unit="page" from="325" to="340" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">S-paxos: Offloading the leader for high throughput state machine replication</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Martin</forename><surname>Biely</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zarko</forename><surname>Milosevic</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nuno</forename><surname>Santos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">André</forename><surname>Schiper</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 31st Symposium on Reliable Distributed Systems (SRDS)</title>
+		<meeting>the 31st Symposium on Reliable Distributed Systems (SRDS)</meeting>
+		<imprint>
+			<date type="published" when="2012-10" />
+			<biblScope unit="page" from="111" to="120" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Paxos replicated state machines as the basis of a high-performance data store</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>William</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dexter</forename><surname>Bolosky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Randolph</forename><forename type="middle">B</forename><surname>Bradshaw</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Norbert</forename><forename type="middle">P</forename><surname>Haagens</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Peng</forename><surname>Kusters</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Li</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 8th USENIX Symposium on Networked Systems Design and Implementation (NSDI)</title>
+		<meeting>the 8th USENIX Symposium on Networked Systems Design and Implementation (NSDI)</meeting>
+		<imprint>
+			<date type="published" when="2011" />
+			<biblScope unit="page">141</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<monogr>
+		<title level="m" type="main">The zettabyte file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeff</forename><surname>Bonwick</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matt</forename><surname>Ahrens</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Val</forename><surname>Henson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mark</forename><surname>Maybee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mark</forename><surname>Shellenbaum</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2003" />
+		</imprint>
+	</monogr>
+<note type="report_type">Technical report</note>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<monogr>
+		<title level="m" type="main">Faunadb: An architectural overview</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matt</forename><surname>Freels</surname></persName>
+		</author>
+		<ptr target="https://fauna.com/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Paxos made simple</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Leslie</forename><surname>Lamport</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Sigact News</title>
+		<imprint>
+			<biblScope unit="volume">32</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="18" to="25" />
+			<date type="published" when="2001" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<monogr>
+		<title level="m" type="main">Kudu: storage for fast analytics on fast data</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Todd</forename><surname>Lipcon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Alves</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dan</forename><surname>Burkert</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jean-Daniel</forename><surname>Cryans</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adar</forename><surname>Dembo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mike</forename><surname>Percy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Silvius</forename><surname>Rus</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dave</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matteo</forename><surname>Bertozzi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Colin</forename><forename type="middle">Patrick</forename><surname>Mccabe</surname></persName>
+		</author>
+		<ptr target="https://kudu.apache.org/kudu.pdf" />
+		<imprint>
+			<date type="published" when="2015" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">In search of an understandable consensus algorithm</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Diego</forename><surname>Ongaro</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John K</forename><surname>Ousterhout</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2014 USENIX Annual Technical Conference (ATC)</title>
+		<meeting>the 2014 USENIX Annual Technical Conference (ATC)</meeting>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="305" to="319" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Using paxos to build a scalable, consistent, and highly available datastore</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jun</forename><surname>Rao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eugene</forename><forename type="middle">J</forename><surname>Shekita</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sandeep</forename><surname>Tata</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the VLDB Endowment</title>
+		<meeting>the VLDB Endowment</meeting>
+		<imprint>
+			<date type="published" when="2011" />
+			<biblScope unit="volume">4</biblScope>
+			<biblScope unit="page" from="243" to="254" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">An evaluation of the advantages and disadvantages of deterministic database systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alexander</forename><surname>Kun Ren</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Thomson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Abadi</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the VLDB Endowment</title>
+		<meeting>the VLDB Endowment</meeting>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="volume">7</biblScope>
+			<biblScope unit="page" from="821" to="832" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Btrfs: The linux b-tree filesystem</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ohad</forename><surname>Rodeh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Josef</forename><surname>Bacik</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chris</forename><surname>Mason</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Storage (TOS)</title>
+		<imprint>
+			<biblScope unit="volume">9</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<biblScope unit="page">9</biblScope>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Implementing fault-tolerant services using the state machine approach: A tutorial</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Fred</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Schneider</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Computing Surveys (CSUR)</title>
+		<imprint>
+			<biblScope unit="volume">22</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="299" to="319" />
+			<date type="published" when="1990" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Calvin: fast distributed transactions for partitioned database systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alexander</forename><surname>Thomson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thaddeus</forename><surname>Diamond</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Shu-Chun</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kun</forename><surname>Weng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Philip</forename><surname>Ren</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Shao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Abadi</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2012 ACM SIGMOD International Conference on Management of Data (SIGMOD)</title>
+		<meeting>the 2012 ACM SIGMOD International Conference on Management of Data (SIGMOD)</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="1" to="12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Building a replicated logging system with apache kafka</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Guozhang</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joel</forename><surname>Koshy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sriram</forename><surname>Subramanian</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kartik</forename><surname>Paramasivam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mammad</forename><surname>Zadeh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Neha</forename><surname>Narkhede</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jun</forename><surname>Rao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jay</forename><surname>Kreps</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joe</forename><surname>Stein</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the VLDB Endowment</title>
+		<meeting>the VLDB Endowment</meeting>
+		<imprint>
+			<date type="published" when="2015" />
+			<biblScope unit="volume">8</biblScope>
+			<biblScope unit="page" from="1654" to="1655" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

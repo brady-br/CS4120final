@@ -1,0 +1,836 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:49+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">App-Bisect: Autonomous Healing for Microservice-based Apps</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shriram</forename><surname>Rajagopalan</surname></persName>
+							<email>shriram@us.ibm.com</email>
+							<affiliation key="aff0">
+								<orgName type="institution">IBM T. J. Watson Research Center</orgName>
+								<address>
+									<settlement>New York</settlement>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hani</forename><surname>Jamjoom</surname></persName>
+							<email>jamjoom@us.ibm.com</email>
+							<affiliation key="aff0">
+								<orgName type="institution">IBM T. J. Watson Research Center</orgName>
+								<address>
+									<settlement>New York</settlement>
+								</address>
+							</affiliation>
+						</author>
+						<title level="a" type="main">App-Bisect: Autonomous Healing for Microservice-based Apps</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>The microservice and DevOps approach to software design has resulted in new software features being delivered immediately to users, instead of waiting for long refresh cycles. On the downside, software bugs and performance regressions have now become an important cause of downtime. We propose app-bisect, an autonomous tool to troubleshoot and repair such software issues in production environments. Our insight is that the evolution of microservices in an application can be captured as mutations to the graph of microservice dependencies, such that a particular version of the graph from the past can be deployed automatically, as an interim measure until the problem is permanently fixed. Using canary testing and version-aware routing techniques, we describe how the search process can be sped up to identify such a candidate version. We present the overall design and key challenges towards implementing such a system.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Web applications hosted in the platform as a Service (PaaS) clouds are being re-architected to be microservice-oriented <ref type="bibr" target="#b23">[24,</ref><ref type="bibr" target="#b32">35]</ref>. In addition, developers and system administrators are adopting new software practices such as continuous integration and deployment of new features instead of periodic upgrade cycles <ref type="bibr" target="#b18">[19]</ref><ref type="bibr" target="#b19">[20]</ref><ref type="bibr" target="#b20">[21]</ref><ref type="bibr" target="#b21">[22]</ref><ref type="bibr" target="#b22">[23]</ref>. Such practices have collectively come to be termed as DevOps. The frequency of such deployments varies anywhere from few times a week to 50 times a day <ref type="bibr" target="#b14">[15]</ref>. In order to continuously incorporate user feedback, application owners now choose to release early and release often foregoing rigorous testing in exchange for hastening the time to market a product feature. In such a rapidly evolving application deployment, bugs and performance regressions occur more often than usual. Application availability is impacted because debugging modern cloud-based distributed applications is often a time consuming task.</p><p>There are many performance profiling tools <ref type="bibr" target="#b0">[1,</ref><ref type="bibr" target="#b2">[3]</ref><ref type="bibr" target="#b3">[4]</ref><ref type="bibr" target="#b4">[5]</ref><ref type="bibr" target="#b9">10,</ref><ref type="bibr" target="#b15">16,</ref><ref type="bibr" target="#b28">[29]</ref><ref type="bibr" target="#b29">[30]</ref><ref type="bibr" target="#b30">[31]</ref><ref type="bibr" target="#b34">37]</ref> to help developers identify software issues causing degradation in throughput and response times to the end user. However, they provide only monitoring capabilities. There are also design patterns like circuit breakers <ref type="bibr" target="#b12">[13,</ref><ref type="bibr" target="#b33">36]</ref> that enable distributed applications to prevent transient and component-level errors from cascading. Persistent failures, those stemming from software bugs and under-tested features, continue to require human intervention. Instead of forcing applications to function poorly while waiting for a software update, we argue that an interim measure is possible. Specifically, applications should be automatically reverted to an older version that was known to provide a better end user experience.</p><p>Inspired by autonomous computing <ref type="bibr" target="#b6">[7,</ref><ref type="bibr" target="#b8">9,</ref><ref type="bibr" target="#b10">11,</ref><ref type="bibr" target="#b11">12,</ref><ref type="bibr" target="#b13">14,</ref><ref type="bibr" target="#b16">17]</ref>, we present app-bisect 1 : an autonomous system service that can identify and heal microservice-based applications deployed in the cloud. By representing the application as a graph of microservices that evolve over time, any update to a microservice can be viewed as a mutation of the graph. Typical of canary testing, app-bisect systematically tests previous mutations by deploying them in production and diverting a portion of user traffic to the various versions. On finding the least destructive combination of versions, one that offers the desired end user experience, app-bisect diverts all user traffic to it until the human operator intervenes.</p><p>Time traveling through the "changelog" of an application's persistent state is not a new concept. Chronus <ref type="bibr" target="#b17">[18]</ref> helps debug failures caused by configuration errors in single-machine applications, by performing a binary search over previously recorded states of the application, to locate the point in time when the configuration error was made. App-bisect, on the other hand, targets distributed applications, searching through the updates to the service dependency graph. Debugging is a secondary goal. Business continuity is its primary focus, with the intent of bringing the application or its older version back online. Service oriented architectures (SOA) in the past have attempted to use autonomic service substitution <ref type="bibr" target="#b1">[2,</ref><ref type="bibr" target="#b5">6]</ref> in case of a service failure. However, these approaches resort to looking for substitutes providing the same service from the current pool of executing services. In a microservices environment, functionality is rarely duplicated. At the same time, compared to a SOA application, the microservice-based application is highly dynamic, with new services, features and fixes being constantly deployed. Autonomous healing in this scenario faces a different set of challenges compared to prior work in SOA systems.</p><p>In the following sections, we discuss the scope, design and implementation challenges towards realizing an autonomous system-level service for troubleshooting and healing microservice-based applications. <ref type="figure" target="#fig_0">Figure 1</ref> illustrates a simplified view of a microservice deployment. We are primarily focused on applications deployed on Platform-as-a-service (PaaS) clouds <ref type="bibr">[32- 34]</ref>. We assume that applications follow the microservices and DevOps principles as described below. Our focus is primarily on user facing applications where end user's experience is the key indicator of application performance.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Target Environment &amp; Fault Model</head><p>Microservices and DevOps. In the microservice approach, applications are structured as a loosely-coupled collection of small, well-defined stateless services that communicate with each other only through well-defined APIs. As exemplified by the Netflix architecture <ref type="bibr" target="#b32">[35]</ref>, this approach simplifies the design of scalable and robust cloud applications. Typical applications are composed of hundreds of instances of heterogeneous microservices, backed by scalable data stores.</p><p>As shown in <ref type="figure" target="#fig_0">Figure 1</ref>, services register themselves with a registry service like Zookeeper <ref type="bibr" target="#b7">[8]</ref> that can be used for service discovery as well. The service discovery node enables services to discover the locations of other services. For scalability purposes, clients (services) periodically fetch the locations of other services in the system. When invoking other services, load balancing is typically performed at the client-side instead of querying the centralized registry for every invocation.</p><p>From a code development and operations perspective, each microservice has its own branch with updates to the service being committed to that branch. Developers and operations personnel work closely to quickly test and deploy new features, monitor user experience in controlled fashion using techniques like canary testing, and finally incorporate changes based on monitoring into the next iteration. The tight feedback loop created by this process enables software to evolve faster in response to user needs <ref type="bibr" target="#b18">[19]</ref><ref type="bibr" target="#b19">[20]</ref><ref type="bibr" target="#b20">[21]</ref><ref type="bibr" target="#b21">[22]</ref><ref type="bibr" target="#b22">[23]</ref>.</p><p>Fault model. We take a high-availability approach to our problem by treating a performance degradation as application downtime. For the purposes of our discussion, performance is purely associated with end user experience. In other words, we consider metrics like end-toend response time and application throughput. We treat an application experiencing prolonged periods (on the order of tens of minutes) of performance loss as a failure.</p><p>We do not consider transient issues such as temporary drops in performance while one or more services are scaling-out, spurious timeouts, hard to reproduce nondeterministic bugs, etc. However, we take into account scenarios where there is a high frequency of errors when invoking a microservice's API, frequent crashes of a microservice, or other recurring error events in log files.</p><p>Our fault-model does not include scenarios where the performance issue is caused by failures in the underlying infrastructure such as hardware failures, network partitions, transient link congestion, etc. For example, if there is a long outage in a certain section of the data center, application performance issues in the affected portion of the data center are ignored until the system issues are resolved.</p><p>Detection &amp; Recovery. Performance management requires monitoring, analyzing and maintaining the performance of an application. In a standard setup, the data from the monitoring subsystem is continuously fed into a real-time analytics subsystem. The analytics subsystem generates alerts whenever it observes performance issues. The maintenance subsystem acts on the alerts, typically by launching new instances (i.e., auto scaling) or alerting the human operator. The mean time to recover (MTTR) an application from a performance bug depends on how quickly the human operator responds to the issue. If the alert was raised at an hour when the operator is not available (e.g., midnight), the time to repair (and hence recover) is high, resulting in loss of traffic and revenue. Our goal is to minimize the MTTR by routing traffic through a previous version of the application where the issue is not present.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Design &amp; Challenges</head><p>We introduce app-bisect, a system-level applicationagnostic tool to react to performance issues that arises in microservice applications. App-bisect is intended to operate in unsupervised mode. The high-level operation of app-bisect is as follows: upon activation, it systematically tests various past-versions of the application's microservices by co-deploying them along with their present-version counter parts, until it finds a combination where the performance issue is not present. It then decommissions all other versions, effectively rolling back parts of the application to the past.</p><p>As an autonomous system tasked with maintaining application performance, app-bisect needs to know when to repair an application and when not to. By operating at the system-level, app-bisect leverages knowledge of both the application deployment as well as the underlying infrastructure. This visibility enables app-bisect to repair applications only when the performance issue can be attributed to the application and not the underlying infrastructure.</p><p>In the remainder of this section, we describe various design points, the challenges and related implementation details.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">A World of Dependencies</head><p>The application's response to the user is a composition of outputs from various microservices constituting the application. While the application certainly depends on all its microservices, individual microservices may also depend on each other for their functions. Given that the microservices can be developed and updated independently, when updates are made to a microservice's data model or API, developers maintain backward compatibility by continuing to support the previous version until all dependent microservices are updated. During build or deployment time, every microservice specifies its dependencies on the minimum required version of other microservices in the application <ref type="figure" target="#fig_1">(Fig- ure 2)</ref>. These dependencies are provided in manifest files and are already enforced in several platform as a service clouds <ref type="bibr">[32]</ref><ref type="bibr" target="#b31">[33]</ref><ref type="bibr">[34]</ref>. With every new update to a microservice, its version number in the manifest file is updated. The PaaS platform deploys the instances of respective versions of microservices accordingly. At runtime, microservices advertise their versions and discover the presence of appropriate dependents using systems like Zookeeper <ref type="bibr" target="#b7">[8]</ref> that enable service registration and discovery.</p><p>Treating the application as a Linux installation. When deploying an older version of one microservice, older versions of other dependent services may need to be deployed as well. App-bisect takes a package management approach used commonly in various Linux distributions. It records the microservice dependencies and the application topology at every update to a microservice. When a previous version of one microservice is deployed, it also deploys appropriate versions of other dependent microservices with the latest version possible. As shown in <ref type="figure" target="#fig_1">Figure 2</ref>, the dependency on a range of versions enables app-bisect to start with the latest possible version that may include additional bug fixes compared to the earliest possible version.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">A Seemingly Straightforward Solution</head><p>A straightforward approach to restoring application performance is to identify the root cause, the exact update to a microservice that resulted in the current performance degradation. The microservice is reverted to a version prior to the update. At the same time, other dependent microservices in the application are reverted to the latest version possible while maintaining overall compatibility.</p><p>Unfortunately, it is non-trivial to trace the root cause of performance degradation in a microservice-based deployment. Even well engineered data center scale applications like Facebook <ref type="bibr" target="#b3">[4]</ref> and LinkedIn <ref type="bibr" target="#b9">[10]</ref> resort to sophisticated techniques to identify the root cause.</p><p>It is relatively easy to test a simple three-tiered web application where the cause and effect can be observed. For example, ordering for an item would result in changes to the database immediately. However microservice-based applications are typically event-based. Worker services take items off a task queue and service them one after another. In such a system, how does one correlate the action and the eventual result? There is no cause-effect correlation in such systems. A problem that manifests in one microservice may have been caused by another service in the call chain. At other times, a bug introduced in an update to one service may manifest only after other microservices are updated to a point where they start activating the bug prone code path.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">Playing Hide-n-Seek with Canaries</head><p>App-bisect takes an inverted canary testing approach to auto healing. It starts by identifying the most recently updated microservice. As shown in <ref type="figure" target="#fig_2">Figure 3</ref>, it deploys the previous version of the microservice and routes portion of the user traffic across the previous version, very similar to the canary testing process conducted in modern web applications when testing new features. Appbisect's philosophy is to not attempt to identify the root cause. Rather, it focuses on identifying a deployment graph that does not exhibit the performance degradation.</p><p>Is this searching for a needle in a haystack? Theoretically, in an application with n microservices with m updates to each service, the search space of all possible deployment combinations is O(n m ). Deploying and testing each version is infeasible and beats the purpose of a fast auto-response tool. Fortunately, the search space can be drastically pruned by taking into account the dependencies across microservices.</p><p>Help! My app is back to Hello World! App-bisect continues to test various past versions until it finds one that meets the performance requirements specified in the performance monitor. However, the reader may ask how far back in time will app-bisect go? With every rollback,  there is potential for loss of features that were exposed, until now, to the end user. The application owner can bound the search process; specifically, as shown in <ref type="figure" target="#fig_3">Fig- ure 4</ref>, lower bounds, known as global restore points can be created to signify point in time until which the application owner is willing to rollback the application. Appbisect searches through various combinations of the application from the current state until the global restore point.</p><p>What about data consistency? One question that arises in this context is what happens to the state stored in the data stores as essentially different versions of the same microservices are accessing the same data store. Our approach to searching for a substitute version leverages the canary testing practice used by modern web applications. Canary testing is typically conducted directly in production deployments. Hence the microservices are engineered from the very beginning to handle scenarios where multiple versions can co-exist, accessing the same data store backends. App-bisect piggybacks on this capability to provide a gradual feature downgrade in certain parts of the application. One drawback of this approach is that the search is limited to microservice versions that do not involve changes to the data model in the data store. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.4">Orchestrating Information Flow</head><p>At any given point in time during the search, there are two or more versions of multiple microservices in the application. Requests have to flow through a specific chain of microservices, where the dependencies are satisfied. This may not seem like a challenge as an application capable of handling canary testing would certainly have this capability built into it. However, app-bisect does not have control over the application layer code. Hence, it has to control the flow of information, such only a particular chain of specifically picked versions of microservices handle all aspects of a user request. In order to route requests through a specific chain of microservices, app-bisect leverages the software defined networking substrate in public cloud data centers <ref type="bibr" target="#b24">[25]</ref><ref type="bibr" target="#b25">[26]</ref><ref type="bibr" target="#b26">[27]</ref><ref type="bibr" target="#b27">[28]</ref> networks to achieve version-aware routing. The combination of host IP address and the edge-switch port number can be used to uniquely identify a particular microservice and its respective version. App-bisect uses this information to setup flow forwarding rules that route requests through a particular chain of microservices.</p><p>Sharing microservices between deployments. During the search process, two chains of microservices being tested may have one or more microservices in common. While it may be operationally efficient to share such instances of such microservices, version-aware routing becomes hard. Specifically, if two microservice call chains diverge from a given microservice, app-bisect cannot decide where to route egress requests. It requires application layer support to perform such intelligent routing. On the other hand, as shown in <ref type="figure" target="#fig_2">Figure 3</ref>, when two microservice call chains converge to the same final set of microservices, app-bisect can reuse those microservice instances while still being able to route requests in a version-aware manner.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.5">The Search for an Alternate Reality</head><p>A version of the application needs to be available always while app-bisect deploys, tests and destroys previous versions of the candidate microservices in the application. We chose to let the original (latest) version of the application remain operational for this purpose. Alternatively, a version corresponding to the restore point version could be deployed at the risk of unnecessarily losing features and bug fixes that are unrelated to the component performing poorly.</p><p>When a restore point is available, to speed up the search, app-bisect performs a binary search between the restore point and the version of the application corresponding to the latest update. As shown in <ref type="figure" target="#fig_3">Figure 4</ref>, the search algorithm starts by picking a random update in the highlighted search region. If a restore point is not available, app-bisect starts from the most recent update to a microservice. The alternate version of the microservice and its corresponding dependencies are deployed. As described earlier (and shown in <ref type="figure" target="#fig_2">Figure 3</ref>), using canary testing techniques, a portion of incoming traffic is redirected to the alternate version of the application deployment and its performance is monitored over a small period of time (e.g., 1-2 minutes).</p><p>If the alternate version does not trigger alerts from the performance monitoring tool, app-bisect proceeds to search the second half of the commit history between the alternate version and the latest version. If the alternate version also performs poorly, app-bisect proceeds to search the first half of the commit history between the restore point and the alternate version. Throughout the course of the search, the latest version of the application remains deployed, ensuring that some version of the application is always available to the user until an alternative version with better performance is found.</p><p>Sacrificing efficiency for speed. When a restore point is not provided, the search process can take a very long time. App-bisect parallelizes the search by testing multiple deployments simultaneously. This approach can be thought of as an n-ary version of the typically binary style canary testing. The upside to this approach is that the triage can be completed quickly, thereby reducing the impact on application availability.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Conclusion</head><p>Release early, release often, and listen to your consumers 2 is the philosophy that is driving the fast adoption of microservices and DevOps principles among the developer community. However, its not all free lunch. While the common web application has now become a distributed resilient application, the complexity of troubleshooting issues has also spread from a single machine to a deployment spanning data centers. App-bisect is an attempt to tackle this complexity based on futuristic visions of autonomous computing.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Discussion Topics</head><p>Controversial Points: Feature upgrades tend to be pushed out much more frequently nowadays than they used to be in the past. In this context, there are two controversial parts to this paper. The first is the belief that distributed applications are better off traveling back to a slimmer (feature wise) past rather than sticking to a slow and bloated present. The second controversial part is the notion that an autonomic system can decide to enforce this belief. What assurances does the developer community need to embrace such autonomic tools in production?</p><p>Feedback: App-bisect cannot not guarantee a bounded completion time for the search process. Neither can a developer when asked to diagnose a software issue whose root causes are unknown. However, we are looking for community feedback on pruning the search space and speeding up the search process through intelligent insights into the application. For example, app-bisect could apply machine learning techniques to continuously understand the changes in performance, as the application evolves. How can this learning be leveraged when troubleshooting the application?</p><p>Open Issues: One of the unsolved issues in the paper is how to automatically route requests in a version-aware manner when multiple microservice chains share one or more microservices. As an example, consider the scenario where two microservices (a producer and a consumer) use asynchronous notifications and work queues. When creating instances of different versions of producers and consumers, it is possible that the different producers append tasks to a globally shared queue service like Amazon's Simple Queue Service. Consumer services could end up consuming tasks from incompatible producers, resulting in erroneous execution or data corruption.</p><p>Idea Falling Apart: Microservices can have complex dependencies that span the persistent data stores. Unless the microservices are stateless and data models in the persistent stores can handle downgrades gracefully, appbisect may not work. As discussed earlier, app-bisect's usefulness depends on its time to discover and isolate bugs. More importantly, app-bisect should not introduce additional failures or corrupt any data.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: A simplified view of a microservice-based application deployment.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: Dependencies across microservices. Microservice A depends on B and D. A given version of service A may be compatible with only a specific set of versions of B and D. Such dependencies are also commonly found among packages in various Linux distributions.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: App-bisect in action. Revision histories of services D &amp; E are shown on the right. Microservice D is being tested with an alternate version (v2.2). Version 2.2 of D is compatible up to v1.8 of microservice E. Appbisect deploys the latest version of service E (v1.8). It then routes portion of request traffic between the two versions of service D.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: Search space of updates can be pruned with restore points and version dependencies.</figDesc></figure>
+
+			<note place="foot" n="1"> The name app-bisect is inspired by the git-bisect tool that is used by developers find the commit that introduced a bug</note>
+
+			<note place="foot" n="2"> A quote by Eric S. Raymond in his 1997 essay &quot;The Cathedral and the Bazaar&quot;</note>
+		</body>
+		<back>
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">Performance Debugging for Distributed Systems of Black Boxes</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aguilera</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">K</forename><surname>Mogul</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">C</forename><surname>Wiener</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">L</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Reynolds</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Muthitacharoen</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of ACM Symposium on Operating Systems Principles (SOSP)</title>
+		<meeting>of ACM Symposium on Operating Systems Principles (SOSP)</meeting>
+		<imprint>
+			<date type="published" when="2003" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Service Substitution Revisited</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Athanasopoulos</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Zarras</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">V</forename><surname>And Issarny</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of IEEE/ACM International Conference on Automated Software Engineering (ASE</title>
+		<meeting>of IEEE/ACM International Conference on Automated Software Engineering (ASE</meeting>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">Pinpoint: Problem Determination in Large, Dynamic Internet Services</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chen</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">Y</forename><surname>Kiciman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Fratkin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Fox</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Brewer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the International Conference on Dependable Systems and Networks (DSN</title>
+		<meeting>of the International Conference on Dependable Systems and Networks (DSN</meeting>
+		<imprint>
+			<date type="published" when="2002" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">The Mystery Machine: End-to-End Performance Analysis of Large-Scale Internet Services</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chow</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Meisner</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Flinn</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Peek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wenisch</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">F</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of ACM Symposium on Operating Systems Principles (SOSP)</title>
+		<meeting>of ACM Symposium on Operating Systems Principles (SOSP)</meeting>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">X-trace: A Pervasive Network Tracing Framework</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fonseca</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Porter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Katz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">H</forename><surname>Shenker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stoica</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX Symposium on Networked Systems Design &amp; Implementation (NSDI)</title>
+		<meeting>of USENIX Symposium on Networked Systems Design &amp; Implementation (NSDI)</meeting>
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Dynamic Service Substitution in Service-Oriented Architectures</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fredj</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Georgantas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Issarny</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zarras</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Congress on Services</title>
+		<imprint>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Self-healing Systems: Survey and Synthesis</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ghosh</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Sharman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Rao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">R</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Upadhyaya</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Decision Support Systems</title>
+		<imprint>
+			<biblScope unit="volume">42</biblScope>
+			<biblScope unit="page">4</biblScope>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">ZooKeeper: Wait-free Coordination for Internet-scale Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hunt</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Konar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Junqueira</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><forename type="middle">P</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Reed</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX Annual Technical Conference (ATC)</title>
+		<meeting>of USENIX Annual Technical Conference (ATC)</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">The Vision of Autonomic Computing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kephart</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">O</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chess</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">M</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Computer</title>
+		<imprint>
+			<biblScope unit="volume">36</biblScope>
+			<biblScope unit="page">1</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Root Cause Detection in a Service-Oriented Architecture</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kim</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Sumbaly</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shah</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of the ACM SIGMET-RICS International Conference on Measurement and Modeling of Computer Systems</title>
+		<meeting>of the ACM SIGMET-RICS International Conference on Measurement and Modeling of Computer Systems</meeting>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Self-managed Systems: An Architectural Challenge</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kramer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Magee</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">IEEE Future of Software Engineering (FOSE)</title>
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">On Conditions for Self-Healing in Distributed Software Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Minsky</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><forename type="middle">H</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of Autonomic Computing Workshop</title>
+		<meeting>of Autonomic Computing Workshop</meeting>
+		<imprint>
+			<date type="published" when="2003" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<monogr>
+		<title level="m" type="main">Release It! Design and Deploy ProductionReady Software. The Pragmatic Programmers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nygard</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">T</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+	<note>ch. 5.2</note>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Autonomic Computing: Emerging Trends and Open Problems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Salehie</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tahvildari</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">In ACM SIGSOFT Software Engineering Notes</title>
+		<imprint>
+			<biblScope unit="volume">30</biblScope>
+			<date type="published" when="2005" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Deployment and Collaboration at Etsy</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Schauenberg</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Development</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">International Software Development Conference (QCon</title>
+		<imprint>
+			<date type="published" when="2014-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sigelman</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">H</forename><surname>Barroso</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><forename type="middle">A</forename><surname>Burrows</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Stephenson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Plakal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Beaver</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Jaspan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shanbhag</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Dapper</surname></persName>
+		</author>
+		<title level="m">A Large-Scale Distributed Systems Tracing Infrastructure. Google research</title>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">Adaptive Self-Optimization in Distributed Dynamic Environments</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Trumler</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>Pietzowski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Satzger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Un-Gerer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of IEEE International Conference on Self-Adaptive and Self-Organizing Systems</title>
+		<meeting>of IEEE International Conference on Self-Adaptive and Self-Organizing Systems</meeting>
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Configuration Debugging As Search: Finding the Needle in the Haystack</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Whitaker</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Cox</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">S</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gribble</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">D</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX Symposium on Operating Systems Design &amp; Implementation (OSDI)</title>
+		<meeting>of USENIX Symposium on Operating Systems Design &amp; Implementation (OSDI)</meeting>
+		<imprint>
+			<date type="published" when="2004" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title/>
+	</analytic>
+	<monogr>
+		<title level="j">BARCLAYS BANK. Scaling DevOps. DevOps Enterprise Summit</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<monogr>
+		<title level="m" type="main">Disney DevOps -To Infinity and Beyond</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Walt</forename><forename type="middle">Disney</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2014" />
+			<publisher>DevOps Enterprise Summit</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Transforming traditional Enterprise Software Development Processes by Applying DevOps and Agile principles at Scale</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Macy</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">DevOps Enterprise Summit</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pnc</forename><surname>Bank</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">DevOps: From the Center Out. DevOps Enterprise Summit</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">How DevOps Can Fix Federal Government IT -US Citizenship and Immigration Services</title>
+	</analytic>
+	<monogr>
+		<title level="j">DevOps Enterprise Summit</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+	<note>USCIS</note>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thoughtworks</forename><surname>Real-World</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Microservices</surname></persName>
+		</author>
+		<title level="m">Lessons From the Frontline. YOW! Australian Developer Conference, September</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">James</forename><surname>Hamilton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amazon</forename></persName>
+		</author>
+		<title level="m">AWS Innovation at Scale. AWS re:Invent Conference</title>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<monogr>
+		<title level="m" type="main">Enter the Andromeda Zone -Google Cloud Platform&apos;s Latest Networking Stack</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amin</forename><surname>Vahdat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Google</forename></persName>
+		</author>
+		<ptr target="http://googlecloudplatform.blogspot.com/2014/04/enter-andromeda-zone-google-cloud-platforms-latest-networking-stack.html" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<monogr>
+				<ptr target="http://open.ibmcloud.com/documentation/managing-and-monitoring-network-resources.html" />
+		<title level="m">IBM. Managing and Monitoring Network Resources -IBM Cloud OpenStack Services</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<monogr>
+				<ptr target="http://www.rackspace.com/cloud/networks" />
+		<title level="m">RACKSPACE. Software Defined Networking in the CloudRackspace Cloud Networks</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Inc</forename><surname>Appdynamics</surname></persName>
+		</author>
+		<ptr target="http://www.appdynamics.com/" />
+		<imprint/>
+	</monogr>
+	<note>ON-LINE</note>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Netflix</forename><surname>Microscope On Microservices</surname></persName>
+		</author>
+		<ptr target="http://techblog.netflix.com/2015/02/a-microscope-on-microservices.html" />
+		<imprint>
+			<date type="published" when="2015-02" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title/>
+		<ptr target="http://www.newrelic.com/" />
+	</analytic>
+	<monogr>
+		<title level="j">New Relic, Inc</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<monogr>
+		<title level="m" type="main">Platform as a Service. www.ibm.com/ software/bluemix</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ibm</forename><surname>Bluemix</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title/>
+		<ptr target="http://netflix.github.io" />
+	</analytic>
+	<monogr>
+		<title level="j">NETFLIX. Open Source Software Center</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<analytic>
+		<title level="a" type="main">Latency and Fault Tolerance for Distributed Systems</title>
+		<ptr target="https://github.com/Netflix/Hystrix/" />
+	</analytic>
+	<monogr>
+		<title level="j">HYSTRIX</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<analytic>
+		<title level="a" type="main">A Nonintrusive Request Flow Profiler for Distributed Systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhao</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Lion</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Faizan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Luo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Yuan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stumm</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Lprof</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. of USENIX Symposium on Operating Systems Design &amp; Implementation (OSDI)</title>
+		<meeting>of USENIX Symposium on Operating Systems Design &amp; Implementation (OSDI)</meeting>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

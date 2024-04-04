@@ -1,0 +1,955 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T04:26+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">&quot;Weird Machines&quot; in ELF: A Spotlight on the Underappreciated Metadata</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rebecca</forename><surname>Shapiro</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department" key="dep1">Dartmouth College</orgName>
+								<orgName type="department" key="dep2">Dartmouth College</orgName>
+								<orgName type="department" key="dep3">Dartmouth College</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sergey</forename><surname>Bratus</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department" key="dep1">Dartmouth College</orgName>
+								<orgName type="department" key="dep2">Dartmouth College</orgName>
+								<orgName type="department" key="dep3">Dartmouth College</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sean</forename><forename type="middle">W</forename><surname>Smith</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="department" key="dep1">Dartmouth College</orgName>
+								<orgName type="department" key="dep2">Dartmouth College</orgName>
+								<orgName type="department" key="dep3">Dartmouth College</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">&quot;Weird Machines&quot; in ELF: A Spotlight on the Underappreciated Metadata</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Although software exploitation historically started as an exercise in coaxing the target&apos;s execution into attacker-supplied binary shellcode, it soon became a practical study in pushing the limits of unexpected computation that could be caused by crafted data not containing any native code. We show how the ABI metadata that drives the creation of a process&apos; runtime can also drive arbitrary computation. We introduce our design and implementation of Cobbler, a proof-of-concept toolkit capable of compiling a Turing-complete language into well-formed ELF executable metadata that get &quot;executed&quot; by the run-time loader (RTLD). Our proof-of-concept toolkit highlights how important it is that defenders expand their focus beyond the code and data sections of untrusted bina-ries, both in static analysis and in the dynamic analysis of the early runtime setup stages as well as any time the RTLD is invoked.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>The great threat model change. This last decade saw a major change in the underlying threat model of applied security research: the change from the "malicious code" model (where the attacker slips a native code payload/shellcode into the target system and tricks the target into passing control into it) to "malicious computation" driven merely by attacker-crafted data with no native code payloads (see, e.g., discussion in <ref type="bibr" target="#b22">[23]</ref>). This new attack model not only highlighted the ineffectiveness of defensive mechanisms that attempted to detect and block "malicious code" in system's inputs or communications, but also helped clarify the core essence of exploitation: unexpected computation in the target, caused by crafted inputs. <ref type="bibr" target="#b0">1</ref> </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1.1">Data-driven attacks</head><p>The ability of non-code crafted inputs to drive "programs" (chains of the target's own code fragments, function calls, or even dynamic linker invocations) in the target has been discussed by hacker researchers since at least the early 2000s (e.g., in <ref type="bibr" target="#b36">[37,</ref><ref type="bibr" target="#b31">32]</ref>, see also <ref type="bibr" target="#b25">[26,</ref><ref type="bibr" target="#b14">15,</ref><ref type="bibr" target="#b7">8]</ref> for historical analysis of these discoveries); other researchers also pointed have out the power of data-only attacks to alter target's execution <ref type="bibr" target="#b10">[11]</ref>. For any sufficiently complex data, the environment that processes these data may play the role of a "virtual machine" programmed by such data acting as "byte-code" unless we can demonstrate that such computation is limited by design <ref type="bibr" target="#b5">[6,</ref><ref type="bibr" target="#b34">35]</ref>. Typically these data that drive these "weird machines" are either involved in program flow control or in memory transformations. For example, stack frames can drive return-oriented programming (ROP); exception handling data used for stack unwinding and state recovery can drive DWARF-based illicit computation <ref type="bibr" target="#b32">[33]</ref>; and heap chunk metadata can be used to manipulate memory management code <ref type="bibr" target="#b3">[4,</ref><ref type="bibr" target="#b28">29,</ref><ref type="bibr" target="#b23">24,</ref><ref type="bibr" target="#b21">22,</ref><ref type="bibr" target="#b35">36]</ref> (also see <ref type="bibr" target="#b4">[5]</ref> for a high-level view of heap exploits). This type of of weird programming has become a staple of modern exploitation (e.g., <ref type="bibr" target="#b13">[14]</ref>), and thus must also become a part of defensive security analysis.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1.2">Computational power and pwnage</head><p>Hovav Shacham et al. used computation theory terms to describe the execution model and computational power of these exploit programming techniques -and showed that they could indeed support Turing-complete environments <ref type="bibr" target="#b39">[40,</ref><ref type="bibr" target="#b37">38]</ref>. Although attackers rarely need such generality to control targets, arbitrarily complex programs such as a Linux kernel rootkit could indeed be compiled and run entirely within the ROP execution model <ref type="bibr" target="#b22">[23]</ref>.</p><p>this paper, however, we only consider scenarios where attacker controls input data of a target's code unit or subsystem.</p><p>It would be a mistake to claim that the Turingcompleteness of a malicious execution model somehow represents greater practical danger than, say, a finite automaton (so long as the latter, e.g., yields root shell) as it is often the case that the malicious execution is merely used as a stepping block within an attack. Turing completeness is an "estimation from above" of the attacker's power over the execution and a statement that there is no algorithmic task possible on the target environment itself that the attacker could not successfully emulate. "Root shells" in classic Unix exploitation scenarios 2 represent a similar symbolic statement: even though the attackers' goals could possibly be accomplished without spawning a root shell, it serves as evidence of full attacker control. To quote security researcher Felix 'FX' Lindner, "You can't argue with root shell."</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1.3">Our contributions</head><p>In this paper we introduce the notion of metadatadriven computation and demonstrate the indispensable role metadata have played in exploit-techniques to this day (Section 2). We will then show that metadata can be just as powerful as code or stack ROP chains by presenting the Cobbler toolkit which crafts ELF (executable and linking format) metadata to take advantage of the Turingcomplete execution environment present in the runtime loader (RTLD). Cobbler produces programs (encoded as ELF metadata) that are interpreted by the ld.so runtime loader (RTLD) as the executable that contains these metadata is setup for execution (Section 4). This computation happens with full knowledge of the executable's dynamic symbols and thus is not mitigated by address space layout randomization (ASLR). This opens obvious opportunities for both hiding code-free Trojan logic and obfuscating the program flow.</p><p>Although the overall ELF file and each metadata entry in particular are well-formed, it is doubtful that the binary toolchain developers expect the RTLD to perform arbitrary memory transformations and other kinds of general computation.</p><p>In general we would like to put out a call to arms for researchers to better understand these weird machines and the role metadata, data, and code have in driving such machines.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">A look at metadata</head><p>Metadata (and generally speaking, parameters, options, and other configuration data) fuel software composability, adaptability, and diversity. Most modern general-purpose software is designed to work on a variety of architectures and operating systems, following the philosophy that code should be reused and shared whenever possible.</p><p>Metadata also allows processes constructed from the same code units to be laid out differently in memory, forcing attackers to deal with a diversity of targets. Forrest has shown that this metadata-supported diversity may allow systems to be more robust against threats and vulnerabilities <ref type="bibr" target="#b17">[18]</ref>, and has proven its usefulness in many cases (e.g., <ref type="bibr" target="#b15">[16,</ref><ref type="bibr" target="#b18">19]</ref>). However we posit that at the same time we must be cautious -rich-enough metadata may expand the attack surface of a system in unexpected ways.</p><p>Hacker research and metadata. Given hacker intuitions about computation as the key object of security, it's not surprising that hacker research leads in understanding the role of ABI metadata in modern computational environments. For instance, to date the guides published by Grugq ( <ref type="bibr" target="#b43">[44,</ref><ref type="bibr" target="#b20">21]</ref>) and Mayhem ( <ref type="bibr" target="#b30">[31]</ref>) remain the most detailed guides to runtime ELF ABI, besides Levine's solitary <ref type="bibr" target="#b26">[27]</ref> book on the subject. Many Phrack articles <ref type="bibr" target="#b24">[25,</ref><ref type="bibr" target="#b8">9,</ref><ref type="bibr" target="#b38">39,</ref><ref type="bibr" target="#b9">10]</ref> illustrate both ABI engineering principles and abuse of their artifacts. Hacker publications, such as the Corkami collection <ref type="bibr" target="#b2">[3]</ref>, provide comprehensive tests of binary formats' edge cases. Hacker research into unexpected but reliable ways of binary composition by leveraging ABI structures has given rise to a number of design patterns <ref type="bibr" target="#b6">[7]</ref>. Not surprisingly, the most advanced framework for manipulating ABI metadata, ERESI <ref type="bibr" target="#b1">[2]</ref>, also originates from hacker research <ref type="bibr" target="#b29">[30,</ref><ref type="bibr" target="#b40">41]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">Exploits</head><p>Although metadata are rarely the main focus of an attack, metadata have long been leveraged as a means of carrying out exploits. Even the original stack-smashing attacks can be said to target control flow metadata in the stack frames <ref type="bibr" target="#b33">[34]</ref>; more advanced software exploitation techniques such as ROP and heap-smashing all aim to overwrite metadata such as a function pointer stored somewhere in writable memory waiting to be invoked. Viruses and other types of malware are a classic example of attacks achieved via manipulating metadata: parasitic code injected into an existing executable will never see the light of day unless the executable or library's metadata are changed to inform the loader of its existence and to get some other component in the runtime to eventually invoke the parasitic code.</p><p>Data-driven Turing machines. We are not the first to explore data-driven computation. Numerous instances of data-driven Turing machines have surfaced during the past decade and are presented as examples of how computationally-rich the environments processing these metadata are. For example, Eli Fox-Epstein has shown that HTML in combination with CSS3, normally thought of as markup languages, can drive Turing-complete computation <ref type="bibr" target="#b16">[17]</ref>. Others have shown how the instructions written on the cards in the game Magic: The Gathering can drive a Turing-complete machine <ref type="bibr" target="#b11">[12]</ref>. Todd L. Veldhuizen at Indiana University showed that C++ Templates can drive a Turing machine <ref type="bibr" target="#b44">[45]</ref>. These are only a few examples of weird-machines driven by instructions that are not normally thought of as true executable code.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">Defenses</head><p>Metadata are often underappreciated by security researchers and are often seen as a means to an enddata that can be shaped in fuzzing to search for an application's vulnerabilities or data that can be leveraged to carry out an exploit. And yet we find that software defense practices do not always treat metadata with the respect they deserve. For example, the antivirus industry has long based their virus detection mechanisms on code fingerprints. Although the antivirus industry has made strides towards heuristic runtime virus detection, we still see much effort spent on code signatures. Perhaps the time will soon come to where they consider metadata fingerprints.</p><p>Software integrity. A classic technique used in software defense is to check the integrity of a piece of software as it appears on disk before it is loaded and executed. This type of defense and been developed mostly in response the world of viruses, rootkits, and malware but also can be used to determine who generated a particular executable or library.</p><p>Executable signing is one example of a software integrity mechanism.</p><p>Various implementations of executable-signing schemes demonstrate that security practitioners think of computation as something that can only be generated from code and thus metadata can be trusted to a small extent. The small amount of implicitlytrusted (unsigned) metadata allowing for flexibility in the signing scheme can end up being the implementation's Achilles' heel.</p><p>At REcon 2012, Igor Glücksmann demonstrated how data can be injected into a signed PE file without invalidating the signature <ref type="bibr" target="#b19">[20]</ref>. His technique took advantage of the fact that the signature and the signature's metadata embedded in the PE were not themselves signed, and that PE supported variable length signatures where injected data could hide. This support for flexibility and implied trust of some metadata ended up being this signature scheme's weakness.</p><p>Various ELF-signing mechanisms have been implemented, each differing on how and what components of the ELF are signed. We discuss two such implementations: elfsign and signelf.</p><p>elfsign <ref type="bibr" target="#b41">[42]</ref>, which used to be available in the Debian package repositories, was designed to sign all ELF metadata except data contained in the signature's section (the section named ".sig"), the null-terminated string ".sig" in the string table, and the the last section header (we assume to be the signature's section header). Although elfsign has been retired due to its use of the weak MD5 signature-scheme before any attacks were developed 3 this signing scheme appears to be very similar to the PE-signing scheme, and thus is likely to be vulnerable to attacks similar to those presented by Glücksmann.</p><p>signelf <ref type="bibr" target="#b12">[13]</ref> is another example of an ELFsigning implementation, although it is unclear whether signelf is used in practice. signelf suffers from an alarmingly obvious weakness -it only signs a specific set of ELF sections that it looks up by name (whereas the dynamic loader does not locate sections by name), and it does not sign the metadata that describe where to find these sections. Therefore section metadata can be changed, and unsigned sections can be modified. This is yet another example of how metadata is underappreciated in practice.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Runtime linking and loading</head><p>In order to understand the ELF metadata-driven weird machine present in Linux's RTLD we must first understand the steps that are taken to load an executable into memory and then kick off execution. The loading process, starting at the initial call to exec(), until the executable starts running is illustrated in <ref type="figure" target="#fig_0">Figure 1</ref>. New processes are created using the exec() system call which is provided with the path of the file to be executed. Calls to exec() cause the kernel to read small subset of the executable's metadata in order to map the executable to memory (hello, in the case of <ref type="figure" target="#fig_0">Figure 1</ref>) and the executable's interpreter (typically the RTLD, ld.so) into the process' address space. Next a context switch into userland is made and the interpreter is kicked off (RTLD START() is called in the case of ld.so). It is the interpreter's job to load any libraries such as libc.so and patch memory as specified by the executable's metadata before finally passing off control to the executable's entry-point (typically start()). </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Symbol lookup and link map structures</head><p>As the RTLD loads the executable and each library the executable is dependent on, the RTLD creates and maintains one link map data structure for each ELF object (library and executable) that is loaded. link map structures are only created at runtime and contain information including:</p><p>• The name of the ELF file for which the link map structure corresponds.</p><p>• The base address at which the ELF object was loaded.</p><p>• The virtual address of all the ELF object's dynamic table entries.</p><p>• Pointers to other loaded link map structures so that they all form a doubly linked list.</p><p>All the link map structures form a doubly linked list so that as long as we can locate a single link map structure, we can find information on any other loaded ELF object. The ordering of these link map structures is important with regard to symbol resolution -the symbol resolver traverses these link map structures in linear order as needed to locate the information needed to resolve the symbol.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">ELF metadata</head><p>The metadata contained in ELF files are the conduit by which the compiler, linker, and loader communicate. The purpose of ELF metadata is to keep track of properties of the machine code it encapsulates. Such properties include libraries that its code depends on and locations of addresses or data in the file that need to be patched in order for the code to cleanly execute once loaded.</p><p>The ELF header. All ELF files contain a structure known as the ELF header (Elf64 Ehdr 4 ) at the be- <ref type="bibr" target="#b3">4</ref> We are assuming a 64-bit architecture, ELF metadata for 32-bit architectures begin with Elf32 ginning of the file. The ELF header contains information such the ELF file's type (executable, shared-object, etc.), architecture it was compiled for, and where in the file other metadata can be located. Any particular piece of metadata needed by the linker or loader can be found by crawling the data structures referenced by the ELF header.  <ref type="table">The dynamic table exists</ref> to summarize information required at runtime such as the names of libraries needed as well as the locations and sizes of metadata that the RTLD needs to process. The dynamic table acts as a convenient one-stop shop for the dynamic linker and RTLD, most of the data it contains can be found by crawling through the structures pointed to by the ELF header.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2.1">ELF sections and metadata tables</head><p>Symbol metadata. Symbol metadata provide meaning and context to data and functions that need to be located at runtime. These metadata typically provide information about objects that are imported or exported such as binding information so that, for example, an executable can call a function defined in an external library.</p><p>ELF files contain symbol metadata in the form of Elf64 Sym structures. <ref type="figure">Figure 2</ref> shows the definition of Elf64 Sym structures. In summary, symbol structures contain a pointer to the symbol's name, information on the type of symbol, and a value which most often is a pointer to the object (data or function) itself. Symbols of type STT IFUNC are not as simple to interpret as other types of symbols. The purpose of STT IFUNC symbols is to allow the decision of what version of a function to be used to be deferred until load/runtime. A STT IFUNC symbol's value points to code that returns the address of the function it ultimately decides to use.  Relocation metadata. Relocation metadata provide the linker and loader with information on which virtual addresses should be patched, and how. For example, executables maintain a table of pointers to imported library functions at runtime; some relocation entries are used to patch the table with the locations of these imported functions. Some, but not all, types of relocation table entries make references to symbol metadata to provide extra context on how the patch value should be calculated. Relocation metadata comes in the form of Elf64 Rela structures as shown in <ref type="figure" target="#fig_2">Figure 3</ref>. <ref type="bibr" target="#b4">5</ref> ELF executables generally contain two relocation tables, .rela.dyn and .rela.plt. .rela.plt entries are typically processed lazily during dynamic linking. .rela.dyn relocation entries are processed during load time after the RTLD has mapped all of the required libraries to memory but before the RTLD passes control to the executable. Any references to symbols made by the relocation-table entries in .rela.dyn are encoded as indices into .dynsym symbol table in the Elf64 Rela's r info field. The ELF's dynamic table contains the address of both .rela.dyn and .dynsym sections so that this information can be quickly looked up.</p><p>The System V amd64 ABI [28] defines 37 different types of relocation entries, the gcc toolchain we worked with only uses 13 types (one of which is not defined in the ABI), whereas our proof-of-concept Cobbler compiler, makes use of only 3 different types of relocation entries: R X86 64 COPY, R X86 64 64, and R X86 64 RELATIVE, which we will abbreviate as COPY, SYM, and RELATIVE.  tries. Elf64 Relas of type COPY instructs the RTLD and dynamic linker to perform what essentially is a call to memcpy() where the associated symbol's value points to the bytes to be copied and size contains the number of bytes to copy. Elf64 Relas of type SYM request that the value in the addend is summed with the symbol's value and the ELF object's base address (typically 0 for an executable), which is written to the specified offset plus base address. Elf64 Relas of type RELATIVE do not make use of any symbols, they simply add the value of the object's base address to their addend and store that in the relocation entry's offset plus base address.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Cobbler implementation</head><p>ELF symbol and relocation entries allow for code adaptability and reuse, however, they can be crafted to perform other types of computation. We have built a proofof-concept toolkit 6 , Cobbler, that compiles the non-I/O related instructions in Brainfuck (an esoteric Turingcomplete language <ref type="bibr" target="#b0">[1]</ref>) down to ELF metadata and injects the metadata into an executable (Section ?? describes where to find the toolkit). The remainder of this section will describe our implementation of the primitive instructions upon which we built our Brainfuck to ELF metadata compiler to demonstrates how ELF metadata can awaken the Turing-complete weird machine hidden in the RTLD.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">Tools</head><p>Our proof-of-concept compiler was built and tested on Ubuntu 11.10's gcc toolchain, eglibc-2.13, running on an amd64 architecture. We do not have any reasons to believe that the compiler cannot be ported to work with other gcc versions but we have not attempted to port the our compiler and tools. <ref type="figure" target="#fig_3">Figure 4</ref> shows how an executable "enhanced" with computation-driving metadata -what we will refer to as a Cobbler-enhanced executable -is constructed. In order to use Cobbler to take advantage of the RTLD's weird machine, one must have write access to some target/host executable. Given a list of Cobbler-supported instructions and an executable in which to enhance, the Cobbler compiler first parses the source code that it is compiling, then by using the ERESI toolkit <ref type="bibr" target="#b1">[2]</ref> to parse the executable, it crafts metadata to inject and hands the new metadata off to ERESI to create an Cobbler-enhanced copy of the executable. Cobbler carefully constructs its enhancements to allow for clean execution of the executable after the Cobbler-enhanced metadata are processed.</p><p>It is important to note that currently only non positionindependent (PIC) executables -those whose base location are not randomized -can be Cobbler-enhanced. This is reasonable given that the majority of ELF executables are not compiled to be position-independent by default. We have not attempted to work with PIC executables but have no reason to believe that they are fully resistant to Cobbler. Cobbler does not make any assumptions about where libraries are mapped and thus is unaffected by libraries mapped at random locations by ASLR. It is in fact possible to locate all libraries at loadtime using ELF metadata. This technique is described in Section 4.2.4.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Cobbler primitives</head><p>We can think of the primitives implemented in Cobbler as an assembly-like language composed of three basic instructions:</p><p>1. Addition (add), 2. Move/copy (mov), 3. Jump if not zero (jnz).</p><p>In this language, the bytecode is composed of relocation metadata. Symbol metadata plays the role of registers. These "registers" just also happen to be memory-mapped and also contain inline metadata.</p><p>Cobbler primitives use four different addressing modes for its operands, although no single instruction operand supports all addressing methods. The supported addressing modes and syntax we use are as follows:</p><p>• Immediate: value is specified directly in instruction (e.g. $0x01) • Direct: instruction contains value's address (e.g. *0xdeadbeef)</p><p>• Register: value is contained in register (e.g. %reg)</p><p>• Register indirect: register contains value's address (e.g.</p><p>[%reg])</p><p>All destinations are directly addressed across all instructions. The following sections demonstrate how each instruction is implemented.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2.1">Move</head><p>The mov instruction is expressed as</p><formula xml:id="formula_0">mov &lt;dest&gt;, &lt;value&gt;</formula><p>where &lt;dest&gt; is specified in direct mode and &lt;value&gt; can be specified either as an immediate or register indirect. The mov instruction copies the value to the address specified by &lt;dest&gt;, the destination. We have implemented mov to always copy 8 bytes to its destination, but the number of bytes that are copied can be adjusted.</p><p>Consider the following mov instruction that uses immediate addressing:</p><formula xml:id="formula_1">mov * 0xbeef0000, $0x04</formula><p>The following relocation entry implements this immediate mov instruction:</p><formula xml:id="formula_2">{type=RELATIVE, offset=0xbeef0000, symbol=0, addend=0x04}</formula><p>Relocation entries of type RELATIVE naturally implement Cobbler mov instructions with immediate values. This is because they instruct the linker to copy the value of their addend to the address specified at their offset. (Note that the RTLD ignores ignores symbols when processing RELATIVE relocation entries.) Consider the following mov instruction that uses register indirect addressing: mov * 0xbeef0000, <ref type="bibr">[%foo]</ref> A relocation entry and symbol table entry are both needed to support this instruction. In this example the relocation entry should be setup as follows:</p><formula xml:id="formula_3">{type=COPY, offset=0xbeef0000, symbol=foo, addend=0}</formula><p>This relocation entry makes reference to the symbol foo, which is consulted when the relocation entry is processed. The symbol's type is set as an FUNC (and not an IFUNC) so that it is treated as a regular symbol. The symbol's size is 8, this ensures that exactly 8 bytes are copied.</p><p>{name=foo, value=0xb0000000, type=FUNC, shndx=1, size=8}</p><p>This symbol and relocation entry pair instruct the loader to copy 8 bytes starting at 0xb0000000, the symbol's value, to 0xbeef000, the relocation entry's specified offset, like memcpy()</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2.2">Addition</head><p>The add instruction is written as</p><formula xml:id="formula_4">add &lt;dest&gt;, &lt;addend1&gt;, &lt;addend 2&gt;</formula><p>where &lt;dest&gt; is specified in direct mode, &lt;addend 1&gt; is a register, and &lt;addend 2&gt; is specified as an immediate. add adds the 8 byte &lt;addend 2&gt; to the 8 byte value in the registered specified by &lt;addend 1&gt; and stores that 8 byte result at the address specified by &lt;dest&gt;.</p><p>Consider the following add instruction:</p><p>add * 0xbeef0000, %foo, $0x02</p><p>The following relocation entry implements this instruction:</p><p>{type=SYM, offset=0xbeef0000, symbol=foo, addend=2}</p><p>A SYM typed relocation entry instructs the loader to copy in the specified symbol's value (in this case foo). It is important that the corresponding symbol's type be a standard, non-IFUNC, type so that the symbol's value is simply treated as a value. The symbol may look as follows:</p><formula xml:id="formula_5">{name=foo, value=1, type=FUNC, shndx=1, size=8}</formula><p>Such a relocation entry and symbol table entry pair instruct the loader to add the relocation entry's addend (2) to the symbol's value (1) and store the result (3) at the relocation entry's offset (0xbeef0000).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2.3">Jump if not zero</head><p>The jnz instruction is written as</p><formula xml:id="formula_6">jnz &lt;dest&gt;, &lt;value&gt;</formula><p>where the jump destination, &lt;dest&gt;, is specified as an immediate and &lt;value&gt; is specified in direct mode. Unlike the mov and add instructions, jnz cannot be implemented cleanly with a single relocation entry, this is because the loader was not designed to arbitrarily jump over relocation entries. In this section we will only highlight the major issues encountered when implementing jump instructions, other complications will be discussed in Section 4.3. In order to understand how such functionality can be implemented using ELF metadata we must understand the context in which relocation entries are processed. The pseudocode in <ref type="figure" target="#fig_4">Figure 5</ref> represents a high level/simplified algorithm of how relocation entries are processed by the RTLD.</p><p>While processing relocation entries, the RTLD walks through the list of link map structures (via lm while (lm != NULL) { r = lm-&gt;dyn <ref type="bibr">[DT_RELA]</ref>; end = r + lm-&gt;dyn <ref type="bibr">[DT_RELASZ]</ref>; for (r ; r &lt; end; r++) { relocate(lm, r, &amp;dyn <ref type="bibr">[DT_SYM]</ref>); } lm = lm-&gt;prev; } We first demonstrate how to implement an unconditional jump instruction before we demonstrate the more difficult task of conditionally branches.</p><p>Jump. There are several tasks relocation entries need to perform in order to be able to perform an unconditional branch:</p><p>1. Set the value of lm-&gt;prev so that the same relocation table is processed on the next while loop iteration.</p><p>• The original lm-&gt;prev value needs to be restored later to allow the executable to eventually run 2. Set the value of lm-&gt;dyn[DT RELA] to point to the the jump's destination (relocation entry) 3. Update the size of lm-&gt;dyn[DT RELASZ] to reflect the "new" relocation table size 4. Clobber the value of end so that the RTLD does not process the next relocation entry</p><p>Step 1 requires knowledge of where the executable's link map structure is mapped. It turns out that the RTLD stores a pointer to a dynamically linked executable's link map in a table the dynamic linker is dependent on -the global offset table (GOT). The virtual address of this table is known at compile time (the DT PLTGOT field in the executable's dynamic table). Using the address of a pointer to the executable's link map structure we can calculate the address of that structure's prev value. A simple move instruction will implement this for us:</p><p>mov * &lt;addr of prev&gt;, $&lt;addr of link_map&gt;</p><p>Writing instructions to restore the executable link map's prev value is trivial because this link map is always the head of the list and thus merely needs to be set to 0 allow the RTLD to continue. Steps <ref type="table">2-3 requires knowledge of the virtual address  of the executable's dynamic table. The executable's en- tire dynamic table is</ref> mapped into memory at the address specified by metadata present in the ELF. Thus we can calculate the virtual address of any item in the executable's dynamic table at compile time. The same holds true for the location of the executable's relocation and symbol tables. Therefore it is trivial to construct a relocation entry that essentially implements: mov * (&lt;address of DT_RELA&gt;), &lt;address of next relocation entry to process&gt;}</p><p>The same applies to step 3.</p><p>Step 4 requires the knowledge of the address of end so that we can set it to a value that will cause the next iteration of the loop to exit. It turns out that end is stored on the stack. Because the location of stacks are randomized, calculating the address of end is not so simple. However,the loader stores the address of some stack-allocated data in a statically-allocated variable ( dl auxv). As described in Section 4.2.4, we can lookup the base-address of the loader to calculate the location of this static variable. The location of end is at a fixed distance from the data dl auxv points to, thus using mov instructions we can calculate the address of end and store this value in a symbol. Assuming the address of end is stored in a symbol called sym-end, the following instructions will set end to 0 forcing the loop to exit otherwise prematurely: mov * &lt;addr of next Rela's offset&gt;, %sym-end mov * &lt;(value overwritten)&gt;, $0</p><p>Note that the first instruction modifies the second instruction's destination at runtime, copying the address of end found in the sym-end register over to the destination of the second instruction so that when the second instruction executes, its immediate value, 0, will be written to end, forcing the RTLD to stop processing relocation entries.</p><p>Given that the dynamic table and link map are manipulated by steps 1-3 before end is overwritten, the stage is set for a branch before the RTLD quits processing the current round of relocation entries. Once the RTLD quits processing the table, it will attempt to process relocation entries of the previous link map which now points to the same link map (due to step 1). The RTLD is none-the-wiser so it looks at the link map's dynamic table for the addresses of the relocation table to process which now points to the "instructions" of our choosing (from steps 2-3).</p><p>Conditional branch. Now that we know how to implement an unconditional branch, we just need to implement a few more instructions to allow for conditional branching. The trick to implementing conditional branching lies in how the RTLD handles symbols of type IFUNC. It turns out that if the RTLD is interpreting a symbol of type IFUNC (an indirect function) there are two ways that that it may handle the IFUNC: (1) If the shndx field of the symbol is not 0, then the RTLD treats the symbol as an indirect function, calling the function it points to and using the value returned by the indirect function. (2) If the shndx field is zero, then that symbol's value is used directly. Therefore conditional branches requires a special symbol (we call sym-zero) as well as special Cobbler instructions to initialize the environment for branching. sym-zero is a symbol type IFUNC whose value points to executable code that simply returns 0. Such a gadget can be found in ld.so which is mapped at a higher address than the executable's metadata. We can write the gadget's offset from the base of ld.so into sym-zero's value at compile-time and include Cobbler instructions that can locate ld.so (using the technique discussed in Section 4.2.4) and set sym-zero's value with the sum of its former value (the offset of the gadget that returns 0) and the base address of ld.so.</p><p>We then use the following instructions to perform the conditional the branch: mov * &lt;addr of sym-zero shndx&gt;, $&lt;test val&gt; add * &lt;addr of end&gt;, %sym-zero, $0</p><p>With this setup, if the value being tested is 0, then the value of the function pointer in sym-zero is written to end, a value which we picked to be larger than the address of the executable's relocation entries, so relocation entry processing continues. We can insert instructions immediately following the jnz bytecode that reset the value of end in case the branch is not taken. If the value we are testing is not 0, then the symbol will be treated as an indirect function rigged to return 0, thus 0 will be written to end forcing a branch.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2.4">Locating libraries</head><p>We must be able to locate the base address of ld.so to implement conditional branching as described in Section 4.2.3. It can also be useful to locate other libraries too. In this section we describe a technique that uses Cobbler to locate the base address of any library loaded by the RTLD. As described in Section 4.2.3, it is relatively trivial to locate the address of the executable's link map structure. Given that all link maps are in a doubly linked list, and each link map contains the base address in which it's ELF object was loaded, we can use the executable's link map to locate any library that the RTLD loaded. Given the executable's link map, we:</p><p>1. Dereference the pointer we have to the to get the base address of the link map 2. Calculate the address of its next field (by adding 0x18 to the address of the link map) 3. Repeat steps 1 and 2 until we arrive at the link map of the library we are trying to locate 4. Deference the pointer we have to the to get the base address of the next link map 5. Copy the value at the beginning of the link map structure to a register to be used later (by dereferencing the pointer). This value is the library's base address.</p><p>Assuming the library we are trying to locate is the second item on the link map chain and that there is a sym-lm register that initially contains the virtual address of the executable's link map structure (known at compile time), the address of the library will be found in the sym-lm register after following four instructions are executed: </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.3">Implementation challenges</head><p>This section lists the various challenges we encountered in our implementation of Cobbler primitives while still allowing for clean execution after the RTLD passes control off to the executable's entrypoint.</p><p>Preserve existing metadata. In order to allow for the executable to cleanly execute after the RTLD interprets the Cobbler instructions, we must be careful to preserve the existing metadata and to not allow the original set of relocation entries to be processed more than once. The Cobbler-enhanced executable is configured so that our Cobbler instructions are interpreted before the original relocation metadata. The last several relocation entries we inject instruct the RTLD to process the original relocation entries next before processing a final set of relocation entries that restore the link map structure to its original state.</p><p>Do not let sanity checks get in the way of branching. The RTLD has some sanity checks as it processes its metadata. Two sanity checks in particular get in the way of branching. One of these tests a boolean stored in the link map structure to see if the relocation entries have been processed yet. It is possible to play tricks with pointers maintained by the link map to get the RTLD to reset the boolean before it attempts to reprocess the link map's relocation table. A second sanity check causes the RTLD to set the relocation entries as read-only. The workaround is fairly simple and involves setting a particular field in the link map to zero before branching.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.4">A Cobbler-built backdoor</head><p>To demonstrate how Cobbler can be used as an attack vector, we have used Cobbler to insert a proof-ofconcept metadata backdoor into the implementation of ping found in Ubuntu's inetutils v1.8. We will briefly describe how a root shell backdoor was inserted into this version of ping. It is interesting to note that we did not need to harness the full computational power to these metadata to insert the backdoor which shows that even relatively weak weird machines can be interesting.</p><p>There are two features of this ping implementation we make use of to construct a backdoor:</p><p>1. ping runs setuid as root, but drops its root privileges early on 2. The optional --type command-line argument takes a single argument to customize the type of packets sent. If provided, ping tests the argument in the following manner:</p><p>if(strcasecmp (&lt;string&gt;, "echo") == 0) { To get ping to execute arbitrary programs as root, we must insert metadata capable of doing the following at runtime:</p><p>1. Override the call to setuid() with something that doesn't produce any noticeable side effects, such as getuid() 2. Override the call to strcasecmp() with execl() so that the exec system cal is made instead.</p><p>These two actions, in combination, will cause ping not to drop root privileges and to treat the argument to --type (if provided) as a path to an executable in the call to execl() that replaced strcasecmp(). If the --type option is not provided to ping, ping still cleanly performs its pinging duties. Both setuid() and strcasecmp() are functions that imported from libc. The compiler building the ping executable does not know where these functions will live at runtime and thus creates entries in the executable's GOT for each function which get lazily filled in by the dynamic linker once their addresses are known. If we fill in the GOT entry for a function before the dynamic linker, the address we provide will be assumed to be the function's location in memory. The location of the GOT table in memory is known at compile time as are the offsets of getuid() and execl() from the base address of libc. Armed with this information, we can use the library location trick described in Section 4.2.4 to craft metadata that lookup the base address of libc, then calculate the absolute addresses of getuid() and execl(), and finally patch ping's GOT in memory before ping is finally executed. It turns out that this backdoor behavior can be implemented using nine relocation entries and one symbol table entry and without making any changes to the executable segments of ping. You can build a backdoored version of ping using our scripts provided in elf-bf-tools in order to see these relocation entries for yourself.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Crafting metadata in other types of executables</head><p>Although we have mostly focused on ELF metadata, other types of executable metadata have interesting computational influences over their RTLDs.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1">PE</head><p>In 2006, Skape published a paper called LOCREATE studying novel ways to craft metadata in Windows PE executables <ref type="bibr" target="#b42">[43]</ref> LOCREATE's PE metadata crafting technique work as a code unpacking mechanism for malicious software and are more difficult to analyze than traditional code-based malware unpackers. Skape shows how well-formed PE metadata can be crafted to tell the RTLD to overwrite code already loaded in memory. Thus the code that eventually executes does not resemble the code as it appears on disk.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2">Mach-O</head><p>Mach-O is the executable file format used in Mac OS X. Mach-O stores its relocation metadata at the end of the file with its other dynamic linker metadata. Given that its relocation metadata is located at the end of the file, injecting metadata is relatively straightforward. Mach-O relocation metadata is not stored in fixed-sized structures like ELF and PE but instead is "compressed" into special variable-length bytecode/instructions. For example, the following stream of relocation instructions are used to instruct the linker to patch a particular segment's offset with the address of some library's setuid():</p><p>1. SET DYLIB ORDINAL IMM &lt;# of library to search&gt; 2. SET SEGMENT AND OFFSET ULEB &lt;segment #&gt; &lt;offset&gt; 3. SET SYMBOL TRAILING FLAGS IMM &lt;flags&gt; "setuid"</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.">DO BIND 5. DONE</head><p>Note that the name of the symbol and library to search is embedded within the relocation instructions.</p><p>Imagine an executable that calls setuid() to release its administrative privileges. If we change the string setuid to getuid, a single byte edit, the dynamic linker will link and call getuid() instead of setuid(), preventing the process from releasing administrative privileges. This small metadata edit has a significant effect on the processes' execution. Mach-O binding instructions available to the RTLD and dynamic linker build a fairly rich language and we suspect that there may be more interesting weird machines hiding there.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Future Work</head><p>Our analysis of execution models driven by metadata is by no means exhaustive; it is merely meant to attract attention to their computational power and their crucial part in the chain of tools currently implied to "just work" for a computing environment to be trustworthy. Our computation model-based approach to the phenomenon of a "malicious" computation that could be performed with well-formed metadata alone raises important formal questions:</p><p>• What should be the trust model and role of metadata in a trusted tool chain? • Whereas static analysis of code is fraught with halting problem-related challenges, could static analysis of metadata be more satisfactory? • What properties of currently existing metadata can be formally validated? • What formal properties should metadata be designed to satisfy so that the computation it drives is trustworthy and validatable?</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Conclusion</head><p>Modern ABI metadata provide powerful composability and diversity benefits for both software engineering in general and security in particular. However, they also developed into a powerful execution environment in which well-formed crafted metadata can drive "weird machines" that transform, with Turing-complete power, the code and data of a process. In designing a trusted toolchain to guarantee trustworthy execution of a process, binary code should no longer be considered the sole seat of computation. We expect that linkers and loaders will become the next nexus of trust in engineering binary tool chains; urgent reflection on the computations they perform is needed if we are to continue to trust them.</p><p>8 Acknowledgments</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: Overview of runtime loading process for an executable named hello.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head></head><label></label><figDesc>Figure 2: Contents of ELF symbol metadata, Elf64 Sym</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: Contents of ELF relocation metadata, Elf64 Rela</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: How a Cobbler-enhanced executable is constructed.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_4"><head>Figure 5 :</head><label>5</label><figDesc>Figure 5: Simplified representation of how RTLD processes relocation tables.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_5"><head>1</head><label></label><figDesc>. mov * &lt;address of sym-lm's value&gt;, [%sym-lm] 2. add * &lt;address of sym-lm's value&gt;, %sym-lm, $0x18 3. mov * &lt;address of sym-lm's value&gt;, [%sym-lm] 4. mov * &lt;address of sym-lm's value&gt;, [%sym-lm]</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="false"><head></head><label></label><figDesc>ELF files contain numerous tables of metadata, each table contained in a single ELF section. The ELF header contains information on how to locate ELF sec- tion header table. ELF section headers allow us to locate each table of metadata. Each metadata table generally holds metadata of a single type: such as symbol metadata (Elf64 Sym) or relocation metadata (Elf64 Sym). The vast majority of ELF metadata is stored in one of its many tables. The dynamic table. All ELF executables and shared- object libraries contain a table of Elf64 Dyn structures known as the dynamic table. Each Elf64 Dyn structure has a tag and a data field that contains either a pointer or a value. The structure's tag marks what the rest of the structure contains and how it should be interpreted.</figDesc><table></table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_1" validated="false"><head>Table 1 summarizes these three types of relocation en-</head><label>1</label><figDesc></figDesc><table>5 There are versions of 64-bit ELF relocation structures that do not 
+contain the addend field (Elf64 Rel structures) however we will not 
+consider them in this paper. 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_2" validated="false"><head>Table 1 :</head><label>1</label><figDesc></figDesc><table>Relocation entries Cobbler makes use of and their 
+meaning presented in c syntax. For each type, r is the relo-
+cation entry structure and s is the corresponding symbol, and 
+base is the base address of where the ELF object is loaded. 
+
+</table></figure>
+
+			<note place="foot" n="1"> Some exploitation scenarios also include manipulation of the target&apos;s physical environment, such as application of heat, light, or radiation, as well as use of physical side-channels. For the purposes of</note>
+
+			<note place="foot" n="2"> Prior to parceling out of the all-powerful root&apos;s privileges, such as with capabilities, SELinux, Solaris zones, LIDS, etc.</note>
+
+			<note place="foot" n="3"> blog.andrew.net.au/2010/01/23</note>
+
+			<note place="foot" n="6"> available at http://github.com/bx/elf-bf-tools</note>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Brainfuck</surname></persName>
+		</author>
+		<ptr target="http://esolangs.org/wiki/brainfuck" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eresi</forename><surname>Project</surname></persName>
+		</author>
+		<ptr target="http://www.eresi-project.org" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title level="m" type="main">Corkami reverse engineering &amp; visual documentations</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Albertini</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+		<ptr target="http://code.google.com/p/corkami/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Once upon a free(</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Anonymous</forename><surname>Author</surname></persName>
+		</author>
+		<ptr target="http://phrack.org/issues.html?issue=57&amp;id=9" />
+	</analytic>
+	<monogr>
+		<title level="j">Phrack</title>
+		<imprint>
+			<biblScope unit="volume">57</biblScope>
+			<biblScope unit="page">9</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+		<title level="m" type="main">Heap Exploitation. Abstraction by Example. OWASP AppSecResearch</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Argyroudis</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Karamitas</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename></persName>
+		</author>
+		<ptr target="http://census-labs.com/media/heap-owasp-appsec-2012.pdf" />
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<monogr>
+		<title level="m" type="main">What Hacker Research Taught Me. 27th Chaos Communications Congress</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bratus</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Hackers</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Computer</forename><surname>Science</surname></persName>
+		</author>
+		<ptr target="http://events.ccc.de/congress/2010/Fahrplan/events/3983.en.html" />
+		<imprint>
+			<date type="published" when="2010-12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<monogr>
+		<title level="m" type="main">Composition Patterns of Hacking. The First International Workshop on Cyberpatterns Unifying Design Patterns with Security, Attack and Forensic Patterns</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bratus</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Bangert</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Gabrovsky</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Shubina</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Bilar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Locasto</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">E</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2012-07" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<monogr>
+		<title level="m" type="main">Exploit Programming: from Buffer Overflows to &quot;Weird Machines&quot; and Theory of Computation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bratus</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Locasto</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">E</forename><surname>Patterson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">L</forename><surname>Sas-Saman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shubina</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2011-12" />
+		</imprint>
+	</monogr>
+	<note>login:</note>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<monogr>
+		<title level="m" type="main">Runtime Kernel kmem Patching</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cesare</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+		<ptr target="http://althing.cs.dartmouth.edu/local/vsc07.html" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<monogr>
+		<title level="m" type="main">Shared Library Call Redirection via ELF PLT Infection</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Cesare</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2000-12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Non-control-data attacks are realistic threats</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chen</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Sezer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">C</forename><surname>Gauriar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>And Iyer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">K</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX Security Symposium</title>
+		<imprint>
+			<date type="published" when="2005" />
+			<biblScope unit="page" from="177" to="192" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<monogr>
+		<title level="m" type="main">Magic Turing Machine v5: Rotlung Reanimator / Chancellor of the Spires</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Churchill</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+		<ptr target="http://www.toothycat.net/˜hologram/Turing/HowItWorks.html" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Codefox</forename><surname>Signelf</surname></persName>
+		</author>
+		<ptr target="http://sourceforge.net/projects/signelf/" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Exploitation and state machines: Programming the &quot;weird machine</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dullien</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Infiltrate Conference</title>
+		<imprint>
+			<date type="published" when="2011-04" />
+		</imprint>
+	</monogr>
+	<note>revisited</note>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">A Framework for Automated Architecture-Independent Gadget Search</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dullien</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Kornau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Weinmann</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R.-P</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX WOOT</title>
+		<imprint>
+			<date type="published" when="2010-08" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Ripples in the Gene Pool -Creating Genetic: Mutations to Survive the Vulerability Window</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Eagle</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Defcon</title>
+		<imprint>
+			<biblScope unit="volume">14</biblScope>
+			<date type="published" when="2006-08" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<monogr>
+		<title level="m" type="main">stupid machines</title>
+		<ptr target="https://github.com/elitheeli/stupid-machines" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Building diverse computer systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Forrest</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Somayaji</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ackley</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 6th Workshop on Hot Topics in Operating Systems (HotOS-VI)</title>
+		<meeting>the 6th Workshop on Hot Topics in Operating Systems (HotOS-VI)<address><addrLine>Washington, DC, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>IEEE Computer Society</publisher>
+			<date type="published" when="1997" />
+			<biblScope unit="page">67</biblScope>
+		</imprint>
+	</monogr>
+	<note>HOTOS &apos;97</note>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Geer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Cyberinsecurity</surname></persName>
+		</author>
+		<title level="m">The Cost of Monopoly. Computer and Communications Industry Association (CCIA) report</title>
+		<imprint>
+			<date type="published" when="2003" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<monogr>
+		<title level="m" type="main">Injecting custom payload into signed Windows executables Analysis of the CVE-2012-0151 vulnerability. ReCON</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gl¨ucksmanngl¨</forename><surname>Gl¨ucksmann</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename></persName>
+		</author>
+		<ptr target="http://recon.cx/2012/schedule/events/246.en.html" />
+		<imprint>
+			<date type="published" when="2012-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Armouring the ELF: Binary encryption on the UNIX platform</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Grugq</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">And</forename><surname>Scut</surname></persName>
+		</author>
+		<ptr target="http://phrack.org/issues.html?issue=58&amp;id=5" />
+	</analytic>
+	<monogr>
+		<title level="j">Phrack</title>
+		<imprint>
+			<biblScope unit="volume">58</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">The Art of Exploitation: Exploiting VLC, a jemalloc Case Stud</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Huku</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">And</forename><surname>Argp</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Phrack Magazine</title>
+		<imprint>
+			<biblScope unit="volume">68</biblScope>
+			<date type="published" when="2012-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Return-oriented rootkits: bypassing kernel code integrity protection mechanisms</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hund</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Holz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Freiling</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><forename type="middle">C</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 18th USENIX Security Symposium</title>
+		<meeting>the 18th USENIX Security Symposium</meeting>
+		<imprint>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="383" to="398" />
+		</imprint>
+	</monogr>
+	<note>USENIX Association</note>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Advanced Doug Lea&apos;s malloc Exploits</title>
+		<ptr target="http://phrack.org/issues.html?issue=61&amp;id=6" />
+	</analytic>
+	<monogr>
+		<title level="j">Phrack</title>
+		<imprint>
+			<biblScope unit="volume">61</biblScope>
+		</imprint>
+	</monogr>
+	<note>JP</note>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Klog</forename></persName>
+		</author>
+		<ptr target="http://phrack.org/issues.html?issue=56&amp;id=9" />
+	</analytic>
+	<monogr>
+		<title level="j">Backdooring Binary Objects. Phrack</title>
+		<imprint>
+			<biblScope unit="volume">56</biblScope>
+			<biblScope unit="page">9</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<monogr>
+		<title level="m" type="main">A gentle introduction to return-oriented programming</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kornau</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename></persName>
+		</author>
+		<ptr target="http://blog.zynamics.com/2010/03/12/" />
+		<imprint>
+			<date type="published" when="2010-03" />
+		</imprint>
+	</monogr>
+	<note>Zynamics blog</note>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Levine</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Linkers</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Loaders</forename></persName>
+		</author>
+		<title level="m">The Morgan Kaufmann Series in Software Engineering and Programming</title>
+		<imprint>
+			<date type="published" when="1999" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<monogr>
+		<title level="m" type="main">System V Application Binary Interface AMD64 Architecture Processor Supplement Draft Version 0.96</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matz</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Hubicka</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Jaeger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mitchell</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+		<ptr target="http://www.uclibc.org/docs/psABI-x86_64.pdf" />
+		<imprint>
+			<date type="published" when="2005-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title/>
+		<ptr target="http://phrack.org/issues.html?issue=57&amp;id=8" />
+	</analytic>
+	<monogr>
+		<title level="j">MAXX. Vudo malloc Tricks. Phrack</title>
+		<imprint>
+			<biblScope unit="volume">57</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<analytic>
+		<title/>
+		<ptr target="http://phrack.org/issues.html?issue=61&amp;id=8" />
+	</analytic>
+	<monogr>
+		<title level="j">MAYHEM. The Cerberus ELF Interface. Phrack</title>
+		<imprint>
+			<biblScope unit="volume">61</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">Understanding Linux ELF RTLD internals</title>
+	</analytic>
+	<monogr>
+		<title level="m">MAYHEM</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<analytic>
+		<title level="a" type="main">The Advanced return-into-lib(c) Exploits: PaX Case Study</title>
+	</analytic>
+	<monogr>
+		<title level="j">Phrack Magazine</title>
+		<imprint>
+			<biblScope unit="volume">58</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<date type="published" when="2001-12" />
+		</imprint>
+		<respStmt>
+			<orgName>NERGAL</orgName>
+		</respStmt>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<analytic>
+		<title level="a" type="main">Exploiting the Hard-Working DWARF: Trojan and Exploit Techniques with No Native Executable Code</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Oakley</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bratus</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">USENIX WOOT</title>
+		<imprint>
+			<date type="published" when="2011" />
+			<biblScope unit="page" from="91" to="102" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<analytic>
+		<title level="a" type="main">Smashing the Stack for Fun and Profit</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">One</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+		<ptr target="http://phrack.org/issues.html?issue=49&amp;id=14" />
+	</analytic>
+	<monogr>
+		<title level="j">Phrack</title>
+		<imprint>
+			<biblScope unit="volume">49</biblScope>
+			<biblScope unit="page">14</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<monogr>
+		<title level="m" type="main">The Science of Insecurity. 28th Chaos Communications Congress</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Patterson</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">L</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bratus</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+		<ptr target="http://langsec.org/" />
+		<imprint>
+			<date type="published" when="2011-12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<analytic>
+		<title level="a" type="main">The Art of Exploitation: MS IIS 7.5 Remote Heap Overflow</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Redpantz</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Phrack Magazine</title>
+		<imprint>
+			<biblScope unit="volume">68</biblScope>
+			<date type="published" when="2012-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b36">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Richarte</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Re</surname></persName>
+		</author>
+		<ptr target="http://seclists.org/bugtraq/2000/Nov/32" />
+		<title level="m">Future of Buffer Overflows. Bugtraq</title>
+		<imprint>
+			<date type="published" when="2000-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b37">
+	<analytic>
+		<title level="a" type="main">Return-oriented programming: Systems, languages, and applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Roemer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Buchanan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Shacham</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Savage</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Trans. Inf. Syst. Secur</title>
+		<imprint>
+			<biblScope unit="volume">15</biblScope>
+			<biblScope unit="page">34</biblScope>
+			<date type="published" when="2012-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b38">
+	<monogr>
+		<title level="m" type="main">Linux On-the-fly Kernel Patching without LKM</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">D</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">And</forename><surname>Devik</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2001-12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b39">
+	<analytic>
+		<title level="a" type="main">The Geometry of Innocent Flesh on the Bone: return-into-libc without Function Calls</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shacham</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM Conference on Computer and Communications Security</title>
+		<imprint>
+			<date type="published" when="2007" />
+			<biblScope unit="page" from="552" to="561" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b40">
+	<analytic>
+		<title level="a" type="main">Embedded ELF Debugging : the middle head of Cerberus</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">E</forename><surname>Shell Crew</surname></persName>
+		</author>
+		<ptr target="http://phrack.org/issues.html?issue=63&amp;id=9" />
+	</analytic>
+	<monogr>
+		<title level="j">Phrack</title>
+		<imprint>
+			<biblScope unit="volume">63</biblScope>
+			<biblScope unit="page">9</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b41">
+	<monogr>
+				<ptr target="ttp://www.hick.org/code/skape/papers/elfsign.txt" />
+		<title level="m">SKAPE. ELF binary signing and verification</title>
+		<imprint>
+			<date type="published" when="2003-01" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b42">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Skape</forename><surname>Locreate</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Anagram for Relocate. Uninformed</title>
+		<imprint>
+			<biblScope unit="volume">6</biblScope>
+			<date type="published" when="2007-01" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b43">
+	<monogr>
+		<title level="m" type="main">Cheating the ELF: Subversive Dynamic Linking to Libraries</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">The</forename><surname>Grugq</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+	<note>althing.cs.dartmouth.edu/local/ subversiveld.pdf</note>
+</biblStruct>
+
+<biblStruct xml:id="b44">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">L</forename><surname>Veldhuizen</surname></persName>
+		</author>
+		<ptr target="http://ubietylab.net/ubigraph/content/Papers/pdf/CppTuring.pdf" />
+		<title level="m">C++ Templates are Turing Complete</title>
+		<imprint/>
+		<respStmt>
+			<orgName>Indiana University Computer Science</orgName>
+		</respStmt>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

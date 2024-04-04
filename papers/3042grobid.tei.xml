@@ -1,0 +1,1200 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:58+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">CompoundFS: Compounding I/O Operations in Firmware File Systems</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yujie</forename><surname>Ren</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jian</forename><surname>Zhang</surname></persName>
+							<affiliation key="aff1">
+								<orgName type="institution">ShanghaiTech University</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sudarsun</forename><surname>Kannan</surname></persName>
+						</author>
+						<author>
+							<affiliation key="aff0">
+								<orgName type="institution">Rutgers University</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">CompoundFS: Compounding I/O Operations in Firmware File Systems</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>We introduce CompoundFS, a firmware-level file system that combines multiple filesystem I/O operations into a single compound operation to reduce software overheads. The overheads include frequent interaction (e.g., system calls), data copy, and the VFS overheads between user-level application and the storage stack. Further, to exploit the compute capability of modern storage, CompoundFS also provides a capability to offload simple I/O data processing operations to the device-level CPUs, which further provides an opportunity to reduce interaction with the filesystem, move data, and free-up host CPU for other operations. Preliminary evaluation of Com-poundFS against the state-of-the-art user-level, kernel-level, and firmware-level file systems using microbenchmarks and a real-world application shows up to 178% and 75% performance gains, respectively.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>With the advent of ultra-fast storage technologies such as NVMe SSD and 3D-Xpoint, the software bottlenecks are slowly dominating the hardware cost <ref type="bibr" target="#b1">[2,</ref><ref type="bibr">4,</ref><ref type="bibr" target="#b14">17,</ref><ref type="bibr" target="#b33">35]</ref>. To reduce the software overheads, there has been a renewed interest across industry and academia, developing solutions that aim at thinning the software storage stack. Most solutions (software and firmware) aim to reduce OS interaction across the data and control plane without compromising correctness, consistency, crash-consistency, or security guarantees <ref type="bibr" target="#b9">[12,</ref><ref type="bibr" target="#b18">21,</ref><ref type="bibr" target="#b22">25,</ref><ref type="bibr" target="#b29">31,</ref><ref type="bibr" target="#b30">32,</ref><ref type="bibr" target="#b34">36]</ref>.</p><p>Prior software-level solutions range from applicationcustomized storage stack to reduce generic filesystem overheads <ref type="bibr" target="#b4">[7]</ref>, full user-level filesystems <ref type="bibr" target="#b9">[12,</ref><ref type="bibr" target="#b22">25,</ref><ref type="bibr" target="#b34">36]</ref>, and hybrid user and kernel-level filesystems <ref type="bibr" target="#b17">[20,</ref><ref type="bibr" target="#b20">23]</ref>. Hardware solutions include firmware file systems <ref type="bibr" target="#b18">[21]</ref>, key-value stores (e.g., KVSSDs) <ref type="bibr" target="#b30">[32]</ref>, and compute accelerated (e.g., FPGA) in-device storage <ref type="bibr" target="#b29">[31]</ref> allowing applications to bypass the kernel for direct-access. Several nonvolatile memory (NVM) specific hybrid user and kernel-level filesystems such as ZoFS <ref type="bibr" target="#b9">[12]</ref>, FLEX <ref type="bibr" target="#b34">[36]</ref>, and SplitFS <ref type="bibr" target="#b17">[20]</ref> for memory-based storage have been proposed.</p><p>Limitations of Current Work. While current proposals reduce OS interaction and system call costs, they either do not eliminate major software bottlenecks or fully exploit the compute capability of modern storage hardware. The software bottlenecks include: (1) frequently crossing application and storage stack boundaries, and (2) high data movement overhead between application and filesystem. The boundarycrossings include application core switching to the file system running as a separate server process <ref type="bibr" target="#b9">[12,</ref><ref type="bibr" target="#b20">23,</ref><ref type="bibr" target="#b22">25]</ref> or inside the kernel <ref type="bibr" target="#b17">[20,</ref><ref type="bibr" target="#b20">23,</ref><ref type="bibr" target="#b26">28]</ref>, or in the firmware <ref type="bibr" target="#b18">[21]</ref>. Some user-level filesystems must trap into the OS for concurrent filesystem access across applications <ref type="bibr" target="#b20">[23,</ref><ref type="bibr" target="#b26">28]</ref>. Finally, most prior approaches cannot exploit storage-level compute capability, or require applications to be fully redesigned <ref type="bibr" target="#b29">[31]</ref>.</p><p>Contribution. To overcome these challenges, we design CompoundFS, a direct-access firmware-level filesystem that reduces interaction and data copy overheads between applications and the filesystem and utilizes the device-level compute capabilities. For direct-access, CompoundFS adopts the design principle of prior firmware filesystems <ref type="bibr" target="#b18">[21]</ref>. To reduce overheads, CompoundFS introduces Compound Operations (hereafter referred to as CompoundOps). CompoundOps combine multiple POSIX-style I/O operations into a single enhanced I/O operation (e.g., file open-and-read, readmodify-write). The CompoundOps are issued by the application and executed as one operation inside storage firmware. Consequently, CompoundOps reduce interaction and data copy overheads between application and filesystem. Further, in CompoundFS, we extend CompoundOps with simple device-level compute operations such as checksum and compression that reduce host CPU use and also avoid repeated data movement (e.g., write-and-checksum). Incorporating CompoundOps requires simple and intuitive changes to POSIX-based applications.</p><p>CompoundFS currently supports a simple scheduling and all-or-nothing model for crash-consistency (all operations in a CompoundOps either succeed or fail). Further, CompoundFS support for CompoundOps is currently limited to a single inode. Our ongoing work is addressing challenges for ordering CompoundOps across application(s) threads and crashconsistency, a better I/O scheduling mechanisms for efficient management of device-CPUs (discussed in Section 3), and support for multi-inode CompoundOps.</p><p>Preliminary evaluation of CompoundFS with CompoundOps on an emulated infrastructure using Intel DC Optane memory shows substantial reduction in application and file system interaction, system call cost, data overheads, and device-level computation benefits, all leading to performance gains of 178% and 75% in microbenchmarks and real-world LevelDB application, respectively.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Background and Motivation</head><p>Next, we present a brief background on direct-access filesystem approaches and other efforts to offload computation to storage. We then discuss the limitations and provide empirical evidence of these limitations.  </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">Direct-access Filesystem (DirectFS).</head><p>Several DirectFS systems have been proposed to reduce system call overheads, provide partial or full crashconsistency guarantees, and POSIX compatibility. For example, state-of-the-art approaches such as Strata <ref type="bibr" target="#b20">[23]</ref>, and more recently SplitFS <ref type="bibr" target="#b17">[20]</ref>, divide the filesystem across the userspace and the OS. Approaches such as Moneta-D <ref type="bibr" target="#b6">[9]</ref> and Arrakis <ref type="bibr" target="#b26">[28]</ref> split filesystem across the library, kernel, and firmware. User-level approaches like <ref type="bibr" target="#b9">[12,</ref><ref type="bibr" target="#b22">25]</ref> deploy a microkernel-like trusted server reducing OS interaction. An alternative approach to achieving direct-access is by deploying a filesystem inside storage firmware as used by prior hardwarecentric approaches such as DevFS <ref type="bibr" target="#b18">[21]</ref> and Insider <ref type="bibr" target="#b29">[31]</ref>. Apart from providing direct access, firmware filesystems can exploit hardware capabilities such as device-level CPUs, power-loss fail-safe capacitors, device-level I/O queues for parallelism, and others <ref type="bibr" target="#b18">[21]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">Storage-level Computation</head><p>Exploiting storage-level compute capability has been explored for the past four decades. Seminal systems such as CASSM <ref type="bibr" target="#b31">[33]</ref>, RARES <ref type="bibr" target="#b21">[24]</ref>, and Active-Storage <ref type="bibr" target="#b3">[6,</ref><ref type="bibr" target="#b28">30]</ref> proposed adding one or more processors to a disk for operations such as database scan and search. Recent systems such as Smart-SSD <ref type="bibr" target="#b8">[11]</ref>, BlueDBM <ref type="bibr" target="#b16">[19]</ref>, and Samsung's KV-SSD <ref type="bibr" target="#b30">[32]</ref> deploy query processing engine, big data applications, and key-value store engines inside SSDs. Alternatively, the use of low-power FPGAs to accelerate storage performance is gaining traction. LSM-FPGA <ref type="bibr" target="#b35">[37]</ref> offloads LSM store's compaction engine to the storage. Quero et al. offload sorting operations to SSD to improve application performance and SSD lifetime <ref type="bibr" target="#b27">[29]</ref>, whereas Biscuit allows developers to write custom applications for processing inside a raw storage device. <ref type="bibr" target="#b11">[14]</ref>. To accelerate persistent key-value stores, PO-LARDB <ref type="bibr" target="#b5">[8]</ref> offloads and distributes table scan tasks from host CPU to an FPGA-centric smart storage device. Caribou <ref type="bibr" target="#b13">[16]</ref> explores the design of near-data processing that supports keyvalue engines. YourSQL <ref type="bibr" target="#b15">[18]</ref> filters the data by offloading data scanning of a query to user-programmable solid-state drives.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.3">Limitations of Prior Systems.</head><p>DirectFS: While DirectFS reduce system call costs (between application and OS), these approaches are limited by one of the following. First, prior approaches do not necessarily reduce boundary-crossings between application address space and the storage stack. The storage stack could be running as a separate server process <ref type="bibr" target="#b9">[12,</ref><ref type="bibr" target="#b20">23,</ref><ref type="bibr" target="#b22">25]</ref>, or inside the kernel <ref type="bibr" target="#b17">[20,</ref><ref type="bibr" target="#b20">23,</ref><ref type="bibr" target="#b26">28]</ref> for control plane operations (e.g., metadata update), or even inside the device firmware <ref type="bibr" target="#b18">[21]</ref>. Second, data movement between application and storage stack is not effectively reduced. Storage-level Compute: Most prior storage-level compute research has been designed purely for data processing customized to an application without using filesystems. They lack crash-consistency capabilities, support for POSIX, or require OS interaction <ref type="bibr" target="#b11">[14,</ref><ref type="bibr" target="#b27">29]</ref>. Approaches like DevFS <ref type="bibr" target="#b18">[21]</ref> lack storage-level compute capability and may even require a full redesign of the storage stack <ref type="bibr" target="#b29">[31]</ref>. In contrast, CompoundFS, in addition to supporting filesystems, provides a generic, simple extension to POSIX for exploiting to storage-level compute. Further, CompoundFS compounds I/O operations and reduces data movement cost, substantially reducing latency and improving throughput even with simple device-CPUs. Using accelerators for scaling specific operations (e.g., scan) in the above state-of-the-art-systems <ref type="bibr" target="#b5">[8,</ref><ref type="bibr" target="#b13">16,</ref><ref type="bibr" target="#b15">18]</ref> could possibly improve the performance of CompoundFS further.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.4">Analysis</head><p>To understand the software overheads, in <ref type="figure">Figure 1</ref>, we briefly analyze widely-used LevelDB, which is a persistent key-value store application. We study the throughput <ref type="figure">(Fig- ure 1a)</ref>, the runtime breakdown <ref type="figure">(Figure 1b)</ref>, and the cost of dominant operations across the user and kernel-levels <ref type="figure">(Fig- ure 1c)</ref>. For our study, we use the popular db_bench <ref type="bibr" target="#b2">[3]</ref> benchmark, and evaluate random write, random read, and overwrite operations. We use 4-client threads and vary the value sizes from 256B to 4KB. The key size (16 bytes) and the number of key-value pairs (100K) are kept constant. We use a 512GB DC Optane persistent memory with 64 cores and 32 GB DRAM to analyze state-of-the-art ext4-DAX (a kernel filesystem) and SplitFS <ref type="bibr" target="#b17">[20]</ref> (a hybrid user-and kernel-level filesystem).</p><p>First, as shown in <ref type="figure">Figure 1a</ref>, the write throughput is significantly lower than the read throughput because write suffers from high compaction cost, a behavior well studied in the past <ref type="bibr" target="#b19">[22]</ref>. Next, as shown in <ref type="figure">Figure 1b</ref>, LevelDB suffers significant kernel-level overhead, spending close to 65% of the runtime when using 4K value size. To understand the overheads inside the OS, <ref type="figure">Figure 1c</ref> shows the breakdown of timeconsuming user-and kernel-level functionalities. As shown in <ref type="figure">Figure 1c</ref>, the data copy overheads (between the user and OS buffers) and across data structures inside the OS consume 9% of the time. In contrast, filesystem metadata updates and locking consume 15% and 16%, respectively. Surprisingly, these overheads are high in SplitFS (implemented over ext4-DAX), which converts data plane operations to NVM load and store operations.</p><p>We observe that LevelDB performs several metadata-heavy operations, such as file creation, rename, close, and sync operations, thereby increasing user-to-kernel data movement. We also notice that SplitFS suffers from high kernel-level locking and kernel-level allocation overheads due to its use of prepaging. In the user-level, the checksum (CRC) overheads followed by data copy costs are high. LevelDB (and several other applications) use CRC for application-level crash-consistency during logging and compaction to avoid frequent fsync for each key by first writing the payload and then the CRC of the payload.</p><p>Based on these observations, we posit the following: (1) system call and data copy overheads between application and storage stack in both control and data plane impacts performance and must be reduced; (2) applications spend a significant time pre-or post-processing I/O data (e.g., CRC) before read and write operation that could be offloaded to a storage device with computation capability.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Design of CompoundFS</head><p>We present the general architecture of CompoundFS, a firmware filesystem to reduce system call and data copy overheads by combining multiple operations and creating a compound operation. Additionally, CompoundFS can also offload I/O data pre-and post-processing to storage hardware freeing up the host CPUs. We also discuss the crash-consistency and scheduling challenges. <ref type="figure">Figure 2</ref> shows the high-level design of CompoundFS, which consists of a user-level library (UserLib) and a firmware-level filesystem component (StorageFS). For traditional use (without CompoundOps), CompoundFS allows unmodified POSIX-based applications to benefit from direct storage access similar to prior filesystems such as DevFS. CompoundFS adds simple extensions to traditional POSIX APIs to (1) combine two or more POSIX operations into one CompoundFS operation, and (2) offload some pre-and post-processing computations to StorageFS. We first provide a brief overview of UserLib and StorageFS and then discuss  <ref type="bibr" target="#b18">[21]</ref>. StorageFS provides a simpler filesystem with in-memory and on-disk metadata structures such as super-block, bitmap blocks, inode, and data blocks. StorageFS also supports data and metadata journaling using a dedicated journal space on the device as shown in <ref type="figure">Figure 2</ref>. Our current design adapts and significantly extends the PMFS <ref type="bibr" target="#b10">[13]</ref> filesystem. PMFS is a kernel-level file system designed for NVMs to bypass the page cache. It relies on the VFS layer using traditional system calls that incur data movement between user and kernel space, and the host-CPUs for file system processing. While the page cache bypassing design aligns with the goal of CompoundFS, PMFS must be extended to avoid dependence on the VFS, system calls, and crash-consistency techniques that are tailored for StorageFS.</p><p>We modify PMFS to a command-based architecture. The I/O operations are packed as commands, and the commands encapsulate a command ID (e.g., read/write/append) and other related parameters of a command (e.g., I/O buffer, size). To eliminate system call and the VFS dependency, UserLib registers a shared circular buffer with StorageFS during an application's initialization from which StorageFS can directly process. One key low-level point is that UserLib uses a submission head to point to the next available entry in the command buffer. StorageFS maintains a completion head pointing to the current entry in the circular buffer under process; this is similar to the new IO_Uring <ref type="bibr">[5]</ref> interface recently added to the Linux kernel. StorageFS fetches I/O commands from inode-queues, processes request by updating data and metadata updates in device memory, followed by on-disk journaling for crash-consistency, and finally, checkpointing them (see §4.2). Emulation. Due to a lack of programmable storage, we emulate CompoundFS as a device driver with dedicated cores that use kernel threads to process requests. During the CompoundFS mounting, StorageFS finds the superblock, followed by the root directory. In addition, StorageFS also reserves a region of firmware memory for performing I/O. For security, CompoundFS uses a model similar to DevFS <ref type="bibr" target="#b18">[21]</ref> by maintaining a host CPUID to credential mapping updated by the host OS and checked during each I/O operation. Avoiding System Calls and Data Copy. For avoiding system calls, UserLib writes I/O commands and input/output buffer to the per-inode DMA buffer. StorageFS uses the DMA buffer to perform I/O operations directly, thereby avoiding system call overheads. However, in addition to system call overheads, reducing data copy overheads (moving data backand-forth between the filesystem and user-space buffers) is critical for I/O bound applications. We next discuss the design of CompoundOps that combine multiple I/O operations into one compound operation.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Realizing CompoundFS Operations</head><p>We envision and currently support two forms of CompoundOps: (1) I/O-only CompoundOps that combine two or more traditional POSIX operations into one data-plane operation; (2) data pre-and post-processing CompoundOps. We first briefly discuss the mechanics of supporting CompoundOps followed by the details of currently supported operations.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">Mechanics</head><p>Unlike vectored-I/O, CompoundOps could have one or more different POSIX (micro) operations that can be combined together and also support simple data pre-and postprocessing. First, we start by extending the NVMe command structures. Current NVMe commands support simple block operations. Prior work such as DevFS extended the simple NVMe commands with POSIX-like filesystem operations (e.g., read, write, open, close). CompoundFS goes one step beyond to extend the NVMe commands to support multiple operations. We extend the opcode (operation code), return code, the I/O buffer pointers to support a list (using array) of operations, in addition to an additional field on the number of operations. In our current design, we restrict all the operations to a single inode, and our ongoing research is exploring the use of CompoundOps across different files.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1.1">Compound I/O Operations.</head><p>First, we aim to create simple CompoundOps that combine two or more traditional POSIX operations into a compound operation, thereby reducing interaction between applications and StorageFS. We compound operations based on two principles. The first principle involves combining operations that applications and developers use in pairs. Combining these operations can substantially reduce system call overheads. The second principle involves I/O operations that require simple data manipulation (e.g., compression). Offloading such operations to device-level CPU reduces data movement across host and device and the system call cost, also freeing up host-level CPUs.</p><p>We , and read-modifywrite (discussed in this paper). Providing a simple API to programmers, one that does not require extensive changes to the application's logic or complex input argument is critical. Take the example of a read-modify-write operation that can be used for implementing overwrite operations (e.g., in LSM-based key-value stores). The read-modify-write is used by an application, which combines the arguments of a read and write operation as shown in <ref type="figure">Figure 2</ref>. Upon successful execution, the StorageFS returns the number of bytes written. To implement a read-modify-write, a combined NVMe command is added to the inode-queue buffer, and StorageFS is notified. StorageFS acquires an inode-level lock, iterates through the opcode array, and the corresponding input or output buffers, and the I/O size. Note that, before starting to execute a CompoundOps, CompoundFS must also check the permission of each operation. Our current simplistic design returns an error if the permission check of even one operation fails, and each device-CPU must complete the CompoundOps before switching to other operations.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1.2">Compound Operations with Processing.</head><p>To utilize the compute capability in modern storage devices (with 4 to 8 wimpy CPUs), we extend the CompoundOps to support simple data pre-and post-processing. Enabling storage-level compute not only reduces host CPU involvement but also reduces interaction between application and storage stack, and data transfer. For example, persistent keyvalue stores such as LevelDB, RocksDB, Redis, and several others, store data and the checksum when writing new updates to log and during compaction <ref type="bibr" target="#b23">[26]</ref> mainly to avoid expensive (fsync) operations for each key-value pair. Unlike fsync, using checksums provides an optimistic applicationlevel crash-consistency for user data by writing data and its checksum and not requiring an immediate page cache flush or enforcing strict data ordering <ref type="bibr" target="#b7">[10]</ref>. In the case of system failure, the stored checksum and the newly computed checksum of persisted data is compared to identify data corruption, which is a critical part of the filesystem crash-consistency mechanism.</p><p>However, with checksums, the data (payload) and CRC is written as separate write operations <ref type="bibr" target="#b2">[3]</ref>, because: (1) a write may store fewer than the bytes it was issued for, in which case the checksums do not match during read, (2) the CRC is used as a commit for the preceding write, and (3) the CRC is written at different locations. CompoundFS, to reduce such overheads combines these operations into one operation. Currently, CompoundFS supports write_and_checksum, read_and_checksum, compress_and_write, and compress_-and_read (used for reducing the storage space). Applications explicitly issue a compress_and_write using UserLib, which adds the request to the inode-queue and is processed by StorageFS similar to simple CompoundOps described earlier. CompoundFS returns an error or return code for each operation along with the return code list.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Atomicity and Crash-Consistency</head><p>Traditional OS-level file systems guarantee atomicity and crash-consistent durability properties. While file systems such as DevFS are designed to satisfy these properties for simple POSIX style operations, supporting them for CompoundOps introduces a new spectrum of challenges. We discuss the challenges and our initial design ideas, which we aim to realize in our on-going research.</p><p>First, regarding atomicity and consistency, because CompoundOps combines multiple POSIX-styled operations, a simple approach is to provide an all-or-nothing model where an entire CompoundOps is atomic. For example, one in-progress CompoundOps to an inode (i.e. a single directory or file) would stall all other operations to that same inode. Such atomicity could impact concurrency. More specifically, an application can hold an inode-level rwlock (i.e., a readwrite semaphore), which would completely prevent any other updates to the directory. One approach that we are currently exploring is to allow individual operations to proceed in parallel, but requiring conflict resolution for the final commit. Other possible extensions include enforcing users to control CompoundOps atomicity with user-level locks.</p><p>Next, regarding crash-consistency, combining multiple POSIX operations with data pre-and post-processing introduces crash-consistency and ordering challenges. Regarding the crash-consistency, a CompoundOps could only succeed partially (e.g., a write operation could fail in read_modify_-write). While one approach is to adopt an all-or-nothing model (as done currently in CompoundFS), reverting partially completed operations could be useful in some cases (e.g., read operation in a read_modify_write), whereas realizing partial reverts could be complicated.</p><p>Next, ordering threads performing CompoundOps (e.g., read-modify-write) and traditional POSIX operation (e.g., write) could be challenging, specifically in terms of performance. Should a thread (T 1 ) performing simple POSIX operation (e.g., write) ordered behind a thread (T 2 ) performing CompoundOps (read-modify-write), or could interpose T ′ 1 s write with T ′ 2 s read_modify_write? Our current implementation treats CompoundOps as one large operation with an inode-level lock. However, we are exploring ways to extend the journaling mechanism to support a flexible (partial) crashconsistency or redesign journaling for CompoundOps by lending ideas from prior work on databases to support composite transactions <ref type="bibr" target="#b12">[15]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2.1">CompoundFS Scheduling Challenges</head><p>The number of I/O operations (simple operations as well as CompoundOps) would most likely exceed the number of available device-level CPUs, which demands efficient device-CPU scheduling and management. Further, introducing CompoundOps with data processing (e.g., CRC, compression) brings new challenges for avoiding starvation or workload imbalance across device-CPUs performing both simple and CompoundOps. Traditional block-level I/O schedulers (e.g., Linux blk-queue) are a misfit for CompoundOps operations because blk-queue does not consider computation. While our current implementation uses first-come-first-serve scheduling, we are exploring the benefits and implications of OS-level CPU fairness schedulers such as Linux CFS <ref type="bibr" target="#b0">[1]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Evaluation</head><p>To understand the benefits and implications, we evaluate CompoundFS using micro-benchmarks and an application (LevelDB). Our evaluation answers the following questions:</p><p>(1) How effective are CompoundOps in improving the I/O performance by reducing the interaction and data copy overheads between applications and the storage stack?</p><p>(2) What is the performance impact of offloading compute to device-CPUs? (3) How sensitive are CompoundFS benefits to device-CPU speeds?</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1">Experimental Setup</head><p>We use a dual-socket, 64-core, 2.4GHz Intel(R) Xeon(R) Gold platform with 32GB DRAM, 512GB DC Optane persistent memory, and 1TB NVMe. To emulate StorageFS, we use persistent memory with four 128 GB NVM DIMMs, which can provide a maximum of 8GB/sec read and 3.8GB/sec write bandwidth <ref type="bibr" target="#b14">[17]</ref>. To emulate PCIe latency, we add 900ns software delay <ref type="bibr" target="#b24">[27]</ref> between the time a request is added to hosts inode-queue and marked ready with a doorbell for the device to process. We compare CompoundFS against kernel-level ext4-DAX <ref type="bibr" target="#b32">[34]</ref>, state-of-the-art hybrid user and kernel-level SplitFS <ref type="bibr" target="#b17">[20]</ref>, and firmware-level DevFS <ref type="bibr" target="#b18">[21]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2">Microbenchmarks</head><p>To understand the preliminary benefits of CompoundFS with CompoundOps, we model a microbenchmark that performs read-modify-write and write-and-checksum operations on a large 16GB file varying I/O size to 256-bytes and 4K-bytes. <ref type="figure" target="#fig_2">Figure 3a</ref> shows the throughput of read-modify-write benchmark that reads, modifies, and writes a block. We compare CompoundFS and CompoundFS-slowcpu (sloweddown device-CPUs running at 1.2GHz) against ext4-DAX, SplitFS, and DevFS. <ref type="figure" target="#fig_2">Figure 3b</ref> shows the throughput of write-and-checksum benchmark in the y-axis.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>CompoundOps</head><p>Performance.</p><p>First, for the read-modify-write workload, ext4-DAX suffers from two system calls and the related data copy between the user library and the kernel. This impacts throughput considerably, especially for small I/O sizes. Next, SplitFS performs better than ext4-DAX by converting read and write operations to load and store instructions on staged memory-mapped files <ref type="bibr" target="#b17">[20]</ref>. However, with SplitFS, we see a huge surge in the kernel activity with an increase in workload size. We suspect three primary causes: (1) increase in the user-level staged mmap files increase OS activity (for example, searching for free blocks); (2) pre-paging with MAP_POPULATE; (3) high filesystem internal data copy. Next, DevFS avoids system call costs to bypass the OS. However, the data copy problem between host and device (read and write) remains the same. Note that the host CPU waits for the device to complete the I/O. In contrast, CompoundFS avoids two system calls and converts two data copy operations into one, resulting in significant performance gains. Finally, despite reducing the device-CPU frequency to half of the host-CPU frequency, CompoundFS-slowcpu achieves up to 109% gains over ext4-DAX, 68% over SplitFS, and 38% over DevFS.</p><p>CompoundOps with data processing. We next model the payload (data) write followed by CRC write found in modern workloads, such as persistent key-value stores <ref type="bibr" target="#b2">[3]</ref>. Note that data and CRC are written separately for correctness and durability, as discussed earlier. All approaches other than CompoundFS lack the capability to exploit storage hardware to process data (generating checksum), resulting in two system calls and data copy overheads in addition to performing checksum in the host. CompoundFS combines append and checksum to one operation, offloads the operation for StorageFS to process (and freeing up host CPUs), and overcoming the data copy cost. Consequently, CompoundFS improves performance over ext4-DAX, SplitFS, and DevFS by up to 178%, 144%, and 105%, respectively. Finally, CompoundFS-slowcpu reduces gains to 71%, 50%, and 25% over ext4-DAX, SplitFS, and DevFS, respectively.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.3">Real-World Application</head><p>We next study the performance implications of CompoundFS using LevelDB <ref type="bibr" target="#b2">[3]</ref>, a persistent key-value store. <ref type="figure" target="#fig_2">Figure 3c</ref> and <ref type="figure" target="#fig_2">Figure 3d</ref> show the write and read random throughput along the y-axis. We compare CompoundFS against ext4-DAX, SplitFS, and DevFS. For CompoundFS, we replace LevelDB's dual payload and checksum write operations with one checksum_and_write operation. First, for the random write workload, as observed in the microbenchmarks, even with our preliminary design, CompoundFS is able to achieve up to 75% performance improvement. For the blocking read operations, the data block and checksum are read at once. While both DevFS and CompoundFS avoid the system call cost and show performance improvement over DAX, the benefits of CompoundFS over DevFS are minimal. Our future work will explore more applications and pursue other opportunities for optimizations such as designing SplitFS-like hybrid user-and firmware-level design.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Conclusion</head><p>In this paper, we propose CompoundFS, a firmware-level filesystem that provides direct access to storage without compromising file system guarantees or POSIX support. To reduce data copy overheads between applications and the storage stack (e.g., filesystem), CompoundFS proposes CompoundOps, that combines one or more POSIX operations into a compound operation. CompoundOps also exploits device-level storage compute capability. Our ongoing work is currently focusing on crash-consistency and scheduling challenges. Results from our preliminary design show more than 75% performance gains for real applications.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head></head><label></label><figDesc>Function Cost Split (Value Size) Figure 1: OS Overhead Analysis on LevelDB. Figures show (a) throughput (compression disabled), (b) user-level vs. OS time breakdown (in %), and (c) time consumption of dominant user-level and kernel functions.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head></head><label></label><figDesc>target operations that are generally used in pairs in ap- plications; for example, open-write, open-read (open a file and read data blocks), open-write (open a file and write data blocks), write-close (write and close a file)</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 3 :</head><label>3</label><figDesc>CompoundFS Performance with Microbenchmark and LevelDB.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_1" validated="false"><head>Application (Thread 1) Op1 open(File1) -&gt; fd 1 Op3* write_and_CRC(fd1,buff, off=10, sz=1K, checksum_pos=head) Application (Thread 2) Op2+ read_modify_write(fd2, buf, off=30, sz=5) Op4 read(fd2, buf, off=30, sz=5) UserLib (in Host)</head><label>Application</label><figDesc></figDesc><table>Device CPU Threads 
+
+Super 
+Block 
+
+Inode 
+Cache 
+
+Dentry 
+Cache 
+
+Data 
+Cache 
+
+Super 
+Block 
+
+Bitmap 
+Block 
+
+Inode 
+Block 
+
+Data 
+Block 
+
+In-mem Structure 
+
+On-disk Structure 
+
+Journal 
+
+… 
+TxB 
+TxE 
+Meta-
+data 
+
+NVM Data 
+Block Addr 
+
+Cred 
+Table 
+
+CPUID 
+
+Cred 
+
+CPUID CPUID 
+
+Cred 
+Cred 
+
+Op1 Op2+ Op3* 
+
+Per-inode I/O Queue 
+Per-inode Data Buffer 
+
+Converting POSIX I/O syscalls to 
+CompoundFS compoundOps 
+
+StorageFS 
+(In Device) 
+
+Op4 
+
+Figure 2: CompoundFS High-level Design. The filesystem data 
+
+structure is partitioned into global and per-file structures. The per-file struc-
+tures are created during file setup. CompoundFS metadata structures are sim-
+ilar to other kernel-level filesystems. Op2+ shows a CompoundOps, Op3* 
+shows a CompoundOps with processing. 
+
+our current design for combining multiple operations and 
+offloading computation. 
+User-space Library (UserLib). UserLib intercepts POSIX 
+as well as our extended CompoundOps and converts them to 
+StorageFS understandable (NVMe-like) I/O commands [35]. 
+To exploit the hardware-level parallelism in modern I/O de-
+vices that can support and process requests from 64K I/O 
+queues, during file open, UserLib requests the OS for a DMA 
+memory region for creating inode-queues, and registers them 
+with StorageFS. For subsequent data plane operations, such 
+as read, write, and fsync, UserLib adds these commands to the 
+inode-queues and rings a doorbell, which is then processed 
+by StorageFS. 
+Storage File System (StorageFS). The high-level design of 
+StorageFS is similar to other firmware-level file systems </table></figure>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgements</head><p>We thank our Shepherd, Jeanna Matthews, and anonymous reviewers for their insightful feedback. We also thank Rutgers Panic Lab for giving us access to systems with DC Optane persistent memory. This work is supported by NSF CNS 1850297 award. The views and conclusions contained herein are those of the authors and should not be interpreted as necessarily representing the official policies or endorsements, either expressed or implied, of NSF.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Completely Fair</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Scheduler</surname></persName>
+		</author>
+		<ptr target="https://www.kernel.org/doc/html/latest/scheduler/sched-design-CFS.html" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Intel-Micron</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Memory</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Xpoint</surname></persName>
+		</author>
+		<ptr target="http://intel.ly/1eICR0a" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title/>
+		<ptr target="https://github.com/google/leveldb" />
+	</analytic>
+	<monogr>
+		<title level="j">LevelDB Source Code</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Active Disks: Programming Model</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Anurag</forename><surname>Acharya</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mustafa</forename><surname>Uysal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joel</forename><surname>Saltz</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Algorithms and Evaluation. SIGPLAN Not</title>
+		<imprint>
+			<biblScope unit="volume">33</biblScope>
+			<biblScope unit="issue">11</biblScope>
+			<biblScope unit="page" from="81" to="91" />
+			<date type="published" when="1998-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">File systems unfit as distributed storage backends: lessons from 10 years of Ceph evolution</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Abutalib</forename><surname>Aghayev</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sage</forename><surname>Weil</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Kuchnik</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mark</forename><surname>Nelson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Gregory</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">George</forename><surname>Ganger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Amvrosiadis</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 27th ACM Symposium on Operating Systems Principles</title>
+		<meeting>the 27th ACM Symposium on Operating Systems Principles</meeting>
+		<imprint>
+			<date type="published" when="2019" />
+			<biblScope unit="page" from="353" to="369" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">POLARDB Meets Computational Storage: Efficiently Support Analytical Workloads in Cloud-Native Relational Database</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wei</forename><surname>Cao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yang</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhushi</forename><surname>Cheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ning</forename><surname>Zheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wei</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wenjie</forename><surname>Wu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Linqiang</forename><surname>Ouyang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Peng</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yijing</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ray</forename><surname>Kuan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhenjun</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Feng</forename><surname>Zhu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tong</forename><surname>Zhang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">18th USENIX Conference on File and Storage Technologies (FAST 20)</title>
+		<meeting><address><addrLine>Santa Clara, CA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2020-02" />
+			<biblScope unit="page" from="29" to="41" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Providing Safe, User Space Access to Fast, Solid State Disks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adrian</forename><forename type="middle">M</forename><surname>Caulfield</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Todor</forename><forename type="middle">I</forename><surname>Mollov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Louis</forename><forename type="middle">Alex</forename><surname>Eisner</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arup</forename><surname>De</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joel</forename><surname>Coburn</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steven</forename><surname>Swanson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">SIGARCH Comput. Archit. News</title>
+		<imprint>
+			<biblScope unit="volume">40</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<date type="published" when="2012-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Optimistic Crash Consistency</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vijay</forename><surname>Chidambaram</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thanumalayan</forename><surname>Sankaranarayana Pillai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi</forename><forename type="middle">H</forename><surname>Arpacidusseau</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Twenty-Fourth ACM Symposium on Operating Systems Principles, SOSP &apos;13</title>
+		<meeting>the Twenty-Fourth ACM Symposium on Operating Systems Principles, SOSP &apos;13<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2013" />
+			<biblScope unit="page" from="228" to="243" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Query Processing on Smart SSDs: Opportunities and Challenges</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jaeyoung</forename><surname>Do</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yang-Suk</forename><surname>Kee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jignesh</forename><forename type="middle">M</forename><surname>Patel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chanik</forename><surname>Park</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kwanghyun</forename><surname>Park</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><forename type="middle">J</forename><surname>Dewitt</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2013 ACM SIGMOD International Conference on Management of Data, SIG-MOD &apos;13</title>
+		<meeting>the 2013 ACM SIGMOD International Conference on Management of Data, SIG-MOD &apos;13<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2013" />
+			<biblScope unit="page" from="1221" to="1230" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Performance and Protection in the ZoFS User-Space NVM File System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mingkai</forename><surname>Dong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Heng</forename><surname>Bu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jifei</forename><surname>Yi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Benchao</forename><surname>Dong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Haibo</forename><surname>Chen</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 27th ACM Symposium on Operating Systems Principles, SOSP &apos;19</title>
+		<meeting>the 27th ACM Symposium on Operating Systems Principles, SOSP &apos;19<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>Association for Computing Machinery</publisher>
+			<date type="published" when="2019" />
+			<biblScope unit="page" from="478" to="493" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">System Software for Persistent Memory</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Subramanya</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanjay</forename><surname>Dulloor</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Anil</forename><surname>Kumar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Philip</forename><surname>Keshavamurthy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dheeraj</forename><surname>Lantz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rajesh</forename><surname>Reddy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeff</forename><surname>Sankaran</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Jackson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Ninth European Conference on Computer Systems, EuroSys &apos;14</title>
+		<meeting>the Ninth European Conference on Computer Systems, EuroSys &apos;14<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2014" />
+			<biblScope unit="volume">15</biblScope>
+			<biblScope unit="page" from="1" to="15" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Biscuit: A Framework for Near-Data Processing of Big Data Workloads</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Gu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">S</forename><surname>Yoon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Bae</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Jo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Yoon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Kang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Kwon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Yoon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Cho</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Jeong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Chang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2016 ACM/IEEE 43rd Annual International Symposium on Computer Architecture (ISCA)</title>
+		<imprint>
+			<date type="published" when="2016-06" />
+			<biblScope unit="page" from="153" to="165" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Abdelkader</forename><surname>Hameurlain</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Roland</forename><forename type="middle">R</forename><surname>Wagner</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Transactions on Large-Scale Data-and KnowledgeCentered Systems XXXVII</title>
+		<imprint>
+			<publisher>Springer</publisher>
+			<date type="published" when="2018" />
+			<biblScope unit="volume">10940</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Caribou: Intelligent Distributed Storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zsolt</forename><surname>István</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Sidler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gustavo</forename><surname>Alonso</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. VLDB Endow</title>
+		<meeting>VLDB Endow</meeting>
+		<imprint>
+			<date type="published" when="2017-08" />
+			<biblScope unit="volume">10</biblScope>
+			<biblScope unit="page" from="1202" to="1213" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<monogr>
+		<title level="m" type="main">Basic Performance Measurements of the Intel Optane DC Persistent Memory Module</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joseph</forename><surname>Izraelevitz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jian</forename><surname>Yang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lu</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Juno</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xiao</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amirsaman</forename><surname>Memaripour</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yun</forename><forename type="middle">Joon</forename><surname>Soh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zixuan</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yi</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Subramanya</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jishen</forename><surname>Dulloor</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steven</forename><surname>Zhao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Swanson</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2019" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">YourSQL: A High-Performance Database System Leveraging in-Storage Computing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Insoon</forename><surname>Jo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Duck-Ho</forename><surname>Bae</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andre</forename><forename type="middle">S</forename><surname>Yoon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeong-Uk</forename><surname>Kang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sangyeun</forename><surname>Cho</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">G</forename><surname>Daniel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jaeheon</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Jeong</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. VLDB Endow</title>
+		<meeting>VLDB Endow</meeting>
+		<imprint>
+			<date type="published" when="2016-08" />
+			<biblScope unit="volume">9</biblScope>
+			<biblScope unit="page" from="924" to="935" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">BlueDBM: Distributed Flash Storage for Big Data Analytics</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ming</forename><surname>Sang-Woo Jun</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sungjin</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jamey</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><surname>Hicks</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Myron</forename><surname>Ankcorn</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shuotao</forename><surname>King</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Arvind</forename><surname>Xu</surname></persName>
+		</author>
+		<idno>7:1-7:31</idno>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Trans. Comput. Syst</title>
+		<imprint>
+			<biblScope unit="volume">34</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<date type="published" when="2016-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rohan</forename><surname>Kadekodi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanidhya</forename><surname>Se Kwon Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Taesoo</forename><surname>Kashyap</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aasheesh</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vijay</forename><surname>Kolli</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Chidambaram</surname></persName>
+		</author>
+		<title level="m">SplitFS: Reducing Software Overhead in File Systems for Persistent Memory. SOSP &apos;19: Symposium on Operating Systems Principles</title>
+		<meeting><address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2019" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Designing a True Direct-access File System with DevFS</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Sudarsun Kannan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Remzi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yuangang</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jun</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gopinath</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Palani</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 16th USENIX Conference on File and Storage Technologies, FAST&apos;18</title>
+		<meeting>the 16th USENIX Conference on File and Storage Technologies, FAST&apos;18<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="241" to="255" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Andrea Arpaci-Dusseau, and Remzi Arpaci-Dusseau. Redesigning LSMs for Nonvolatile Memory with NoveLSM</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nitish</forename><surname>Sudarsun Kannan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ada</forename><surname>Bhat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Gavrilovska</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2018 USENIX Annual Technical Conference (USENIX ATC 18)</title>
+		<meeting><address><addrLine>Boston, MA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2018-07" />
+			<biblScope unit="page" from="993" to="1005" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">Strata: A Cross Media File System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Youngjin</forename><surname>Kwon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Henrique</forename><surname>Fingler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tyler</forename><surname>Hunt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Simon</forename><surname>Peter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Emmett</forename><surname>Witchel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thomas</forename><surname>Anderson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 26th Symposium on Operating Systems Principles, SOSP &apos;17</title>
+		<meeting>the 26th Symposium on Operating Systems Principles, SOSP &apos;17</meeting>
+		<imprint>
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">The Design of a Rotating Associative Memory for Relational Database Applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Chyuan Shiun Lin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">P</forename><surname>Diane</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John Miles</forename><surname>Smith</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Smith</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Database Systems (TODS)</title>
+		<imprint>
+			<biblScope unit="volume">1</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="53" to="65" />
+			<date type="published" when="1976" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">File Systems as Processes</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jing</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Remzi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sudarsun</forename><surname>Arpacidusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Kannan</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">11th {USENIX} Workshop on Hot Topics in Storage and File Systems</title>
+		<imprint>
+			<date type="published" when="2019" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Wisckey: Separating keys from values in ssd-conscious storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lanyue</forename><surname>Lu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thanumalayan</forename><surname>Sankaranarayana Pillai</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hariharan</forename><surname>Gopalakrishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><forename type="middle">C</forename><surname>Arpaci-Dusseau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Remzi H Arpaci-Dusseau</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">ACM Transactions on Storage (TOS)</title>
+		<imprint>
+			<biblScope unit="volume">13</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page" from="1" to="28" />
+			<date type="published" when="2017" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rolf</forename><surname>Neugebauer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gianni</forename><surname>Antichi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">José</forename><surname>Fernando Zazo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yury</forename><surname>Audzevich</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sergio</forename><surname>López-Buedo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrew</forename><forename type="middle">W</forename></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">Understanding PCIe Performance for End Host Networking</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Moore</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2018 Conference of the ACM Special Interest Group on Data Communication, SIGCOMM &apos;18</title>
+		<meeting>the 2018 Conference of the ACM Special Interest Group on Data Communication, SIGCOMM &apos;18<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>Association for Computing Machinery</publisher>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="327" to="341" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<analytic>
+		<title level="a" type="main">Arrakis: The operating system as control plane</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Simon</forename><surname>Peter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thomas</forename><surname>Anderson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Timothy</forename><surname>Roscoe</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. 11th USENIX Conf. Oper. Syst. Des. Implement</title>
+		<meeting>11th USENIX Conf. Oper. Syst. Des. Implement</meeting>
+		<imprint>
+			<date type="published" when="2013" />
+			<biblScope unit="volume">38</biblScope>
+			<biblScope unit="page" from="44" to="47" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<analytic>
+		<title level="a" type="main">Self-sorting SSD: Producing sorted data inside active SSDs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Luis</forename><surname>Cavazos Quero</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Young-Sik</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jin-Soo</forename><surname>Kim</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">31st Symposium on Mass Storage Systems and Technologies (MSST)</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="1" to="7" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<analytic>
+		<title level="a" type="main">Active Storage for Large-Scale Data Mining and Multimedia</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Erik</forename><surname>Riedel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Garth</forename><forename type="middle">A</forename><surname>Gibson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Christos</forename><surname>Faloutsos</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 24rd International Conference on Very Large Data Bases, VLDB &apos;98</title>
+		<meeting>the 24rd International Conference on Very Large Data Bases, VLDB &apos;98<address><addrLine>San Francisco, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>Morgan Kaufmann Publishers Inc</publisher>
+			<date type="published" when="1998" />
+			<biblScope unit="page" from="62" to="73" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<analytic>
+		<title level="a" type="main">INSIDER: Designing In-Storage Computing System for Emerging High-Performance Drivei</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tong</forename><surname>Zhenyuan Ruan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jason</forename><surname>He</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Cong</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2019 USENIX Annual Technical Conference (USENIX ATC 19)</title>
+		<meeting><address><addrLine>Renton, WA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2019-07" />
+			<biblScope unit="page" from="379" to="394" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<monogr>
+		<title level="m" type="main">Samsung Key Value SSD</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Samsung</surname></persName>
+		</author>
+		<ptr target="https://www.samsung.com/semiconductor/global.semi.staticSamsung_Key_Value_SSD_enables_High_Performance_Scaling-0.pdf" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<analytic>
+		<title level="a" type="main">CASSM: A Cellular System for Very Large Data Bases</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><forename type="middle">W</forename><surname>Stanley</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">Jack</forename><surname>Su</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Lipovski</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 1st International Conference on Very Large Data Bases, VLDB &apos;75</title>
+		<meeting>the 1st International Conference on Very Large Data Bases, VLDB &apos;75<address><addrLine>Framingham, Massachusetts</addrLine></address></meeting>
+		<imprint>
+			<date type="published" when="1975" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matthew</forename><surname>Wilcox</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ross</forename><surname>Zwisler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dax</forename><surname>Linux</surname></persName>
+		</author>
+		<ptr target="https://www.kernel.org/doc/Documentation/filesystems/dax.txt" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b33">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Workgroup</forename><surname>Nvm Express</surname></persName>
+		</author>
+		<ptr target="https://nvmexpress.org/resources/specifications/" />
+	</analytic>
+	<monogr>
+		<title level="j">NVMExpress Specification</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b34">
+	<analytic>
+		<title level="a" type="main">Finding and Fixing Performance Pathologies in Persistent Memory Software Stacks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jian</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Juno</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amirsaman</forename><surname>Memaripour</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steven</forename><surname>Swanson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Twenty-Fourth International Conference on Architectural Support for Programming Languages and Operating Systems, ASPLOS &apos;19</title>
+		<meeting>the Twenty-Fourth International Conference on Architectural Support for Programming Languages and Operating Systems, ASPLOS &apos;19<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2019" />
+			<biblScope unit="page" from="427" to="439" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b35">
+	<analytic>
+		<title level="a" type="main">FPGA-Accelerated Compactions for LSM-based Key-Value Store</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Teng</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jianying</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Xuntao</forename><surname>Cheng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hao</forename><surname>Xu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nanlong</forename><surname>Yu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gui</forename><surname>Huang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tieying</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dengcheng</forename><surname>He</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Feifei</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wei</forename><surname>Cao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhongdong</forename><surname>Huang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jianling</forename><surname>Sun</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">18th USENIX Conference on File and Storage Technologies (FAST 20)</title>
+		<meeting><address><addrLine>Santa Clara, CA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2020-02" />
+			<biblScope unit="page" from="225" to="237" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

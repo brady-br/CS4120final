@@ -1,0 +1,598 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:47+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Towards practical incremental recomputation for scientists: An implementation for the Python language</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Philip</forename><forename type="middle">J</forename><surname>Guo</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">Stanford University</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dawson</forename><surname>Engler</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">Stanford University</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Towards practical incremental recomputation for scientists: An implementation for the Python language</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Computational scientists often prototype data analysis scripts using high-level languages like Python. To speed up execution times, they manually refactor their scripts into stages (separate functions) and write extra code to save intermediate results to disk in order to avoid re-computing them in subsequent runs. To eliminate this burden, we enhanced the Python interpreter to automatically memoize (save) the results of long-running function executions to disk, manage dependencies between code edits and saved results, and re-use memoized results rather than re-executing those functions when guaranteed safe to do so. There is a ∼20% run-time slowdown during the initial run, but subsequent runs can speed up by several orders of magnitude. Using our enhanced interpreter , scientists can write simple and maintainable code that also runs fast after minor edits, without having to learn any new programming languages or constructs.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>The massive increase in computing power over the past few decades has enabled scientists across many disciplines to rely more on computational techniques in their research. Many modern scientists in fields like computational biology, pharmacology, neuroscience, and astronomy are spending less time doing physical lab work and more time writing computer programs to process, transform, and extract insights from experimental data.</p><p>The style of code that these scientists write differs greatly from code written by professional programmers:</p><p>"The primary tension in the life of the scientist-programmer is to just get the science done. What we mean by this is the conflict between getting the coding done as quickly as possible so that you can move onto finishing the science, versus spending that extra week (or however long) making sure that your code is neat, tidy, well-tested and generally a glorious triumph of software engineering." <ref type="bibr" target="#b0">[2]</ref> These scientists often write programs in what Brandt et al. call an opportunistic manner, emphasizing speed and ease of development over code robustness and runtime performance <ref type="bibr" target="#b1">[3]</ref>. Being able to quickly implement and refine prototype code is vital to the research process, since the specifications for research code (as compared to production-quality code) are often ill-defined and constantly-changing.</p><p>Thus, scientists often choose lightweight tools that allow them to write code quickly, even if their code does not run at optimal speed. For example, several scientists we interviewed before starting this project 1 regularly write single-threaded programs in high-level, dynamically-typed languages such as Python, MATLAB, or R to process experimental data stored as plain-text files (up to several gigabytes in size). Their programs would definitely run faster if they had written, say, multithreaded C++ code, hand-optimized hot inner loops, and used a relational database configured with advanced indexing features. However, since they are scientists and not programmers by training, they have neither the programming expertise nor the willingness to spend the time to learn these more heavyweight tools and techniques.</p><p>Even the few Computer Science researchers we interviewed (in sub-fields like machine learning and software reliability) preferred to use high-level dynamic languages like Python for their research. Although they have the know-how to write faster-running C++ code (and will do so if absolutely necessary), they felt that the convenience and ease of programming offered by languages like Python far outweighed the costs of slower run-time performance. Problem: Scientific data processing and analysis scripts often execute for tens of minutes to several hours on a single desktop computer, thus slowing down the scientist's iteration and debugging cycle.</p><p>Why existing solutions are inadequate: To cope with this slowdown, scientists could write extra code to break up their computation into multiple stages and save the intermediate results of each stage to disk. This modularization can speed up subsequent script run-times (since not all stages need to be re-run after each code edit), but it increases code size/complexity and creates dependencies between source code and intermediate results.</p><p>In practice, scientists are often hesitant to spend time refactoring their scripts to improve performance, partly due to lack of programming expertise (they learn just enough programming skills to write the simplest possible script that "just get[s] the science done" <ref type="bibr" target="#b0">[2]</ref>) but also because it can be hard to determine whether it's worthwhile to devote the extra up-front programming time and effort. A senior researcher we interviewed stated 2 : Another possible way to reduce iteration time is by testing the script on a tiny subset of the original dataset, to ferret out major bugs before running for hours on the full dataset. This is sometimes feasible, but oftentimes there isn't a practical way to avoid running the script on the full dataset, for some of the following reasons <ref type="bibr" target="#b2">[4]</ref>: 1.) The data is too complex or split across multiple files, so it is cumbersome to subset. 2.) One can only assess correctness by inspecting the script's output from running on the entire dataset; running on a subset could never produce sensible output. 3.) Data parsing bugs often manifest on aberrant records that appear in the middle of a large dataset (since schemas are often missing or not strictly obeyed), so extracting the first few records to form a tiny test dataset won't reveal those bugs.</p><p>Running multiple threads in parallel can also reduce execution time, but it is significantly more difficult to write and debug parallel programs, especially for scientists who are not expert programmers. Even experts prefer to start off by writing single-threaded prototype scripts and then only parallelize later when necessary <ref type="bibr" target="#b14">[16]</ref>. When discussing related work (Section 6), we will contrast our proposed solution to parallel programming and other related approaches.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1.1">Our proposed solution: Interpreter support for incremental recomputation</head><p>We want to enable scientists to iterate quickly on data processing and analysis tasks while keeping their code simple and maintainable. To do so, we modified a programming language interpreter to automatically memoize (cache) the results of long-running function executions to disk, manage dependencies between code edits and saved results, and re-use memoized results rather than re-executing functions when guaranteed safe to do so. Our technique works as follows:</p><p>1. The scientist's script runs without modification in our custom interpreter, with a minor slowdown (usually less than 20%) due to run-time monitoring 2. The interpreter memoizes (caches) results of longrunning function executions to a file 3. During subsequent runs of the same script (possibly after some edits), the interpreter loads cached results rather than re-computing when guaranteed safe to do so, which speeds up running times 4. The interpreter automatically creates and manages dependencies between executed code and cached intermediate results 5. The interpreter deletes cached results when dependent code or data changes, to ensure that results are identical to those run on an unmodified interpreter</p><p>Though our technique is language-independent, we chose to implement it as a modified Python interpreter called IncPy (Incremental Python). In the past decade, Python has been gaining support across many fields of computational sciences because it is easy to learn, supports interactive prototyping, and has mature libraries for scientific data processing (e.g., NumPy, SciPy, Biopython). There is a growing research community around the language: Since 2002, Caltech has hosted the annual Python in Science (SciPy) academic conference.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1.2">Potential benefits</head><p>The potential benefits of our approach all derive from the fact that we can speed up scientists' iteration and debugging cycles without requiring them to learn any new languages, libraries, or programming techniques. When compared with related work (Section 6), we feel that our technique is quite practical since it can be easily deployed to the large number of scientists already using Python in their daily work: We can simply replace their existing Python interpreter with our modified IncPy interpreter, and all of their existing scripts should still produce the same results, albeit running significantly faster after minor edits.</p><p>The ideal workflow that we would like to support is for a scientist to be able to:</p><p>1. Write a 'quick-and-dirty' first version of the script 2. Execute the script using IncPy, and wait for, say, an hour to get results 3. Manually interpret results and notice a bug 4. Edit the script slightly to fix that bug 5. Re-execute the script, and wait for a few seconds to get new results 6. Enhance the script with some new functions 7. Re-execute the script, and wait for a few minutes to get new results</p><p>Note that with an ordinary Python interpreter, subsequent re-executions of the script (Steps 5 and 7) will still take an hour regardless of the size of the code edit. It is possible (although tedious and sometimes difficult) to manually refactor a script to support efficient recomputation, but IncPy does so automatically.</p><p>Anecdotes from programmers <ref type="bibr" target="#b1">[3]</ref> and findings from psychology experiments <ref type="bibr" target="#b4">[6]</ref> suggest that a short iteration cycle not only results in more rapid completion of tasks but also causes people to subconsciously shift to using more effective problem-solving strategies. Since the problem remains fresh in one's (short-term) working memory, one can remain intensely concentrated rather than potentially getting distracted and context-switching while waiting for each subsequent script run to complete.</p><p>Shortening execution times can also aid in the debugging process, especially for novice programmers who are not accustomed to using symbolic debuggers or systematically minimizing error-inducing inputs. For many scientist-programmers, debugging consists of cycling between making code edits, re-running the entire script, and waiting for each run to complete. A pharmacology Ph.D. student we interviewed, who is just starting to learn Python for his research, noted:</p><p>"I often have to re-run my scripts several times before I can get rid of the major bugs. The problem is that I often don't know there's a bug until after the script finishes, which can take several hours or even overnight. Oftentimes I discover some simple semantic error that I can fix with a tiny code edit (like using + instead of -), but then I need to re-run the entire script before I can see the new result. If subsequent runs only took a few seconds, then that could greatly help me in debugging." (Pharmacology Ph.D. student at UCLA) A faster iteration cycle could also qualitatively change how people work together on programming tasks. Another Ph.D. student we interviewed described how it could facilitate real-time collaboration: In the rest of this paper, we will demonstrate our technique on an example ( §2), describe its algorithms ( §3), our implementation for Python ( §4), preliminary experimental results ( §5), comparison to related techniques ( §6), and conclude with plans for future work ( §7).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Demonstration on example program</head><p>We first demonstrate the basics of our automatic memoization and dependency-tracking technique on an example program before describing its details in Section 3. <ref type="figure">Figure 1</ref> shows a Python program that takes a filename as command-line input (argv <ref type="bibr">[1]</ref>), processes it by calling 3 functions, and prints a numerical result. Let's say that for a given input file input1.txt, this program runs for 1 hour and prints 50. As the program is running, the interpreter memoizes (caches) the values of all arguments that each function is invoked with, and their corresponding return values. The stageA function has only one mapping: {"input1.txt" → 50}. stageB and stageC have numerous mappings, one for each unique invoked argument value.</p><p>The interpreter also builds a dependency graph as the program executes (bottom of <ref type="figure">Figure 1</ref>), where each function's memoized results can depend on both code and data. Now, when the programmer edits chunks of code or data and runs the program again, the interpreter can consult the dependency graph to determine what functions need to be re-run. For example, if the programmer changed the contents of masterDatabase.db or the value of MULTIPLIER, then the memoized results for stageA and stageB might no longer be valid, so both functions must be re-run. If the programmer changed the code for stageC, then stageA and stageC must be re-run (but not stageB, since it doesn't call stageC).</p><p>Assume that the program executes for 1 hour on input1.txt because it makes 5 calls to stageB and 1 call to stageC (each taking 10 minutes). If we edit the end of stageA to return, say, the product of transformedLst elements rather than the sum, then re-executing the program is nearly instantaneous since we can re-use all the memoized results from stageB</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>MULTIPLIER = 2 . 5 # g l o b a l v a r i a b l e # I n p u t : name o f f i l e c o n t a i n i n g SQL q u e r i e s # O u t p u t : a s i n g l e c o m p u t e d n u m e r i c a l v a l u e d e f s t a g e A ( f i l e n a m e ) : l s t = [ ] # i n i t i a l i z e e m p t y l i s t</head><p>f o r l i n e i n open ( f i l e n a m e , ' r ' ) : l s t . a p p e n d ( s t a g e B ( l i n e ) ) t r a n s f o r m e d L s t = s t a g e C ( l s t ) r e t u r n sum ( t r a n s f o r m e d L s t ) # r e t u r n s a number </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head># I n p u t : an SQL q u e r y s t r i n g # O u t p u t : a s i n g l e c o m p u t e d n u m e r i c a l v a l u e</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>. # r u n f o r 10 m i n u t e s p r o c e s s i n g q r e t u r n ( r e s * MULTIPLIER ) # r e t u r n s a number # I n p u t : a l i s t o f n u m e r i c a l v a l u e s # O u t p u t : a s i n g l e c o m p u t e d n u m e r i c a l v a l u e d e f s t a g e C ( d a t L s t ) :</head><p>r e s = . . .</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head># r u n f o r 10 m i n u t e s munging d a t L s t r e t u r n r e s # r e t u r n s a number # s p e c i f y i n p u t f i l e on command−l i n e : p r i n t s t a g e A ( a r g v [ 1 ] )</head><p>Figure 1: Example Python data processing program (top) and dependencies generated during execution (bottom). Circles represent code, squares represent file accesses, and the pentagon represents a global variable access. and stageC rather than re-computing them. If we notice a bug in stageC and tweak its code to fix it, then reexecuting the program only takes 10 minutes rather than a full hour (we must re-run stageA and stageC but can re-use memoized results from all 5 calls to stageB).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Interpreter-based technique for efficient incremental recomputation</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">MemoMap global data structure</head><p>The only global data structure we maintain is called MemoMap. Each entry in MemoMap is a mapping from a function to a FuncMemoInfo object (whose class is defined in <ref type="figure" target="#fig_3">Figure 2</ref>). The interpreter loads MemoMap from disk at the beginning of execution (or creates an empty mapping if it doesn't yet exist), and saves it to disk at the end of execution. A FuncMemoInfo object keeps track of memoized values and dependencies for one function. We chose to memoize at the function level since it is a natural abstraction boundary for computations; in Section 7 (future work) we discuss some plans for memoization at a finer granularity.</p><p>The memoizedVals field in FuncMemoInfo stores memoized values, in the form of a mapping from a list of argument values to a return value (e.g., for the code in <ref type="figure">Figure 1</ref>, an entry for stageA might be { "input1.txt" → 50 }). Whenever a function is called, if its arguments are already contained in memoizedVals, then the interpreter can directly return the memoized return value rather than executing its code.</p><p>There are three fields that store dependencies:</p><p>• codeDeps (code dependencies): A mapping from a function called by this function to the current contents of its code (e.g., source code or bytecode) • globalVarDeps (global variable dependencies):</p><p>A mapping from a global variable read by this function to its current value • fileDeps (file dependencies): A mapping from a file read by this function to its current contents If any of these dependencies are broken, then memoizedVals (and all other fields) are cleared, because it might no longer be safe to re-use memoized values. For example, if a function f reads from a file data.txt, then its memoizedVals should be cleared if data.txt changes, since f might now compute a different result even when given the same input.</p><p>Only pure functions are eligible for memoization. Following the definition of Salcianu and Rinard, we consider a function pure if it never mutates an object that existed prior to its invocation <ref type="bibr" target="#b12">[14]</ref>. As soon as a function mutates its argument or a global variable, it is marked impure and all data in its FuncMemoInfo are deleted. In addition, we always mark non-deterministic functions like random() and time() as impure.</p><p>Our technique dynamically detects purity during execution, so it avoids the usual obstacles that hinder static (compile-time) purity detection, like conservative full-program pointer analysis and reasoning about dynamically-typed and reflective language features <ref type="bibr" target="#b12">[14]</ref>. Our purity analysis is perfectly precise modulo broken dependencies: As long as a pure function's dependencies are not broken, then subsequent executions will run identically and remain pure. When a dependency breaks, all data in FuncMemoInfo are deleted, so its original purity state no longer matters.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Program value accesses</head><p>Algorithm 1 shows what the interpreter does every time a value is accessed during execution. Whenever a function reads a value that is reachable from a global variable, that function gains a data dependency on the entire global variable. Note that we make a deep copy of the variable's current value before storing it in globalVarDeps, in order to protect against later mutations to it. Also, we store a dependency on the entire global variable and not simply on the accessed value, in order to allow for a simpler implementation. For example, if a function accesses a deeply-nested value x.foo.bar <ref type="bibr" target="#b1">[3]</ref>.baz where x is a global, it's much easier to store and to later look-up the value of the entire x data structure rather than having to make complex traversals within field and array dereferences.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Algorithm 1 Program value accesses</head><p>Whenever the program mutates a globally-reachable value, all functions on the stack must be marked as impure (i.e., ineligible for memoization), since they were executing while a global side-effect occurred. Otherwise, if an argument of the currently-executing function is mutated, then only that function should be marked impure (its callers might still be pure). Algorithm 2 shows that the interpreter handles reads and writes of files in the same way that it handles global variable accesses. Files are an abstraction for any external resource that a program accesses. For instance, an implementation could model database or network accesses via this file model to maintain dependencies on, say, database table rows or web service data streams.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">File accesses</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.4">Function entrance and exit</head><p>Whenever the program is about to execute a function, the interpreter tries to avoid executing that function altogether and instead return a memoized value to its caller (Algorithm 3). Before doing so, the interpreter must check whether this function is impure or whether any of its own dependencies or dependencies of functions that it has transitively called have been broken (i.e., their current values differ from their previously-saved values). If so, then the function executes normally. Otherwise, if the current argument values are saved in memoizedVals, then the interpreter returns the matching memoized return value to the caller rather than re-computing it. We think it's practical to use a heuristic of only memoizing function executions that last for more than 1 second. The vast majority of functions run for less than 1 second, so it's not worth the extra work of memoizing their results when they could be instantly re-computed. The interpreter should only spend effort memoizing functions that run for a non-negligible amount of time.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Algorithm 3 Function entrance</head></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Python interpreter implementation</head><p>We implemented our technique as a custom Python interpreter called IncPy, which we created by adding ∼3000 lines of C code to the official Python 2.6 interpreter. IncPy passes the entire Python regression test suite (except for a test of multithreading, which it doesn't support). It works as both an interactive shell and for running script files, memoizing and tracking dependencies in all imported Python modules. We now describe some implementation decisions, with a focus on optimizations:</p><p>Data structures: Since our code is part of the Python interpreter, we have full access to the implementations of Python's built-in data structures. Thus, it was easy and efficient to use Python list objects to maintain lists of argument values and Python dictionary objects to maintain mappings for FuncMemoInfo fields.</p><p>On-disk persistence: We use the cPickle module in the Python standard library to serialize Python objects to disk, in order to allow memoized values and dependencies to persist across executions. (Some Python data types are not serializable, so we cannot memoize functions that access such data.)</p><p>We store each FuncMemoInfo entry in a separate file, load it from disk the first time it is needed, record whether it has been modified throughout execution, and only save it back to disk at the end of execution if it has been modified (lazy write-back). Serializing at this level of granularity seems sufficient for our initial implementation; in the future, we might use an object database or persistent in-memory cache (e.g., memcached) if we need finer control over performance.</p><p>File dependencies: Rather than saving and comparing file contents (or md5sums), we simply save and compare their last modification times, which is far more efficient. This is akin to how Makefile dependencies work.</p><p>Code dependencies: We save and compare Python bytecode rather than source code. We do so because making source edits that change spacing, comments, and other minor cosmetic tweaks do not alter a function's behavior, so should not break any dependencies on it.</p><p>Lazy reachability detection: Several of our algorithms require the interpreter to determine whether a value is reachable from a global variable. In Python, all accesses to globally-reachable values must originate from a read of some global variable, followed by zero or more reads of its attributes (e.g., object fields, list members). On a read of a global variable, the address of its current value is added to the globally-reachable set; on the read of an attribute like obj.attr, if the address of the current value of obj is in the globally-reachable set, then the address of the value of attr is also added to that set. Therefore, given an arbitrary value, a simple address lookup in that set tells us whether it's globallyreachable (we also maintain some extra data to determine from which global variables each value is reachable).</p><p>Copy-on-write optimization: Recall that we need to make a deep copy of the values of global variables, function arguments, and return values before saving them in FuncMemoInfo, since we want to capture a snapshot at a certain point in execution. However, performing a deep copy can be slow, especially for large collections (e.g., a list of 100,000 dictionaries, each containing a few mappings of strings to integers). We noticed that these large objects were rarely modified later in execution, so the deep copy wasn't even necessary.</p><p>Thus, we implemented copy-on-write, which defers the deep copy until the moment an object is mutated. To evaluate y=deepcopy(x), we first set y=x and map the address of y to a 'watch set' containing the address of x. Then we traverse inside of x and add the addresses of all enclosed mutable objects to the watch set for y (often much faster than copying since most collections contain only immutable objects, which don't need to be tracked). Whenever a value is mutated, if its address is in the watch set for y, then we deep copy x, assign it to y, update references to it, and delete its watch set.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Preliminary experimental results</head><p>We performed an informal preliminary evaluation by using IncPy to run Python scripts that we wrote in <ref type="bibr">2007- 2008</ref> for a research project to analyze revision control history and static analysis bug reports for the Linux kernel <ref type="bibr" target="#b5">[7]</ref>. We started developing IncPy about a year after writing these scripts, partly motivated by our experiences of waiting for them to run for minutes after minor edits and having to manually write extra caching code. For this evaluation, we examined 3 sets of scripts that show ways in which IncPy could have sped-up our workflow. Soon we plan to do a more comprehensive evaluation by running other researchers' scripts through IncPy.</p><p>Since the current version of IncPy only does function-level memoization, we manually tweaked some of our target scripts by hoisting loop bodies into nested functions and having each loop iteration be a function call. This transformation is purely mechanical and easy to automate; we plan to add memoization of loop bodies in the near future (see Section 7).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Experiment 1:</head><p>We first examined a 200-line Python script that calculates, for all Linux source code files modified in each developer's i th committed patch, how many other developers subsequently modified that file and when did they make those edits. Each loop iteration extracts data from an sqlite database and performs the requisite calculations for a particular i (via a helper function call), then prints out aggregate information like the number of developers and mean time between patches.</p><p>When running for 40 iterations (the script's default setting), the regular Python interpreter took 147 seconds 3 , while IncPy took 160 seconds (a 9% slowdown). When we re-ran the script in IncPy (without making any code edits), it only took 8 seconds, an 18X speed-up over the regular Python interpreter. After making edits like changing the aggregate information printed at each iteration (e.g., using median instead of mean) or tweaking ways to combine extracted fields to form derived fields, the script still only took 8 seconds to re-run. These edits, while small, are indicative of the sort that a scientist typically makes while tweaking his/her scripts: Each iteration of a data processing script often consists of a long-running extraction portion (that rarely changes) followed by short-running post-processing code. Being able to re-run and see new results in 8 seconds rather than waiting for several minutes allows the programmer to keep the task in working memory <ref type="bibr" target="#b4">[6]</ref> while iterating and debugging.</p><p>However, a more intrusive edit like changing the longrunning SQL query and data extraction code would require the entire script to re-run. Memoizing at a finer granularity (e.g., per code statement) could prevent the entire script from re-running, but it would incur a greater run-time overhead during the initial run. We plan to explore this trade-off between tracing precision and runtime overhead in future work.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Experiment 2:</head><p>Next we examined a longer-running Python script that calculates the probability that a Linux source code file will be modified in a given time period, conditioned upon whether it was modified in the past. It performs a sliding window calculation by setting an initial period length (e.g., 1 week), a subsequent period length (e.g., 1 year), and the number of days to slide after each iteration (e.g., 1 day). Each iteration of the main loop takes a starting date, queries the database for files modified in the 1 week prior to that date and in the 1 year following that date, then computes probabilities.</p><p>When we ran the sliding window over the first year of our 7-year dataset (365 iterations, since each iteration slides by 1 day), the regular Python interpreter took 34 minutes and 33 seconds, while IncPy ran for only 38 seconds longer (a 2% slowdown). For this run, IncPy only memoized 83 kB of data, so it had minimal object serialization overhead; IncPy's slowdown is usually proportional to the amount of memoized data, not to the total code size or running time of the script.</p><p>When we re-ran the script in IncPy, it only took 0.2 seconds (a 10,000X speed-up over the regular interpreter). We can make edits to adjust how the probabilities are calculated within each iteration, and instantly re-run to see new results. Also, we can adjust the iteration slide amount to a larger value (e.g., 1 week) and instantly rerun to produce a subset of our output data; this operation is useful for rendering graphs with different parameters. Currently, scientists must save the output data to a .csv (text) file and then write another script to parse that .csv file and render graphs. By having IncPy automatically memoize that data, there is no need to create and maintain dependencies for intermediate .csv files; the data analysis and graphing code can be together in one script, and IncPy ensures that when graphing code is tweaked, the analysis code does not need to re-run.</p><p>After processing only the first year of our dataset, we made the script process the first 2 years. IncPy re-used the results for the first year and took 36 minutes to process the second year. The regular Python interpreter had to start from scratch, so it took twice as long (71 minutes). This scenario simulates how IncPy allows scripts to re-start processing after a bug fix. Data processing bugs often manifest on aberrant records that appear in the middle of a large dataset <ref type="bibr" target="#b2">[4]</ref> (say, at the end of the first year in this example); if the bug fix is sufficiently small, then it might be possible to re-start at the buggy record rather than re-computing all the prior (correct) records.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Experiment 3:</head><p>We examined a directory of scripts that compute statistics about the concentration of bug reports per Linux source file. We initially wrote these scripts to extract data from several tables in one sqlite database. However, they ran too slowly since they were doing complex joins, so we derived 4 intermediate datasets from that database and refactored the scripts to extract data from those datasets, which were stored on disk as persistent Python pickle objects (filenames abbreviated): By manually creating and maintaining these intermediate datasets, we sped up run-times at the expense of making our code more complex and harder to maintain: We had to write a script to create each dataset, add extra code to load and save intermediate data, and remember to manually re-run those scripts to re-create the proper datasets whenever their dependent data changed. We updated our master database several times to do clean-ups (e.g., canonicalizing alternate forms of a person's name) and had to re-create the 4 derived datasets each time, making sure to re-create C.pickle before D.pickle (since the latter is derived from the former).</p><formula xml:id="formula_0">• A</formula><p>If we had used IncPy when writing these scripts back in 2008, then we could have simply put all the code together in one script and let IncPy create the derived datasets and maintain dependencies for us. That way, whenever we changed the master database, all 4 datasets would be re-created, and whenever we tweaked the code for creating one of the datasets, only it would be recreated. We combined all 4 dataset-creation scripts into one, removed the manual serialization code, and ran it through IncPy. It produced the same-sized pickle files, but ran for a minute longer (∼44% slower).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Related work</head><p>Our technique relates to provenance in that it uses a programming language interpreter to collect a limited form of provenance for data resulting from function executions. The provenance we collect for each piece of data includes how long it took to compute and from which function executions, global variables, and input files did it derive. We use this provenance to facilitate efficient incremental recomputation of imperative programs.</p><p>Several related systems collect provenance via runtime execution tracing. Muniswamy-Reddy et al. designed a storage system that tracks coarse-grained provenance about individual files, which could be the intermediate results of command-line script invocations <ref type="bibr" target="#b8">[10]</ref>. Zhang et al. designed a system to collect very finegrained provenance at the byte level by tracing the execution of x86-Linux binary executables (usually from C or C++ programs) <ref type="bibr" target="#b15">[17]</ref>. Neither system aims to use provenance to facilitate efficient incremental recomputation; instead, they focus more on using it to understand, debug, validate, and reproduce experimental results.</p><p>Scientific workflow systems like Kepler <ref type="bibr" target="#b7">[9]</ref>, Taverna <ref type="bibr" target="#b9">[11]</ref>, and VisTrails <ref type="bibr" target="#b13">[15]</ref> provide graphical integrated development environments for designing and executing scientific computations. Scientists create workflows by using a GUI to visually connect together blocks of premade functionality in a data-flow graph.</p><p>These systems collect provenance to facilitate debugging, validation, reproduction, and -similar to IncPy -efficient incremental recomputation of results. It is fairly easy for them to do incremental recomputation since dependencies must be explicitly drawn in the dataflow graph and the composed computational blocks are mostly pure; in contrast, IncPy must infer dependencies and function purity from arbitrary Python programs.</p><p>IncPy differs from scientific workflow systems in that it is a lightweight solution to facilitate prototyping in a popular, easy-to-learn, and general-purpose programming language. In contrast, while workflow systems have more specialized and sophisticated features, the designers of VisTrails admit: "While significant progress has been made in unifying computations under the workflow umbrella, workflow systems are notoriously hard to use. They require a steep learning curve: users need to learn programming languages, programming environments, specialized libraries, and best practices for constructing workflows." <ref type="bibr" target="#b13">[15]</ref> Self-adjusting computation enables efficient recomputation in response to changes in input data. The technique focuses solely on fine-grained changes to input data (e.g., linked list elements), whereas IncPy tracks code, data, and external environment changes at a coarser level. Hammer, Acar, et al. have implemented self-adjusting computation for statically-typed languages (ML and C) <ref type="bibr" target="#b6">[8]</ref>. These systems have potential for massive speed-ups but require programmers to write algorithms using new language constructs and forbids the use of existing constructs like returning values from functions (must instead use destination-passing style <ref type="bibr" target="#b6">[8]</ref>). We feel IncPy is easier for non-expert programmers to adopt since it targets a dynamically-typed language widely-used for scripting and does not require the learning of any new constructs or programming styles.</p><p>Just-in-time compilers for dynamic languages (e.g., Psyco <ref type="bibr" target="#b11">[13]</ref> for Python, Rubinius for Ruby, TraceMonkey for JavaScript) can speed up script execution times without requiring the programmer to learn any new constructs, which is similar in spirit to the goals of IncPy. However, JIT compilers focus on micro-optimizations of CPU-bound code like hot inner loops, whereas IncPy deals more end-to-end, using memoization to avoid longrunning computations regardless of their source. For example, no JIT compiler optimizations could speed up I/O or network-bound scripts, which is what often consumes lots of time in scientific data processing applications. Features from IncPy could easily be integrated into a JIT compiler, to get the benefits of both approaches.</p><p>Parallel execution of code can vastly speed up scientific data processing scripts, at the cost of increased difficulty in programming and debugging such scripts. In recent years, the emergence of libraries like Parallel Python <ref type="bibr">[1]</ref>, frameworks like MapReduce <ref type="bibr" target="#b3">[5]</ref>, and new high-level languages like Pig <ref type="bibr" target="#b10">[12]</ref> have made it easier to write parallel code. However, we (and many of the researchers we interviewed) believe that the learning curve for writing parallel code is still high, especially for scientists without much programming experience. It is much easier for most people to think about algorithms sequentially, and even experts prefer to write single-threaded prototypes and then only parallelize later when necessary <ref type="bibr" target="#b14">[16]</ref>.</p><p>Also, the goals of IncPy are complementary to those of parallel computation: Eliminating redundant computations can still be useful for speeding up parallel code running on a cluster. For instance, a bioinformatics graduate student we interviewed lamented how a postdoc in his research group was constantly using up all the compute-power on the group's 124-CPU cluster. This postdoc's data-parallel Perl script consisted of several processing stages that took dozens of hours to run on each cluster node (on a slice of the input genomic data). He would often make tweaks to the second stage and rerun the entire script, thus needlessly re-computing all the results of the first stage. After a few weeks of grumbling, the graduate student finally inspected the postdoc's code and saw that he could refactor it to memoize intermediate results of the first stage, thus dramatically reducing run-time and freeing up the cluster for labmates. The postdoc, who was not an adept programmer, perhaps did not have the expertise or willingness to refactor his code; he was simply willing to wait overnight for results (to the chagrin of his labmates). With an interpreter like IncPy installed on their cluster machines, there would be no need to perform this sort of manual code refactoring.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Ongoing and future work</head><p>From chatting with researchers interested in using IncPy, we have heard the following feature requests:</p><p>• Intraprocedural analysis: Currently, we only memoize at the function level, but many scripts contain memoization opportunities within individual functions (or are simply written as one monolithic top-level main function). For instance, a long-running loop that populates a list with values can be automatically refactored to its own function, so that its results can be memoized and re-used.</p><p>• Database-aware caching: Several researchers we interviewed stored their datasets in a relational database, used Python scripts to make simple SQL queries and then performed sophisticated data transformations using Python code. They found it easier and more natural to express their algorithms in an imperative manner rather than in SQL. If IncPy were augmented to intercept Python's database API calls, then it could track finer-grained data dependencies between database entries and Python code.</p><p>• Network-aware caching: Several CS researchers who extract large amounts of data from the Internet for their research told us that they found it annoying to have to re-run their extractor scripts after fixing bugs or making tweaks. If IncPy were augmented to intercept Python's networking API calls, then it could transparently cache data retrieved from the Internet on the researcher's machine, maintain the proper dependencies, and speed up subsequent runs by eliminating unnecessary network activity.</p><p>• Lightweight annotations: Some colleagues suggest allowing the programmer to annotate their scripts to gain more control over memoization (e.g., explicitly marking a block of code as a unit to memoize rather than only relying on the interpreter to infer what to memoize). We currently don't have annotations since we don't want to require scientists to learn any new constructs in order to use IncPy, but we will add simple annotations if there is demand.</p><p>• Simple provenance browsing: Some researchers would like ways to interactively browse (or even manually edit) the saved intermediate results of their scripts. IncPy already records a limited form of provenance, so allowing a user to directly view the data and its provenance could help them manually verify the correctness of intermediate results, debug more effectively, and predict how long it might take to re-execute portions of their workflow.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head></head><label></label><figDesc>Figure 2: The FuncMemoInfo class, which keeps track of memoized values and dependencies for a function</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head></head><label></label><figDesc>On a READ of any program value val: if val reachable from a global variable GVar then tf ← MemoMap[function at the top of stack] tf.globalVarDeps[GVar] ← deepcopy(GVar.value) end if On a WRITE or DELETE of any value val: if val reachable from any global variable then for all functions func on stack do MemoMap[func].markImpure() end for else top ← function at the top of stack if val reachable from any argument of top then MemoMap[top].markImpure() end if end if</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Algorithm 2</head><label>2</label><figDesc>File accesses On a READ of an open file f : tf ← MemoMap[function at the top of stack] tf.fileDeps[f ] ← f.contents On a WRITE of an open file f : for all functions func on stack do MemoMap[func].markImpure() end for</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="false"><head></head><label></label><figDesc>"Many of my bug database mining scripts run overnight, and I hate how they're so slow. I some- times think about saving intermediate results so that my scripts can run faster. However, I run lots of ad- hoc experiments when exploring my datasets, so I never know ahead of time which results are worth saving. I also don't know how many times I'll end up executing some scripts, so I'm never motivated enough to spend the extra effort on writing and maintaining the caching code." (Senior software en- gineering researcher at Microsoft Research)</figDesc><table></table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_1" validated="false"><head>" Whenever I show my data mining results to my advisor, he always suggests to tweak something or other. Sometimes I can make the code tweaks in a few seconds, but re-running the script might take 15 to 30 minutes, so my advisor is not going to wait around for the results. I might not find him</head><label>"</label><figDesc></figDesc><table>again 
+for another few hours or even until the next day, so 
+my iteration cycle is far longer than the script run-
+time. If my scripts could re-run in seconds rather 
+than tens of minutes, then my advisor and I could 
+collaborate and explore alternatives in real-time." 
+(Computer Science Ph.D. student at UC Davis) 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_2" validated="false"><head>When program execution enters a function func: if func not in← MemoMap[function right below func on stack] c.codeDeps[func] ← func.code f ← MemoMap[func] if f.definitelyImpure then return and continue normal execution of func end if // check code dependencies (transitively): for all {depFunc , depSavedCode} in f.codeDeps do if depFunc.code 񮽙 = depSavedCode then f.clearAndMarkPure() return and continue normal execution of func end if traverse inside depFunc, checkfor all {depVar , depSavedVal} in f.globalVarDeps do if depVar.value 񮽙 = depSavedVal then f.clearAndMarkPure() return and continue normal execution of func end if end for // check file dependencies: for all {depFile , depSavedContents} in f.fileDeps do if depFile.contents 񮽙 = depSavedContents then f.clearAndMarkPure() return and continue normal execution of func end if end for if func.argumentValues in f.memoizedVals then mRetval ← f.memoizedVals[func.argumentValues] return mRetval to caller and don't execute func else return and continue normal execution of func end ifaccessible mutable value (which could lead to subtle semantic mismatches Algorithm 4 Function exit When program execution exits a function func: f ← MemoMap[func] if f.definitelyImpure then return and exit out of func end if if func took less than 1 second to execute then return and exit out of func end if for all mutable values v within func.returnValue do if v reachable from any global variable or from any current argument of func then return and exit out of func end if end for // memoize copies of arguments and return value: argCopy ← deepcopy(func.argumentValues) retvalCopy ← deepcopy(func.returnValue) f.memoizedVals[argCopy] = retvalCopy return and exit out of func due</head><label>When</label><figDesc>all its dependencies, and recursively traverse inside its code dependen- cies and check them, until fixpoint reached end for // check global variable dependencies:Whenever the program is about to finish executing a function, the interpreter memoizes copies of its argument and return values in memoizedVals if necessary (Al- gorithm 4). Memoization is not done if the function is al- ready impure, did not execute for long enough (see next paragraph), or returns an externally-to deep copying of the memoized return value).</figDesc><table>MemoMap then 
+MemoMap[func] = new FuncMemoInfo(func) 
+end if 
+
+// your caller has a dependency on your code: 
+c </table></figure>
+
+			<note place="foot" n="1"> In mid-2009, prior to starting implementation work, the first author conducted a series of informal, open-ended needfinding interviews with computational scientists to learn about their data processing workflow.</note>
+
+			<note place="foot" n="2"> All such quotes are paraphrased from notes that the first author took during needfinding interviews.</note>
+
+			<note place="foot" n="3"> Running on a 3GHz Mac Pro with 4GB RAM and Mac OS X 10.4</note>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title/>
+		<ptr target="http://www.programming4scientists.com/" />
+	</analytic>
+	<monogr>
+		<title level="j">Programming for Scientists</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Opportunistic programming: Writing code to prototype, ideate, and discover</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Brandt</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Guo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">J</forename><surname>Lewenstein</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Dontcheva</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Klemmer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><forename type="middle">R</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Software</title>
+		<imprint>
+			<biblScope unit="volume">26</biblScope>
+			<biblScope unit="page" from="18" to="24" />
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title level="m" type="main">personal email communication, discussing hindrances to data subsetting</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bronson</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Mapreduce: simplified data processing on large clusters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dean</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ghemawat</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 6th conference on Symposium on Opearting Systems Design &amp; Implementation</title>
+		<meeting>the 6th conference on Symposium on Opearting Systems Design &amp; Implementation</meeting>
+		<imprint>
+			<date type="published" when="2004" />
+			<biblScope unit="page" from="10" to="10" />
+		</imprint>
+	</monogr>
+	<note>USENIX Association</note>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Milliseconds matter: An introduction to microstrategies and to their use in describing and predicting interactive behavior</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gray</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Boehm-Davis</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Journal of Experimental Psychology: Applied</title>
+		<imprint>
+			<biblScope unit="volume">6</biblScope>
+			<biblScope unit="page" from="322" to="335" />
+			<date type="published" when="2000" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Linux kernel developer responses to static analysis bug reports</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Guo</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><forename type="middle">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Engler</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Annual Technical Conference</title>
+		<meeting>the USENIX Annual Technical Conference</meeting>
+		<imprint>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="285" to="292" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">CEAL: a Cbased language for self-adjusting computation</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">A</forename><surname>Hammer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">U</forename><forename type="middle">A</forename><surname>Acar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Chen</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2009 ACM SIGPLAN conference on Programming language design and implementation</title>
+		<meeting>the 2009 ACM SIGPLAN conference on Programming language design and implementation</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="25" to="37" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Scientific workflow management and the Kepler system: Research articles</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lud¨ascherlud¨</forename><surname>Lud¨ascher</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Altintas</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><surname>Berkley</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Higgins</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Jaeger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Jones</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><forename type="middle">A</forename><surname>Tao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhao</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Concurr. Comput. : Pract. Exper</title>
+		<imprint>
+			<biblScope unit="volume">18</biblScope>
+			<biblScope unit="issue">10</biblScope>
+			<biblScope unit="page" from="1039" to="1065" />
+			<date type="published" when="2006" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Provenance-aware storage systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Muniswamy-Reddy</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K.-K</forename><surname>Holland</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">A</forename><surname>Braun</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">U</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Seltzer</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the USENIX Annual Technical Conference</title>
+		<meeting>the USENIX Annual Technical Conference</meeting>
+		<imprint>
+			<date type="published" when="2006" />
+			<biblScope unit="page" from="4" to="4" />
+		</imprint>
+	</monogr>
+	<note>USENIX Association</note>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Taverna: lessons in creating a workflow environment for the life sciences: Research articles</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Oinn</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Greenwood</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Addis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Alpdemir</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">N</forename><surname>Ferris</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Glover</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Goble</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Goderis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Hull</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Marvin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Lord</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Pocock</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">R</forename><surname>Senger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Stevens</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Wipat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wroe</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Concurr. Comput. : Pract. Exper</title>
+		<imprint>
+			<biblScope unit="volume">18</biblScope>
+			<biblScope unit="issue">10</biblScope>
+			<biblScope unit="page" from="1067" to="1100" />
+			<date type="published" when="2006" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Pig latin: a not-so-foreign language for data processing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Olston</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Reed</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Srivastava</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">U</forename><surname>Kumar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tomkins</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM SIGMOD international conference on Management of data</title>
+		<meeting>the ACM SIGMOD international conference on Management of data</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2008" />
+			<biblScope unit="page" from="1099" to="1110" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Representation-based just-in-time specialization and the Psyco prototype for Python</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rigo</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM SIGPLAN symposium on Partial evaluation and semantics-based program manipulation</title>
+		<meeting>the ACM SIGPLAN symposium on Partial evaluation and semantics-based program manipulation</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2004" />
+			<biblScope unit="page" from="15" to="26" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Purity and side effect analysis for Java programs</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Salcianu</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>And Rinard</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">C</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">VMCAI (2005)</title>
+		<imprint>
+			<biblScope unit="page" from="199" to="215" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Querying and re-using workflows with VisTrails</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Scheidegger</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">E</forename><surname>Vo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">T</forename><surname>Koop</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Freire</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Silva</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">T</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the ACM SIGMOD international conference on Management of data</title>
+		<meeting>the ACM SIGMOD international conference on Management of data</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2008" />
+			<biblScope unit="page" from="1251" to="1254" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<monogr>
+		<title level="m" type="main">personal email communication, discussing sequential vs. parallel scripts</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Seo</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Tracing lineage beyond relational operators</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhang</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>Zhang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">X</forename><surname>And</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Prabhakar</forename></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">VLDB &apos;07: Proceedings of the 33rd international conference on Very large data bases</title>
+		<imprint>
+			<date type="published" when="2007" />
+			<biblScope unit="page" from="1116" to="1127" />
+		</imprint>
+		<respStmt>
+			<orgName>VLDB Endowment</orgName>
+		</respStmt>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

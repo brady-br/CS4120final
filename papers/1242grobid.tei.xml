@@ -1,0 +1,658 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T01:51+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Don&apos;t Thrash: How to Cache your Hash on Flash</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><forename type="middle">A</forename><surname>Bender</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Martin</forename><surname>Farach-Colton</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rob</forename><surname>Johnson</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bradley</forename><forename type="middle">C</forename><surname>Kuszmaul</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dzejla</forename><surname>Medjedovic</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pablo</forename><surname>Montes</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pradeep</forename><surname>Shetty</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Richard</forename><forename type="middle">P</forename><surname>Spillane</surname></persName>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Erez</forename><surname>Zadok</surname></persName>
+						</author>
+						<title level="a" type="main">Don&apos;t Thrash: How to Cache your Hash on Flash</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Many large storage systems use approximate-membership-query (AMQ) data structures to deal with the massive amounts of data that they process. An AMQ data structure is a dictionary that trades off space for a false positive rate on membership queries. It is designed to fit into small, fast storage, and it is used to avoid I/Os on slow storage. The Bloom filter is a well-known example of an AMQ data structure. Bloom filters, however, do not scale outside of main memory. This paper describes the Cascade Filter, an AMQ data structure that scales beyond main memory, supporting over half a million insertions/deletions per second and over 500 lookups per second on a commodity flash-based SSD.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Many large storage systems employ data structures that give fast answers to approximate membership queries (AMQs). The Bloom filter <ref type="bibr" target="#b1">[2]</ref> is a well-known example of an AMQ.</p><p>An AMQ data structure supports the following dictionary operations on a set of keys: insert, lookup, and optionally delete. For a key in the set, lookup returns "present." For a key not in the set, lookup returns "absent" with probability at least 1 − ε, where ε is a tunable false-positive rate. There is a tradeoff between ε and the space consumption.</p><p>To understand how an AMQ data structure such as a Bloom filter is used, consider Webtable <ref type="bibr" target="#b5">[6]</ref>, a database table that associates domain names of websites with website attributes. An automated web crawler inserts new entries into the table while users independently perform queries. The system optimizes for a high insertion rate by splitting the database tables into smaller subtables.</p><p>When a user performs a search, this search is replicated on all subtables. To achieve fast lookups, the system assigns a Bloom filter to each subtable. Most subtables do not contain the queried element, meaning that the system can avoid I/Os in those subtables. Thus, searches are usually satisfied with one or zero I/Os. Similar workloads to Webtable, which also require fast insertions and independent searches, are growing in importance <ref type="bibr" target="#b6">[7,</ref><ref type="bibr" target="#b10">11,</ref><ref type="bibr" target="#b14">15]</ref>. Bloom filters are also used for deduplication <ref type="bibr" target="#b23">[24]</ref>, distributed information retrieval <ref type="bibr" target="#b19">[20]</ref>, network computing <ref type="bibr" target="#b3">[4]</ref>, stream computing <ref type="bibr" target="#b22">[23]</ref>, bioinformatics <ref type="bibr" target="#b7">[8,</ref><ref type="bibr" target="#b17">18]</ref>, database querying <ref type="bibr" target="#b18">[19]</ref>, and probabilistic verification <ref type="bibr" target="#b11">[12]</ref>. For a comprehensive review of Bloom filters, see Broder and Mitzenmacher's survey <ref type="bibr" target="#b3">[4]</ref>.</p><p>Bloom filters work well when they fit in main memory. Bloom filters require about one byte per stored data item. Counting Bloom filters-those supporting insertions and deletions <ref type="bibr" target="#b9">[10]</ref>-require 4 times more space <ref type="bibr" target="#b2">[3]</ref>.</p><p>What goes wrong when Bloom filters grow too big to fit in main memory? On disks with rotating platters and moving heads, Bloom filters choke. A rotational disk performs only 100-200 (random) I/Os per second, and each Bloom filter operation requires multiple I/Os. Even on flash-based solid-state drives, Bloom filters achieve only hundreds of operations per second in contrast to the order of a million per second in main memory.</p><p>One way to improve insertions into Bloom filters for flash is to employ buffering techniques <ref type="bibr" target="#b4">[5]</ref>. The idea is to use an in-memory buffer to collect writes destined for the same flash page, executing multiple writes with one I/O. Buffering helps to some degree, achieving over a factor of two improvement over a simple Bloom filter in <ref type="bibr" target="#b4">[5]</ref>. With larger buffers and data sets, we measured that buffering can give an 80-fold improvement.</p><p>However, buffering scales poorly as the Bloom-filter size increases compared to the in-memory buffer size, resulting in only a few buffered updates per flash page on average. This paper demonstrates that AMQ data structures can be efficient, scalable, flexible, and cost-effective for data sets much larger than main memory. We describe a new data structure, called the Cascade Filter, designed to scale out of RAM onto flash.</p><p>In our experiments an Intel X25-M 160GB SATA II SSD using a Cascade Filter was able to perform 670,000 insertions per second and 530 lookups per second on a data set containing more than 8.59 billion elements. The Cascade Filter supports insertions at rates 40 times faster than a Bloom filter with buffering and 3,200 times faster than a traditional Bloom filter. Lookup throughput is 3 times slower than that of a Bloom filter or about the cost of 6 times random reads on flash.</p><p>To put these numbers in perspective, on the Intel X25-M, we measured 5,603 random 4K block writes per second (21.8 MB/sec) and 3,218 random 4K block reads per second (12.5 MB/sec). Random bit reads/writes have comparable speeds. Sequential writes run at roughly 110MB/sec.</p><p>The Cascade Filter can be implemented cost effectively. For example, given a data center holding 1PB of 512 byte keys, our results indicate that one can construct a Cascade Filter with a less than 0.04% false positive rate using 10TB of consumer-grade flash disks. This Cascade Filter would be relatively inexpensive, costing less than $35,000, a small fraction of the data-center cost.</p><p>Our three contributions are as follows: <ref type="formula">(1)</ref> We introduce the Quotient Filter (QF), which supports insertions and deletions, as well as merging/resizing of two QFs. A QF is an in-memory AMQ data structure that is functionally similar to a Bloom filter, but lookups incur a single cache miss, as opposed to at least two in expectation for a Bloom filter. QFs are 20% bigger than Bloom filters, which compares favorably with the 4× blowup associated with counting Bloom filters. (2) We introduce the Cascade Filter (CF), an AMQ data structure designed for flash. The CF comprises a collection of QFs organized into a data structure inspired by the Cache-Oblivious Lookahead Array (COLA) <ref type="bibr" target="#b0">[1]</ref>. <ref type="formula">(3)</ref> We theoretically analyze and experimentally verify the performance of the CF. The CF performs insertions and deletions fast enough to keep pace with Cassandra <ref type="bibr" target="#b16">[17]</ref>, TokuDB <ref type="bibr" target="#b20">[21]</ref>, and other write-optimized indexing systems, as well as systems such as Vertica <ref type="bibr" target="#b21">[22]</ref> and InnoDB <ref type="bibr" target="#b12">[13]</ref>, that use insertion buffers.</p><p>The remainder of this paper is organized as follows. Section 2 describes the QF and CF data structures and presents a theoretical analysis. Section 3 presents our experiments. Section 4 offers some concluding remarks.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Design and Implementation</head><p>This section presents the CF data structure and gives a brief theoretical analysis of its performance. The CF comprises a collection of quotient filters organized into a data structure resembling a Cache-Oblivious Lookahead Array (COLA) <ref type="bibr" target="#b0">[1]</ref>. The COLA-like CF achieves its fast insertion performance by merging and writing QFs onto disk in an I/O-efficient manner. The section describes the QF, and then shows how to combine QFs into a CF.</p><p>The QF stores p-bit fingerprints of elements. The QF is a compact hash table similar to that described by Cleary <ref type="bibr" target="#b8">[9]</ref>. The hash table employs quotienting, a technique suggested by Knuth [16, Section 6.4, exercise 13], in which the fingerprint is partitioned into the q most significant bits (the quotient) and the r least significant bits (the remainder). The remainder is stored in the bucket indexed by the quotient. <ref type="figure">Figure 1</ref> illustrates a quotient filter.</p><p>If the quotients of two stored fingerprints are equal  then we say we have a soft collision. The QF employs linear probing as a collision-resolution strategy, and stores the remainders in sorted order. Thus, a remainder may end up shifted forward and stored in a subsequent slot. The slot in which a fingerprint's remainder would be stored if there were no collisions is called the canonical slot. All of the remainders with the same quotient are stored contiguously, and are called a run.</p><p>A cluster is a maximal sequence of occupied slots whose first element is the only element of the cluster stored in its canonical slot. A cluster may contain one or more runs.</p><p>The first element of the cluster acts as an anchor that, in combination with three additional bits in each slot, allows us to recover the full fingerprint of each stored remainder in the cluster.</p><p>The three additional bits in each slot are as follows:</p><p>is occupied specifies whether a slot is the canonical slot for some value stored in the filter. is continuation specifies whether a slot holds a remainder that is part of a run (but not the first). is shifted specifies whether a slot holds a remainder that is not in its canonical slot.</p><p>Whenever we insert a fingerprint we mark as occupied the slot indexed by its quotient and shift any remainders forward as necessary, updating the bits accordingly.</p><p>There is a design that uses two indicator bits instead of three, and which identifies an empty bucket by storing dummy data in reverse sorted order. However, our implementation of this scheme is more CPU intensive, and we opted for a three-bit scheme instead in our experiments.</p><p>A false positive can occur only when two elements map to the same fingerprint. For a good hash function, let the load factor of the hash table be α = n/m, where n is the number of elements, and m = 2 q is the number of slots. Then the probability of such a hard collision is approximately 1 − e −α/2 r ≤ 2 −r . The space required by a QF is comparable to that of a Bloom filter, depending on parameter choices. For a QF and a Bloom filter that can hold the same number of elements and with the same false positive rate, a QF with α = 3/4 requires 1.2 times as much space as a Bloom filter with 10 hash functions.</p><p>The QF supports several useful operations efficiently. One can merge two QFs into a single QF efficiently in a manner analogous to a merge of two sorted arrays because the fingerprints are stored in ascending order. One can also double or halve the size of a QF without rehashing the fingerprints because the fingerprints can be fully recovered from the quotients and remainders.</p><p>Since lookups, inserts, and deletes in a quotient filter all require decoding an entire cluster, we must argue that clusters are small. If we assume that the hash function h generates uniformly distributed independent outputs, then an analysis using Chernoff bounds shows that, with high probability, a quotient filter with m slots has all runs of length O(log m); most runs have length O(1).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>From QF to CF</head><p>Updating a QF that fits in main memory is fast. If the QF does not fit, then updates may incur random writes. Although the I/O performance is better than a traditional Bloom filter with the same false-positive rate and maximum number of insertions, we can do better by using several QFs to build a CF.</p><p>The overall structure of the CF is loosely based on a data structure called the COLA <ref type="bibr" target="#b0">[1]</ref>, and is illustrated in <ref type="figure" target="#fig_1">Figure 2</ref>. The CF comprises an in-memory QF, called QF 0 . In addition, for RAM of size M , the CF comprises = log 2 (n/M )+O(1) in-flash QFs of exponentially increasing size, QF 1 ,QF 2 . . .QF stored contiguously. For simplicity, we explain here the case for insertions (deletions can be handled with tombstones at the cost of a fourth tombstone bit). In the case of insertions-only, each in-flash QF is either empty or has reached its maximum load factor. Insertions are made into QF 0 . When QF 0 reaches its maximum load factor, we find QF i the smallest empty QF, and merge QF 0 . . .QF i−1 into QF i . To perform a CF lookup, we examine all nonempty QFs, fetching one page from each.</p><p>The theoretical analysis of CF performance follows from the COLA: a search requires one block read per level, for a total of O(log(n/M )) block reads, and an insert requires only O((log(n/M ))/B) amortized block writes/erases, where B is the natural block size of the flash. Typically, B 񮽙 log(n/M ), meaning the cost of an insertion or deletion is much less than one block write per element.</p><p>Like a COLA, a CF can be deamortized to provide better worst-case bounds <ref type="bibr" target="#b0">[1]</ref>. This deamortization removes delays caused by merging large QFs.</p><p>The false positive rate of the CF is similar to its component QFs. The CF is a multiset of integers, each of width p bits. If the largest level is configured to store α2 q−1 elements, then the entire CF can store α2 q elements; by the same argument as for the component QF, the expected false positive rate is 1 − e −α/2 r ≤ 2 −r .</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Evaluation</head><p>This section evaluates the insertion and lookup throughput of the QF and CF. We compare a QF to a traditional Bloom filter (BF) in RAM, and we compare a CF with a traditional BF and an elevator BF on flash. We ran our experiments on a quad-core 2.4GHz Xeon E5530 with 8MB cache and 24GB RAM, running Linux (CentOS 5.4). We booted the machine with 0.994GB of RAM to test out-of-RAM performance. We used a 159.4GB Intel X-25M SSD (second generation). To ensure a cold cache and an equivalent block layout on disk, we ran each iteration of the relevant benchmark on a newly formatted file system, which we zeroed out first with /bin/dd. We ensured that there was no swapping. The partition size was fixed at 90GB, or 58% of the drive's capacity which is nearly optimal for the SSD <ref type="bibr" target="#b13">[14]</ref>. The CF was configured to use 256MB of RAM. The elevator BF was configured to use 256MB worth of keys in RAM, but due to memory fragmentation this algorithm used close to 512MB. The remainder of RAM was used for file system caching. The tradi-  tional BF used all of RAM for buffer caching. All filters had the same false positive rate of 0.04%. The traditional and elevator BFs were configured to use 11 hash functions, and CF was configured with 11 r-bits in the lowest level.</p><p>QF insertion throughput. We compared the in-RAM performance of the QF and a BF with the optimal number of hash functions for the same number of elements and false-positive rate. For inserts, the cumulative throughputs of BF and QF were 690,000 and 2,400,000 inserts per second, respectively. Although the performance of QF deteriorated as the number of elements increased, it was always significantly better than that of BF. For lookups, the behavior of both BF and QF was stable throughout the benchmark. The BF performed 1,900,000 lookups per second on average, whereas the QF performed 2,000,000.</p><p>CF insertion throughput. We inserted 8.59 billion 64-bit keys into the CF. <ref type="figure" target="#fig_3">Figure 3</ref> shows that the CF sustained an average of 670,000 insertions per second even taking into account the time during which long merges stalled insertions. The largest stall was in the middle, where all but one of the QFs were merged into the largest QF of the CF. Deamortization techniques, which we did not implement, can remove the long stalls <ref type="bibr" target="#b0">[1]</ref>. We performed the largest merge at 8.4MB/s, well below flash's serial write throughput (110MB/s). We found that the system was CPU-bound, spending its time on bitpacking operations within the QF. In fact, it was so CPU-bound that the disk subsystem ran at only a few percent of capacity even at high insertion rates. For comparison, we evaluated two other data structures: (1) a traditional BF and (2) a large elevator BF. The traditional BF uses the target disk as storage and hashes keys into this storage, though its writes are allowed to use the file cache. The elevator BF has the following optimization: it maintains a large buffer of locations it has recently written to, and when this buffer is full, it flushes each bit to storage in order of offset.</p><p>The traditional BF achieved an insertion throughput of 200 insertions per second, whereas the elevator BF achieved an insertion throughput of 17,000 per second, which is a considerable improvement, but far less than that of our CF. The performance for both algorithms was constant as the data structures filled because it was bounded by the flash's random-write throughput.</p><p>Lookup throughput. We compare the lookup throughput of the traditional BF and CF with each other as well as with a theoretical prediction of their performance.</p><p>In our setup, the CF has at most 6 levels on flash. The CF performs one read at each level when searching for keys that are not in the CF (6 I/Os). Our drive's randomread throughput is 3,218 4KB pages per second, and so the read throughput of the CF should have been about 530 lookups per second. A BF with an equivalent falsepositive rate of 0.04% requires 11 hash functions and 16GB of space. In order to predict its lookup throughput, note that in an optimally configured BF, each bit is set to 1 with probability 1/2. A lookup on a BF uses one hash function after another until it finds a 0, meaning that the expected number of I/Os per negative lookup is 2. Thus, the expected lookup throughput is half the random read throughput of the flash drive, which in this case is 1600 lookups per second.</p><p>When measured, the actual BF lookup performance is 1609 lookups per second, which is what the model predicts. Negative CF lookups run at 530 per second, which matches what the model predicts (6 reads per lookup).</p><p>CF with tombstone bit. We re-ran the CF throughput experiments with an identical experimental setup, except we used 4 bits per element instead of 3 to measure the overhead of supporting deletes. We found that the insertion throughput dropped from 670,000 insertions per second to 630,000 insertions per second. Lookup throughput remained unchanged. Evaluation summary. The CF trades a 3 fold slowdown in lookup throughput on flash in exchange for a 40x speedup in insertion throughput over a BF optimized to use all of its buffer for queueing random writes. Unlike the traditional BF, the CF is CPU bound and not I/O bound.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Conclusions and Future Work</head><p>We designed two efficient data structures: a Quotient Filter (QF) and a Cascade Filter (CF), specifically to utilize the best features of modern flash drives. We designed them to have high throughput for insertions, queries, and deletions. Our analytical results, coupled with our evaluations, demonstrate superior performance, beating optimized implementations of traditional Bloom filters by over two orders of magnitude.</p><p>The relative cost of I/O compared to CPU operations has increased by orders of magnitude over the past several decades, and with the advent of multicore, that trend is likely to continue. Most storage systems underuse their CPUs while waiting for I/O. In contrast, our data structure makes efficient use of I/O and is CPU-bound for insertions. The merge operation is parallelizable, potentially offering additional performance.</p><p>Future work. We will explore applications to traffic routing, deduplication, replication, write offloading, load balancing, and security in a data center or large network. The Cascade Filter is currently CPU bound; a parallel implementation could potentially perform upwards of 50 million inserts and updates per second with a drive performing 400MB/s serial writes. An efficient implementation could potentially be made very cost-effective by utilizing parallel GPU programming. The Cascade Filter is capable of a variety of read/write optimized configurations, and can dynamically shift between them at run-time. We will explore application of the Cascade Filter to write-optimized indexing.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: Merging QFs. Three QFs of different sizes are shown above, and they are merged into a single large QF below. The top of the figure shows a CF before a merge, with one QF stored in RAM, and two QFs stored in flash. The three QFs above have all reached their maximum load factors (which is 3/4 in this example). The bottom of the figure shows the same CF after the merge. Now the QF at level 3 is at its maximum load factor, but the QFs at levels 0, 1, and 2 are empty.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: CF Insertion Throughput. The x axis shows elapsed time and the y axis shows the number of insertions performed up to that point. Due to periodic compactions, there are long periods of time in which no insertions take place. The sustained throughput averages 670,000 insertions per second.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="false"><head>A through H.by D and E to bucket 6. Values C through H together form a cluster.</head><label></label><figDesc></figDesc><table>is_occupied 
+
+is_continuation 
+
+is_shifted 
+
+1 
+1 
+3 
+3 
+3 
+4 
+6 
+6 
+
+a 
+b 
+c 
+d 
+e 
+f 
+g 
+h 
+
+A 
+B 
+C 
+D 
+E 
+F 
+G 
+H 
+
+f 
+fq 
+fr 
+
+Figure 1: An example quotient filter and its representation. 
+This filter contains values The table on the right 
+shows, for each value, the corresponding quotient and remain-
+der. The top of the figure shows a chained hash table stor-
+ing the values A through H by storing a list of remainders in 
+a bucket identified by the quotient of the values. The bottom 
+of the figure shows how the remainders are stored in the QF. 
+Each bucket contains three bits in addition to the remainder. 
+The three bits are the is occupied, is continuation, 
+and is shifted values, in that order. In this example, C, 
+D, and E have all the same quotient, so together they form 
+a run. Value C is stored in its canonical position, so it is the 
+beginning of a cluster. Although F should have been stored in 
+bucket 4, it is pushed forward </table></figure>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Acknowledgments</head><p>Thanks to Guy Blelloch for helpful discussions and especially for suggesting that we use quotient filters.</p></div>
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">Cache-oblivious streaming B-trees</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">A</forename><surname>Bender</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Farach-Colton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">T</forename><surname>Fineman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><forename type="middle">R</forename><surname>Fogel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">C</forename><surname>Kuszmaul</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Nelson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SPAA</title>
+		<imprint>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Space/time trade-offs in hash coding with allowable errors</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><forename type="middle">H</forename><surname>Bloom</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Commun. ACM</title>
+		<imprint>
+			<biblScope unit="volume">13</biblScope>
+			<biblScope unit="issue">7</biblScope>
+			<biblScope unit="page" from="422" to="426" />
+			<date type="published" when="1970" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<analytic>
+		<title level="a" type="main">An improved construction for counting Bloom filters</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Bonomi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Mitzenmacher</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Panigrahy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Singh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Varghese</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ECA</title>
+		<imprint>
+			<date type="published" when="2006" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Network applications of Bloom filters: A survey</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Broder</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Mitzenmacher</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Internet Mathematics</title>
+		<imprint>
+			<date type="published" when="2002" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Buffered Bloom filters on solid state storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Canim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">A</forename><surname>Mihaila</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Bhattacharhee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><forename type="middle">A</forename><surname>Lang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><forename type="middle">A</forename><surname>Ross</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ADMS</title>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Bigtable: a distributed storage system for structured data</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Chang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Dean</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Ghemawat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">C</forename><surname>Hsieh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">A</forename><surname>Wallach</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Burrows</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Chandra</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Fikes</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">E</forename><surname>Gruber</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI &apos;06: Proceedings of the 7th USENIX Symposium on Operating Systems Design and Implementation</title>
+		<meeting><address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2006" />
+			<biblScope unit="page" from="15" to="15" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Bigtable: A distributed storage system for structured data</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Chang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Dean</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Ghemawat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">C</forename><surname>Hsieh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">A</forename><surname>Wallach</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Burrows</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Chandra</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Fikes</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><forename type="middle">E</forename><surname>Gruber</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">OSDI</title>
+		<imprint>
+			<date type="published" when="2006" />
+			<biblScope unit="page" from="205" to="218" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">A reconfigurable Bloom filter architecture for BLASTN</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Schmidt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">L</forename><surname>Maskell</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ARCS</title>
+		<imprint>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="40" to="49" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Compact hash tables using bidirectional linear probing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">G</forename><surname>Cleary</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE T. Comput</title>
+		<imprint>
+			<biblScope unit="volume">33</biblScope>
+			<biblScope unit="issue">9</biblScope>
+			<biblScope unit="page" from="828" to="834" />
+			<date type="published" when="1984" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Summary cache: a scalable wide-area web cache sharing protocol</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Fan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Cao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Almeida</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><forename type="middle">Z</forename><surname>Broder</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE/ACM T. Netw</title>
+		<imprint>
+			<biblScope unit="volume">8</biblScope>
+			<biblScope unit="page" from="281" to="293" />
+			<date type="published" when="2000-06" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<monogr>
+		<title level="m" type="main">How netapp deduplication works -a primer</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Larry</forename><surname>Freeman</surname></persName>
+		</author>
+		<ptr target="http://blogs.netapp.com/drdedupe/2010/04/how-netapp-deduplication-works.html" />
+		<imprint>
+			<date type="published" when="2010-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<monogr>
+		<title level="m" type="main">Design and validation of computer protocols</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><forename type="middle">J</forename><surname>Holzmann</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1991" />
+			<publisher>Prentice-Hall, Inc</publisher>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title/>
+	</analytic>
+	<monogr>
+		<title level="j">Innobase Oy. Innodb. www.innodb.com</title>
+		<imprint>
+			<date type="published" when="2011" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<monogr>
+		<title level="m" type="main">Over-provisioning an Intel SSD</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Intel</surname></persName>
+		</author>
+		<ptr target="cache-www.intel.com/cd/00/00/45/95/459555" />
+		<imprint>
+			<date type="published" when="2010-10" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Lazybase: freshness vs. performance in information management</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kimberly</forename><surname>Keeton</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Charles</forename><forename type="middle">B</forename><surname>Morrey</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Craig</forename><forename type="middle">A N</forename><surname>Iii</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alistair</forename><surname>Soules</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Veitch</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">SIGOPS Oper. Syst. Rev</title>
+		<imprint>
+			<biblScope unit="volume">44</biblScope>
+			<biblScope unit="page" from="15" to="19" />
+			<date type="published" when="2010-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<monogr>
+		<title level="m" type="main">The Art of Computer Programming: Sorting and Searching</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><forename type="middle">E</forename><surname>Knuth</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="1973" />
+			<publisher>Addison Wesley</publisher>
+			<biblScope unit="volume">3</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">Cassandra -a decentralized structured storage system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Lakshman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Malik</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">OS Rev</title>
+		<imprint>
+			<biblScope unit="volume">44</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="35" to="40" />
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Using Bloom filters for large scale gene sequence analysis in Haskell</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Malde</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>O&amp;apos;sullivan</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">PADL</title>
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Optimal semijoins for distributed database systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">K</forename><surname>Mullin</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE T. Software Eng</title>
+		<imprint>
+			<biblScope unit="volume">16</biblScope>
+			<biblScope unit="issue">5</biblScope>
+			<biblScope unit="page" from="558" to="560" />
+			<date type="published" when="1990-05" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Apoidea: A decentralized peer-to-peer architecture for crawling the world wide web</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Singh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Srivatsa</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Liu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Miller</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SIGIR Workshop Distr</title>
+		<imprint>
+			<date type="published" when="2003" />
+			<biblScope unit="page" from="126" to="142" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<monogr>
+		<title level="m" type="main">TokuDB for MySQL Storage Engine</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Inc</forename><surname>Tokutek</surname></persName>
+		</author>
+		<ptr target="http://tokutek.com" />
+		<imprint>
+			<date type="published" when="2009" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<monogr>
+		<title level="m" type="main">The Vertica Analytic Database</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Vertica</surname></persName>
+		</author>
+		<ptr target="http://vertica.com" />
+		<imprint>
+			<date type="published" when="2010-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Counting data stream based on improved counting Bloom filter</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Yuan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Miao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Jia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Wang</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">WAIM</title>
+		<imprint>
+			<date type="published" when="2008-07" />
+			<biblScope unit="page" from="512" to="519" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Avoiding the disk bottleneck in the data domain deduplication file system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">B</forename><surname>Zhu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Patterson</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">FAST</title>
+		<imprint>
+			<date type="published" when="2008" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

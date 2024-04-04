@@ -1,0 +1,743 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T04:28+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Static Exploration of Taint-Style Vulnerabilities Found by Fuzzing</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Bhargava</forename><surname>Shastry</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">TU Berlin</orgName>
+								<address>
+									<settlement>Berlin</settlement>
+									<country key="DE">Germany</country>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Federico</forename><surname>Maggi</surname></persName>
+							<affiliation key="aff1">
+								<orgName type="laboratory">FTR</orgName>
+								<orgName type="institution">Trend Micro, Inc</orgName>
+								<address>
+									<settlement>Milan</settlement>
+									<country key="IT">Italy</country>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fabian</forename><surname>Yamaguchi</surname></persName>
+							<affiliation key="aff2">
+								<address>
+									<settlement>Braunschweig, Braunschweig</settlement>
+									<country key="DE">Germany</country>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Konrad</forename><surname>Rieck</surname></persName>
+							<affiliation key="aff2">
+								<address>
+									<settlement>Braunschweig, Braunschweig</settlement>
+									<country key="DE">Germany</country>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jean-Pierre</forename><surname>Seifert</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">TU Berlin</orgName>
+								<address>
+									<settlement>Berlin</settlement>
+									<country key="DE">Germany</country>
+								</address>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Static Exploration of Taint-Style Vulnerabilities Found by Fuzzing</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Taint-style vulnerabilities comprise a majority of fuzzer discovered program faults. These vulnerabilities usually manifest as memory access violations caused by tainted program input. Although fuzzers have helped uncover a majority of taint-style vulnerabilities in software to date, they are limited by (i) extent of test coverage; and (ii) the availability of fuzzable test cases. Therefore, fuzzing alone cannot provide a high assurance that all taint-style vulnerabilities have been uncovered. In this paper, we use static template matching to find recurrences of fuzzer-discovered vulnerabilities. To compensate for the inherent incompleteness of template matching, we implement a simple yet effective match-ranking algorithm that uses test coverage data to focus attention on matches comprising untested code. We prototype our approach using the Clang/LLVM compiler toolchain and use it in conjunction with afl-fuzz, a modern coverage-guided fuzzer. Using a case study carried out on the Open vSwitch codebase, we show that our prototype uncovers corner cases in modules that lack a fuzzable test harness. Our work demonstrates that static analysis can effectively complement fuzz testing, and is a useful addition to the security assessment tool-set. Furthermore , our techniques hold promise for increasing the effectiveness of program analysis and testing, and serve as a building block for a hybrid vulnerability discovery framework.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Software exploitation is asymmetric, requiring only a single flaw to compromise a system, and at times a network of systems. To make matters worse, the attack surface has expanded with the growing complexity of contemporary software. Therefore, a proactive approach to vulnerability discovery is essential to reducing the leverage available to attackers. This is especially true for applications that routinely handle untrusted user input such as network and data parsers.</p><p>Fuzz testing has been the tool of choice for conducting proactive security assessments of parsing applications. Although fuzz testing is effective at uncovering software vulnerabilities, it has two practical limitations. First, fuzzing may encounter coverage bottlenecks such as cryptographic code, and non-atomic comparison operations that limit the test coverage achieved, and impede the discovery of latent vulnerabilities. Second, often codebases lack fuzzable unit tests for security-critical program APIs and/or stateful application logic, betraying insufficiently tested software. Writing good test cases is a manual process that does not scale well. Prior work partly addresses the problem of improving the effectiveness of vulnerability discovery by using code mining techniques <ref type="bibr" target="#b9">[16,</ref><ref type="bibr" target="#b10">17,</ref><ref type="bibr" target="#b15">22,</ref><ref type="bibr" target="#b18">25,</ref><ref type="bibr" target="#b19">26]</ref>. The basic premise of these proposals is to leverage a security patch that fixes a known vulnerability to find unpatched replicas. However, these proposals have two limitations. First, they are usually reactive in nature, employing an existing patch to find unpatched instances. Therefore, these approaches mitigate the security risk of known but unpatched vulnerabilities, but not of unknown vulnerabilities. Second, these approaches use a custom serializable abstraction (such as the parse tree) of the code under analysis to facilitate code mining. Thus, large code bases impose a significant serialization cost.</p><p>In this paper, we address these limitations by proposing a hybrid vulnerability system that not only side-steps the reliance on vulnerability patches but also enables detection of recurring vulnerabilities without resorting to code serialization. To this end, we build on the idea that static analysis can perform a broader search for (explore) vulnerable code patterns, starting from a handful of fuzzer-discovered program failures. <ref type="figure" target="#fig_0">Figure 1</ref> shows the work flow of static exploration. Our working hypothesis is that any readily available fuzzable test harness can be used to bootstrap our analysis, reducing the burden of test writing. Therefore, we begin by fuzzing an existing test harness packaged with a codebase and expect to find a handful of program crashes. Subsequently, our analysis proceeds in three steps. First, we narrow down the root cause of the uncovered crashes using a memory error detector such as AddressSanitizer, falling back to execution slice based fault localization when the fault is not memory-based. Fault localization not only narrows the search for vulnerable code patterns, but also provides syntactic and semantic information about the underlying fault. Second, using localized faulty code, we automatically generate vulnerability templates that may be matched against an in-memory code representation used by the compiler. Vulnerability templates are functional predicates on structural as well as semantic code properties as seen by the compiler, making our approach superior to na¨ıvena¨ıve text-based pattern matchers such as grep. Third, we rank matching code snippets (returned by template matching) by using fuzzer test coverage data: Matches comprising untested code is ranked higher than those that do not. Such a ranking system helps prioritize manual audit of untested code over code that has already undergone fuzz testing. We use afl-fuzz, a contemporary coverage-guided fuzzer, and Clang/LLVM instrumentation and static analysis framework for prototyping our approach.</p><p>We evaluate our prototype using a case study of Open vSwitch <ref type="bibr">(OvS)</ref>, an open-source virtual switch implementation used in data centers. We chose Open vSwitch because (i) it routinely handles untrusted input, and (ii) its existing fuzzable test cases achieve a test coverage of less than 5% providing a low assurance on software security. Results from our case study are promising. Our prototype has uncovered a potential recurring vulnerability in a portion of OvS that lacked a test harness. Moreover, in one instance, template matching has proved to be helpful in flagging a recurring vulnerability that originated in an older release of OvS. This shows that static analysis can not only complement fuzzing, but enable security assessments to be made during software development. To facilitate independent evaluation, we have open-sourced our prototype, that is available at https://www.github.com/test-pipeline. Contributions:</p><p>• We present an approach to improve the effectiveness of source code security audit that benefits from both the precise diagnostics of a fuzzer, and the breadth of analysis of a static analyzer.</p><p>• We prototype our approach using afl-fuzz, a contemporary coverage-guided fuzzer, and the Clang/LLVM compiler toolchain. Our prototype automatically generates vulnerability templates from a fuzzer corpus, ranking the matches returned by template matching based on novelty.</p><p>• We evaluate our prototype using a case study of Open vSwitch codebase. Our approached has (i) helped discover one potential vulnerability in a portion of Open vSwitch that lacked a test harness; (ii) facilitated vulnerability checks at an early stage; and (iii) reduced false alarms by 50-100% in most cases demonstrating that coverage-based match ranking is effective in combating false positives.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Static Exploration of Vulnerabilities</head><p>Contemporary fuzzers and dynamic memory analysis tools have greatly advanced vulnerability detection and re-mediation, owing to their ease-of-use and public availability. Since fuzzers and memory analyzers are invoked at runtime, they require a test harness that accepts user input (usually read from a file or standard input), and invokes program APIs against this input. Therefore, the  effectiveness of fuzzing and dynamic memory analysis depends on the availability of test cases that exercise a wide array of program APIs.</p><p>In practice, code bases contain test harnesses for only a limited number of program APIs. This means that, even if fuzzing were to achieve 100% test coverage for the set of existing test harnesses, it does not lead to 100% program API coverage. Furthermore, for networking software, an elaborate test setup is required for thorough testing. Our work seeks to counter practical limitations of fuzz testing using a complementary approach. It builds on the idea that the reciprocal nature of static analysis and fuzzing may be leveraged to increase the effectiveness of source-code security audits. Our key insight is that vulnerabilities discovered using a fuzzer can be localized to a small portion of application code from which vulnerability templates may be derived. These templates may then be used to find recurring vulnerabilities that may have been either missed by the fuzzer, or are present in code portions that lack a fuzzable test harness.</p><p>Motivating Example We motivate our research using the example code shown in Listing 1. The example contains two synthetic vulnerabilities that are identical: program aborts while parsing (i) the input string literal doom; (ii) the input whose cryptographic hash equals the string hash val. The abort call following the cryptographic comparison is invoked via an alias called CUSTOM. We assume that the fuzzer is able to quickly find the crash due to the string literal comparison (doom), but is unlikely to generate the input that satisfies the cryptographic operation. This is a reasonable assumption since hash collisions are highly unlikely. Faced with such a coverage bottleneck, we use the crash discovered by the fuzzer as a starting point for our vulnerability exploration, and proceed in three steps. We first localize the fault underlying the observed crash by computing the set difference of program coverage traces for the crashing and non-crashing runs respectively. Let us assume that the fuzzer corpus contains the crashing input doom and it's parent mutation, say doo. Using basic block (line) coverage tracing which is fast to obtain, we compute the set difference of the faulty and non-faulty executions to be line 9 (i.e., the abort call). Using the localized fault together with the crash stack trace, we then search for similar call sites using an automatically generated AST template. Listing 2 shows the template derived from the line of code containing a call to abort, and two matches resulting from template matching. Template matching results in two matches, one of which is the fuzzer-discovered vulnerability, and the other is a recurring instance hiding below cryptographic code. Although textual pattern matching for vulnerable code patterns is possible, it breaks down when code properties are crucial to finding a match e.g., call to abort() via an alias (line 5 of Listing 1). Finally, we partially rank template matches by checking if the lines of code comprising a match have not been executed by a fuzzer (ranked high), or not (ranked low). In our example, such a ranking would place the undiscovered bug on line 17 of Listing 1 above the bug on line 9 that has been found by the fuzzer.</p><p>Leveraging static analysis to complement fuzzing is appealing for two reasons. First, static analysis does not require a test harness, making it well-suited for our problem setting. Second, by taking a program-centric view, static analysis provides a greater overall assurance on software quality or lack thereof. Moreover, since we leverage concrete test cases to bootstrap our analysis, our vulnerability templates focus on a specific fault pattern that has occurred at least once with a demonstrable test input. This begets greater confidence in the returned matches and a higher tolerance for false positives, from an analyst's point of view.</p><p>The proposed vulnerability exploration framework requires a coupling between dynamic and static analysis. We begin by fuzzing a readily available program test case. Subsequently, the following steps are taken to enable static exploration of fuzzer-determined program crashes.</p><p>• Fault localization: We localize vulnerabilities (faults) reported by the fuzzer to a small portion of the code base using either a dynamic memory error detector such as AddressSanitizer <ref type="bibr" target="#b16">[23]</ref>, or using differential execution slices. Fault localization serves as an interface for coupling dynamic and static analyses, and facilitates automatic generation of vulnerability templates.</p><p>• Vulnerability Templates: Using lines of code returned by the fault localization module, together with the crash stack trace, we automatically generate vulnerability templates. The templates are encoded using code properties based on a program abstraction such as the abstract syntax tree (AST). Template matching is used to for finding potentially recurring vulnerabilities.</p><p>• Ranking Matches: We rank matches returned by template matching before it is made available for human review. Matches comprising lines of code not covered by fuzzing are ranked higher than those that have already been fuzzed.</p><p>• Validation: Finally, we manually audit the results returned by our analysis framework to ascertain if they can manifest as vulnerabilities in practice. 12:</p><p>nonfault-slice = obtain-slice(non f ault − input, Program)</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>13:</head><p>fault-dice = obtain-dice(fault-slice, nonfault-slice)</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>14:</head><p>return fault-dice</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">Fault Localization</head><p>Although a program stack trace indicates where a crash happened, it does not necessarily pin-point the rootcause of the failure. This is because, a failure (e.g., memory access violation) manifests much after the trail of the faulty program instructions has been erased from the active program stack. Therefore, fault localization is crucial for templating the root-cause of a vulnerability.</p><p>We localize a fuzzer-discovered program failure using a memory detector such as AddressSanitizer <ref type="bibr" target="#b16">[23]</ref>. AddressSanitizer is a dynamic analysis tool that keeps track of the state of use of program memory at run time, flagging out-of-bounds reads/writes at the time of occurrence. However, AddressSanitizer cannot localize failures not caused by memory access violations. For this reason, we additionally employ a differential execution slicing 1 algorithm to localize general-purpose defects.</p><p>Agrawal et al. <ref type="bibr" target="#b4">[11]</ref> first proposed the use of differential execution slices (that the authors named execution dices) to localize a general-purpose program fault. Algorithm 1 shows an overview of our implementation of this technique. First, the execution slice for a faulty input is obtained ( f ault − slice, line 10 of Algorithm 1). Second, the fuzzer mutation that preceded the faulty input and did not lead to a failure is determined (line 11), and the execution slice for this input obtained (line 12). Finally, the set difference of the faulty and the non-faulty execution slices is obtained (line 13). This set difference is called the fault dice for the observed failure. We obtain execution slices of a program using the SanitizerCoverage tool <ref type="bibr" target="#b1">[3]</ref>.</p><p>In summary, fault localization helps us localize a fuzzer-discovered vulnerability to a small portion of the codebase. Faulty code may then be used to automatically generate vulnerability templates.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">Vulnerability Templates</head><p>Faulty code snippets contain syntactic and semantic information pertaining to a program failure. For example, the fact that dereference of the len field from a pointer to struct udp leads to an out-of-bounds memory access contains (i) the syntactic information that len field dereference of a data-type struct udp are potentially error-prone; and (ii) the semantic information that tainted input flows into the struct udp type record, and that appropriate sanitization is missing in this particular instance. Therefore, we leverage both syntactic, and semantic information to facilitate static exploration of fuzzer-determined program crashes.</p><p>Syntactic and semantic templates are derived from localized code snippets, and the crash stack trace. Syntactic templates are matched against the program's abstract syntax tree (AST) representation, while semantic templates against the program's control flow graph (CFG) representation. In the following, we briefly describe how templates are generated, and subsequently matched.</p><p>Syntactic Templates Syntactic templates are matched against the program abstract syntax tree (AST). They may be formulated as functional predicates on properties of AST nodes. We describe the process of formulating and matching AST templates using an out-of-bounds read in UDP parsing code of Open vSwitch v2.6.1 that was found by afl-fuzz and AddressSanitizer.</p><p>Listing 3 shows the code snippet responsible for the out-of-bounds read. The faulty read occurs on line 636 of Listing 3 while dereferencing the udp header struct field called udp len. The stack trace provided by AddressSanitizer is shown in Listing 4. In this instance, the fault is localized to the function named check l4 udp. Post fault localization, a vulnerability (AST) template is derived from the AST of the localized code itself. The AST fragment is a sub-tree rooted at the declaration statement on line 636, that assigns a variable named udp len of type size t, to the value obtained by dereferencing a struct field called udp len of type const unsigned short from a pointer named udp that points to a variable of type to struct udp header. Using the filtered AST fragment, we use AST template matching to find similar declaration statements where udp len is dereferenced. The templates are generated by automatically parsing the AST fragment (as shown in Listing 6), and creating Clang libASTMatcher <ref type="bibr">[1]</ref> style functional predicates. Subsequently, template matching is done on the entire codebase. Listing 7 shows the generated template and the matches discovered. ...</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>545</head><p>// I n c o m i n g packet parsed into udp struct 546 struct udp_header * in_udp = 547 dp_packet_l4 ( pkt_in ); 548</p><p>... 549 // D e r e f e r e n c e missing bounds c h e c k i n g 550 size t udp len = ntohs(in udp-&gt;udp len); 551 552</p><p>... 553 } AST templates are superior to simple code searching tools such as grep for multiple reasons. First, they encode type information necessary to filter through only the relevant data types. Second, they are flexible enough to Listing 6: AST of the localized fault that triggers an out-of-bounds read in UDP packet parsing code. AST nodes of interest are shown in green. mine for selective code fragments, such as searching for udp len dereferences in binary operations in addition to declaration statements only.</p><p>Listing 5 shows one of the matches discovered (see Match #3 of Listing 7). In the code snippet shown in Listing 5, the OVS controller function named pinctrlhandle put dhcpv6 opts handles an incoming DHCP packet (containing a UDP packet) that is assigned to a pointer to struct udp header, and subsequently dereferenced in the absence of a bounds-check on the length of the received packet. This is one of the bugs found using syntactic template matching that was reported upstream, and subsequently patched by the vendor <ref type="bibr" target="#b3">[10]</ref>. Moreover, this match alerted the OvS developers to a similar flaw in the DNS header parsing code.</p><p>To be precise, vulnerability templates need to encode both data and control flow relevant failure inducing code. Otherwise, explicit sanitization of tainted input will be missed, leading to false positives. To this end, we augment syntactic template matching with semantic (control and data-flow) template matching.</p><p>Semantic Templates Control and data-flow templates encode semantic code properties needed to examine the flow of tainted input. However, since each defect is characterized by unique control and data-flow, semantic templates are harder to automate. We remedy this problem by providing fixed semantic templates that are generic enough to be applied to any defect type.</p><p>We parse the program crash stack trace to perform semantic template matching. First, we determine the function in which the program fails (top-most frame in the crash trace), and generate a template to match other callsites of this function. We call this a callsite template. Callsite templates intuitively capture the insight that, if a program failure manifests in a given function, other calls to that function demand inspection. Second, for memory access violation related vulnerabilities, we determine the data-type of the variable that led to an access violation, and assume that this data-type is tainted. Subsequently, we perform taint analysis on this data-type terminating at pre-determined security-sensitive sinks such as memcpy, strcpy etc. We call this a taint template. Taint templates provide insight on risky usages of a datatype that is known to have caused a memory access violation. Callsite and taint templates are matched against the program control flow graph (CFG). They have been implemented as extensions to the Clang Static Analyzer framework <ref type="bibr" target="#b0">[2]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.3">Match Ranking</head><p>Matches returned using static template matching may be used to (in)validate potentially recurring vulnerabilities in a codebase. However, since vulnerability templates over-approximate failure-inducing code patterns, false positives are inevitable. We remedy the false-positive problem using a simple yet practical match ranking algorithm.</p><p>Algorithm 2 presents the pseudocode for our match ranking algorithm. The procedure called RANK-MATCHES accepts the set of template matches (denoted as Matches), and the set of program functions covered by fuzz testing (denoted as Coverset) as input, and returns a partially orders list suitable for manual review. For each match, we apply a ranking predicate on the program function in which the match was found. We call this function, the matching unit. The ranking predicate (denoted as the procedure isHigh) takes two input parameters: the matching function name, and the Coverset. Under the hood, isHigh simply performs a test of set membership; it checks if the matching unit is a member of the coverset, returning True if it is a member, False otherwise. All matching units that satisfy the ranking predicate are ranked high, while the rest are ranked low. The ranked list is returned as output.</p><p>Our ranking algorithm is implemented in Python using a hash table based data structure. When the coverset is given, ranking a match takes O(1) on average, and O(n) in the worst case, where n is the number of functions in the coverset. On average, the time to rank all matches grows linearly with the number of matches. This is really fast in practice e.g., in the order of a few milliseconds (see <ref type="table">Table 3</ref>).</p><p>Although afl encodes program coverage information internally, the encoded information is not at the source code level. For this reason, our prototype leverages GCov <ref type="bibr" target="#b2">[9]</ref>, a publicly available source code level program coverage tracing tool, for obtaining the coverset of test inputs in the fuzzer corpus. Although our prototype currently uses function as a matching unit, it may be suitably altered to work at the level of source line of code (basic blocks). However, there is a trade-off between coverset (and matching unit) granularity (function vs. basic block) and the run time for obtaining the coverset. Function level tracing is fast but can lead to untested bugs being incorrectly ranked low (e.g., buggy untested line of code in a tested function); basic block level tracing is relatively slower but it eliminates false negatives. For our prototype implementation, we have favored lower run time over ranking soundness in view of the thousands Algorithm 2 Pseudocode for ranking statically explored vulnerability matches. of test cases that fuzzer corpora usually contain. Indeed, our evaluation shows that this is a reasonable trade-off. However, we plan to implement a granularity switch that will permit the user to switch to basic block tracing at a modest run time cost.</p><p>Validation Although match ranking helps reduce the burden of false positives, it does not eliminate them entirely. Therefore, we rely on manual audit to ascertain the validity of analysis reports. Nonetheless, our approach focuses attention on recurrences of demonstrably vulnerable code patterns, thereby reducing the extent of manual code audit.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Case Study: Open vSwitch</head><p>We evaluated our approach on multiple versions of Open vSwitch, an open-source virtual switch used in data centers. We chose Open vSwitch for evaluation because (i) it is a good representative of production code; (ii) it has insufficient test harnesses suitable for fuzzing, resulting in program edge coverage of less than 5%. Our evaluations were performed using afl-fuzz for fuzzing, AddressSanitizer for fault localization, falling back to our implementation of differential slice-based fault localization, and our implementation of static template generation, matching, and ranking algorithms. Experiments were carried out on a 64-bit machine with 80 CPU threads (Intel Xeon E7-4870) clocked at 2.4 GHz, and 512 GB RAM.</p><p>Fuzzing and Fault Localization Using the baseline fuzzer, we discovered multiple out-of-bounds reads and assertion failures in packet parsing code in Open vSwitch. All the discovered flaws were triaged to ascertain their security impact, and subsequently reported upstream and fixed. For each unique vulnerability, we  <ref type="table">Table 1</ref>: Summary of static vulnerability exploration carried out on vulnerabilities found by fuzzing Open vSwitch. For each fuzzer-discovered vulnerability, our prototype generate a vulnerability template, and matched it against the entire codebase.</p><p>used our fault localization module comprising AddressSanitizer, and differential execution slicing, to determine the lines of code triggering the vulnerability.</p><p>Template Matching Using localized code, we automatically generated a template suitable for matching similar code patterns elsewhere in the codebase. For example, the AST snippet shown in Listing 6 was parsed to derive a template for CVE-2017-9264. Subsequently, we used the tool clang-query to perform template matching using the derived template. Listing 7 shows the outcome of template matching for one of the bugs comprising CVE-2017-9264. For each vulnerability that the fuzzer discovered, we counted the number of matches (excluding the known vulnerability itself) returned using template matching. We used semantic template matching only when syntactic template matching was too broad to capture the code pattern underlying the vulnerability. For example, if a program crash was caused by a failed assertion, syntactic templates (that matched calls to all assertion statements), were augmented with semantic templates (that matched a smaller subset of assertion statements involving tainted data types).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Ranking</head><p>The returned matches were ranked using our proposed ranking algorithm (see Algorithm 2), and the ranked output was used as a starting point for manual security audit. Matches ranked high were reviewed first. This enabled us to devote more time to audit untested code, than the code that had already undergone testing.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Analysis Effectiveness</head><p>We evaluated the effectiveness of our approach in two ways: Quantifying (i) the raw false positive rate of our analysis; (ii) the benefit of the proposed ranking algorithm in reducing the effective false positive rate after match ranking was done.</p><p>To quantify the number of raw false positives, we counted the total number of statically explored matches, and the number of true positives among them. A match was deemed a true positive if manual audit revealed that the tainted instruction underwent no prior sanitization and was thus potentially vulnerable. <ref type="table">Table 1</ref> summarizes our findings. Our prototype returned a total of 96 matches for the 7 vulnerabilities found by fuzzing (listed in column 1 of <ref type="table">Table 1</ref>). Out of 96 matches, only one match corresponding to CVE-2017-9264 was deemed a new potential vulnerability. This was reported upstream and subsequently patched <ref type="bibr" target="#b3">[10]</ref>. Moreover, the reported (potential) vulnerability helped OvS developers uncover another similar flaw in the DHCPv6 parsing code that followed the patched UDP flaw.</p><p>Our ranking algorithm ranked untested code over tested code, thereby helping reduce the manual effort involved in validating potential false positives. Although it is hard to correctly quantify the benefit of our ranking algorithm in bringing down the false positive rate, we employ a notion of effective false positive rate. We define the effective false positive rate to be the false positive rate only among highly ranked matches. This is intuitive, since auditing untested code is usually more interesting to a security analyst than auditing code that has already undergone testing. <ref type="table" target="#tab_3">Table 2</ref> summarizes the number of effective false positives due to our analysis. In total, there were 36 matches (out of 96) that were ranked high, bringing down the raw false positive rate by 62%. Naturally, we confirmed that the single true positive was among the highly ranked matches.</p><p>Match ranking helps reduce, but not eliminate the number of false positives. Indeed, 1 correct match out of 36 matches is very low. Having said that, our approach has borne good results in practice, and has helped advance the tooling required for secure coding. The additional patch that our approach contributed to is not the only way in which our approach met this objective. We discovered that the template derived from the vulnera-   <ref type="table">Table 3</ref>: Run times of fault localization, template matching, and match ranking for all statically explored vulnerabilities in Open vSwitch. The absolute and relative (to code compilation) run times for our end-to-end analysis is presented in the final two columns. A normalized run time of 2x denotes that our end-to-end analysis takes twice as long as code compilation.</p><p>bility CVE-2016-10377 present in an earlier version of Open vSwitch (v2.5.0), could have helped eliminate a similar vulnerability <ref type="bibr">(CVE-2017-9264</ref>) that was introduced in a later version (v2.6.1), perhaps during software development itself. We manually checked that, had the newly introduced vulnerability been present in the earlier version of Open vSwitch, it would have been flagged by our tool and ranked high. This shows that our approach is suitable for regression testing. Indeed, OvS developers noted in personal communications with the authors that the matches returned by our tooling not only encouraged reasoning about corner cases in software development, but helped catch bugs (latent vulnerabilities) at an early stage.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Analysis Runtime</head><p>We quantified the run time of our tooling by measuring the total and constituent run times of our workflow steps, starting from fault localization, and template matching, to match ranking. <ref type="table">Table 3</ref> presents our analysis run times for each of the fuzzer-discovered vulnerabilities in Open vSwitch. Since fault localization was done using dynamic tooling (AddressSanitizer/coverage tracing), it was orders of magnitude faster (ranging between 9-111 milliseconds) than the time required for static template matching. For each fuzzer-discovered vulnerability, we measured the template matching run time as the time required to construct and match the vulnerability template against the entire codebase. Template matching run time comprised between 92-99% of the end-to-end runtime of our tooling, and ranged from 1.8 seconds to 57.09 seconds. Syntactic template matching was up to 4x faster than semantic template matching. This conformed to our expectations, as semantic matching is slower due to the need to encode (and check) program data and control flow in addition to its syntactic properties. Nonetheless, our end-to-end vulnerability analysis had a normalized run time (relative to code compilation time) of between 0.2x to 5.97x. The potential vulnerability that our analysis pointed out in untested UDP parsing code, was returned in roughly a third of the time taken for code compilation of the codebase. This shows that our syntactic analysis is fast enough to be applied on each build of a codebase, while our semantic analysis is more suitable to be invoked during daily builds. Moreover, given the low run time of our analysis, templates derived from a vulnerability discovered in a given release may be continuously applied to future versions of the same codebase as part of regression testing.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Related Work</head><p>Our work brings together ideas from recurring vulnerability detection, and program analysis and testing. In the following paragraphs, we compare our work to advances in these areas.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Patch-based Discovery of Recurring Vulnerabilities</head><p>Redebug <ref type="bibr" target="#b9">[16]</ref> and Securesync <ref type="bibr" target="#b15">[22]</ref> find recurring vulnerabilities by using concrete syntax matching of vulnerability templates derived from security patches. Thus, patched vulnerabilities form the basis of their templatebased matching algorithm. In contrast, we template a vulnerability based on program failures (unknown vulnerabilities) discovered by a fuzzer. What makes our setting more challenging is the lack of a reliable code pattern (usually obtained from a patch) to build a template from. As we have shown, it is possible to construct vulnerability templates even in this constrained environment and proactively find additional vulnerabilities.</p><p>Code Clone Detection We are not the first to present a pattern-based approach to vulnerability detection. Yamaguchi et al. <ref type="bibr" target="#b18">[25]</ref> project vulnerable code patterns derived from patched vulnerabilities on to a vector space. This permits them to extrapolate known vulnerabilities in current code, thereby permitting the discovery of recurring vulnerabilities. Other researchers have focused on finding code clones regardless of them manifesting as vulnerabilities <ref type="bibr" target="#b6">[13,</ref><ref type="bibr" target="#b7">14,</ref><ref type="bibr" target="#b12">19,</ref><ref type="bibr" target="#b14">21]</ref>. Code clone detection tools such as CPMiner <ref type="bibr" target="#b13">[20]</ref>, CCFinder <ref type="bibr" target="#b11">[18]</ref>, Deckard <ref type="bibr" target="#b10">[17]</ref> solve the problem of finding code clones but rely on sample code input to be provided. Although these tools serve as a building block for recurring vulnerability discovery, they require that the user specifies the code segment to be matched. In addition, these tools utilize a (disk) serializable code representation to perform code mining. In contrast, we show that (i) vulnerability templates may be automatically derived from a fuzzer corpus, and (ii) fast code mining is feasible without a serializable code representation. For template matching, we leverage an in-memory compiler intermediate representation (AST, CFG), eliminating an upfront code serialization cost. Moreover, our template matching is very fast in practice since it avoids disk reads/writes.</p><p>Hybrid Vulnerability Discovery SAGE <ref type="bibr" target="#b8">[15]</ref> is a white-box fuzz testing tool that combines fuzz testing with dynamic test-case generation. Constraints accumulated during fuzz testing are solved using an SMT solver to generate test cases that the fuzzer alone could not generate. This is expensive because it requires a sophisticated solver. In a similar vein, Driller <ref type="bibr" target="#b17">[24]</ref> augments fuzzing through selectively resorting to symbolic execution when fuzzer encounters coverage bottlenecks. The use of symbolic execution to augment fuzzing is complementary to our approach. In practice, security audits would benefit from both our approach as well as that proposed by prior researchers. Saner <ref type="bibr" target="#b5">[12]</ref> combines static and dynamic analyses towards identifying XSS and SQL injection vulnerabilities in web applications written in PHP. The authors of Saner use static analysis to flag all taint source-sink pairs with incorrect input sanitization, and subsequently use dynamic analysis to discover true positives among these pairs. Although Saner's dynamic analysis is automatically invoked, it depends on a hand-written decision oracle for testing if a potentially vulnerable source-sink pair is indeed vulnerable. In contrast, we side-step the problem of writing such a decision oracle by fuzzing readily available unit tests and deriving vulnerability templates from fuzzer-reported crashes. By avoiding hand-written decision oracles, our technique scales up to different types of taint-style vulnerabilities. Yamaguchi et al. <ref type="bibr" target="#b19">[26]</ref> automatically infer search patterns for taint-style vulnerabilities from source code by combining static analysis and unsupervised machine learning. Their approach helps mine insecure code patterns as traversals on a serialized intermediate representation called the code property graph, enabling them to find 8 zero-day vulnerabilities in production software. In this work, we show that code serialization is not required for vulnerability template matching. In addition, we systematize the means to perform vulnerability exploration by coupling our static analyzer to a fuzzer using automatic fault localization.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Conclusions and Future Work</head><p>Fuzzing is a time-tested technique for discovering taintstyle vulnerabilities in software. However, fuzzing is mainly limited by test coverage, and the availability of fuzzable test cases. In this paper, we leverage static analysis to perform an exhaustive search by using fuzzerdiscovered vulnerabilities as a starting point.</p><p>We use fault localization techniques to narrow down the search for vulnerable code patterns. Subsequently, localized code is used to automatically generate vulnerability templates. False positives have been the primary drawback of static analysis tools. As a remedy, we propose a ranking algorithm that brings attention to potential vulnerabilities in untested code.</p><p>We evaluate our approach on multiple versions of the Open vSwitch codebase, a popular virtual switch used in data centers. Using static exploration of fuzzerdiscovered vulnerabilities, we were able to discover an additional potential vulnerability in untested code. Furthermore, we show that a vulnerability template derived from a dated vulnerability would have helped discover a recurring vulnerability in a later software release. This shows that static vulnerability exploration has the potential to weed out flaws at an early stage of software development. Indeed, our case study highlights the need to complement existing software testing approaches like fuzzing with static analysis.</p><p>Our work leaves open multiple avenues for future work. At present, we rely on manual validation of statically discovered faults. This may be complemented using selective symbolic execution tools such as angr so that additional diagnostics such as path reachability and concrete test input may be obtained. Orthogonally, the precision of our templates can be improved by modeling data sanitization functions more precisely.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: Work-flow of static vulnerability exploration. Templates generated from fault localized code are used to find recurring instances of a fuzzer-discovered vulnerability. The resulting matches are ranked to focus attention on potential recurring vulnerabilities in untested code.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Algorithm 1</head><label>1</label><figDesc>Pseudocode for execution slice based fault localization. 1: function OBTAIN-SLICE(Input, Program) 2: Slice generated using coverage tracer 3: Return lines executed by Program(Input) 4: 5: function OBTAIN-DICE(Slice1, Slice2) 6: dice = Slice1 -Slice2 7: return dice 8: 9: function LOCALIZE-FAILURE(Fault − Input, Program, Fuzz −Corpus) 10: fault-slice = obtain-slice(Fault − Input, Program) 11: nonfault-input = obtain-parent-mutation(Fault − Input, Fuzz −Corpus)</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Listing 4 :</head><label>4</label><figDesc>Stack trace for the buffer overread in UDP packet parsing code obtained using AddressSanitizer.Listing 5: Match returned using automatically generated AST template shows a potentially recurring vulnerability in Open vSwitch 2.6.1. This new flaw was present in the portion of OvS code that lacked a test harness and was found during syntactic template matching. 538 static void 539 p i n c t r l _ h a n d l e _ p u t _ d h c p v 6 _ o p t s ( struct dp_packet 540 * pkt_in , struct o f p u t i l _ p a c k e t _ i n * pin , 541 struct ofpbuf * userdata , struct ofpbuf 542 * continuation OVS_UNUSED ) 543 { 544</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_4"><head></head><label></label><figDesc>DeclRefExpr 0 x32318b0 &lt; col :28 &gt; ' const struct udp_header * ' 10 lvalue Var 0x3231680 'udp' 'const struct udp header *' Listing 7: AST template matching and its output. The code snippet surrounding match #3 is shown in Listing 5. 1 = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = Query = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 2 let member memberExpr ( allOf ( ha sDeclar ation ( namedDecl ( hasName ( " udp_len " ))) , 3 hasDescendant ( declRefExpr ( hasType ( pointsTo ( recordDecl ( hasName ( " udp_header " )))))</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_5"><head></head><label></label><figDesc>for each match in Matches do 12: if isHigh(match, Coverset) then 13: RHigh += match 14: else 15: RLow += match 16: return (RHigh, RLow)</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_0" validated="false"><head>: Template derived from fault localized code (green text) is matched against the test harness source code. Match #2 lists the line of code containing a sim- ilar fault pattern that is likely untested by a fuzzer.</head><label></label><figDesc></figDesc><table>Listing 1: A representative fuzzer test harness in 
+which two synthetic denial of service vulnerabili-
+ties have been introduced by calling the abort() 
+function. Fault localized code is shown in red. 
+
+1 # include &lt; string .h &gt; 
+2 # include &lt; crypt .h &gt; 
+3 # include &lt; stdlib .h &gt; 
+4 # include &lt; unistd .h &gt; 
+5 # define CUSTOM () abort () 
+6 
+void fuzzable ( const char * input ) { 
+7 
+// Fuzzer finds this bug 
+8 
+if (! strcmp ( input , " doom " )) 
+9 
+abort(); 
+10 } 
+11 
+12 
+void cov_bot tleneck ( const char * input ) { 
+13 
+char * hash = crypt ( input , " salt " ); 
+14 
+15 
+// Fuzzer is u n l i k e l y to find this bug 
+16 
+if (! strcmp ( hash , " hash_val " )) 
+17 
+CUSTOM (); // grep misses this 
+18 } 
+19 
+20 
+// Fuzzer test harness 
+21 
+// INPUT : stdin 
+22 
+int main () { 
+23 
+char buf [256]; 
+24 
+memset ( buf , 0 , 256); 
+25 
+read (0 , buf , 255); 
+26 
+fuzzable ( buf ); 
+27 
+cov_bottlene ck ( buf ); 
+28 
+return 0; 
+29 } 
+
+Listing 2</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_2" validated="false"><head>CVE ID Explored matches Ranked high (untested) Reduction in FP (in %)</head><label></label><figDesc></figDesc><table>CVE-2016-10377 
+5 
+0 
+100 
+CVE-2017-9264 
+10 
+0 
+100 
+CVE-2017-9264 
+2 
+2 
+0 
+CVE-2017-9264 
+3 
+0 
+100 
+CVE-2017-9214 
+41 
+17 
+59 
+CVE-2017-9263 
+34 
+17 
+50 
+CVE-2017-9265 
+1 
+0 
+100 
+Total 
+96 
+36 
+62 
+
+</table></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_3" validated="false"><head>Table 2 :</head><label>2</label><figDesc></figDesc><table>Effectiveness of our matching ranking algorithm in highlighting untested code, and assisting in fast review of 
+matches. 
+
+CVE ID 
+Localization Syntactic Semantic Ranking Total Run Time Normalized 
+
+CVE-2016-10377 
+82ms 
+1.66s 
+-
+63ms 
+1.80s 0.20x 
+CVE-2017-9264 (TCP) 
+84ms 
+3.20s 
+-
+64ms 
+3.34s 0.25x 
+CVE-2017-9264 (UDP) 
+86ms 
+4.77s 
+-
+59ms 
+4.91s 0.37x 
+CVE-2017-9264 (IPv6) 
+91ms 
+4.71s 
+-
+60ms 
+4.86s 0.36x 
+CVE-2017-9214 
+9ms 
+8.44s 
+44.17s 
+60ms 
+52.67s 5.51x 
+CVE-2017-9263 
+9ms 
+11.88s 
+44.26s 
+59ms 
+57.09s 5.97x 
+CVE-2017-9265 
+111ms 
+5.74s 
+-
+56ms 
+5.9s 0.62x 
+
+</table></figure>
+
+			<note place="foot" n="1"> An execution slice is the set of source lines of code/branches executed by a given input.</note>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Clang</surname></persName>
+		</author>
+		<ptr target="https://clang-analyzer.llvm.org/.Accessed:25/5/2017" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Clang/Llvm Sanitizercoverage</surname></persName>
+		</author>
+		<ptr target="https://clang.llvm.org/docs/SanitizerCoverage.html.Accessed:23/5/2017" />
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title level="m" type="main">gcov: A test coverage program (online documentation)</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+				<ptr target="https://mail.openvswitch.org/pipermail/ovs-dev/2017-May/332712.Accessed:24/5/2017" />
+		<title level="m">pinctrl: Be more careful in parsing dhcpv6 and dns</title>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Fault localization using execution slices and dataflow tests</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Agrawal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">R</forename><surname>Horgan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>London</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">W</forename><forename type="middle">E</forename><surname>Wong</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Software Reliability Engineering</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="1995" />
+			<biblScope unit="page" from="143" to="151" />
+		</imprint>
+	</monogr>
+	<note>Sixth International Symposium on</note>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Saner: Composing static and dynamic analysis to validate sanitization in web applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Balzarotti</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Cova</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">V</forename><surname>Felmetsger</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Jovanovic</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Kirda</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Kruegel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Vigna</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2008 IEEE Symposium on Security and Privacy</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2008" />
+			<biblScope unit="page" from="387" to="401" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">Clone detection using abstract syntax trees</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">I</forename><forename type="middle">D</forename><surname>Baxter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Yahin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Moura</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Sant&amp;apos;anna</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Bier</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings., International Conference on</title>
+		<meeting>International Conference on</meeting>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="1998" />
+			<biblScope unit="page" from="368" to="377" />
+		</imprint>
+	</monogr>
+	<note>Software Maintenance</note>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Comparison and evaluation of clone detection tools</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Bellon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Koschke</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Antoniol</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Krinke</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Merlo</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Transactions on software engineering</title>
+		<imprint>
+			<biblScope unit="volume">33</biblScope>
+			<biblScope unit="issue">9</biblScope>
+			<date type="published" when="2007" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">Sage: whitebox fuzzing for security testing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">P</forename><surname>Godefroid</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><forename type="middle">Y</forename><surname>Levin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Molnar</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Queue</title>
+		<imprint>
+			<biblScope unit="volume">10</biblScope>
+			<biblScope unit="issue">1</biblScope>
+			<biblScope unit="page">20</biblScope>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Redebug: finding unpatched code clones in entire os distributions</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Jang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Agrawal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Brumley</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Security and Privacy (SP), 2012 IEEE Symposium on</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="48" to="62" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Deckard: Scalable and accurate tree-based detection of code clones</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Jiang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Misherghi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Su</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Glondu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 29th international conference on Software Engineering</title>
+		<meeting>the 29th international conference on Software Engineering</meeting>
+		<imprint>
+			<publisher>IEEE Computer Society</publisher>
+			<date type="published" when="2007" />
+			<biblScope unit="page" from="96" to="105" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Ccfinder: a multilinguistic token-based code clone detection system for large scale source code</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><surname>Kamiya</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Kusumoto</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Inoue</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Transactions on Software Engineering</title>
+		<imprint>
+			<biblScope unit="volume">28</biblScope>
+			<biblScope unit="issue">7</biblScope>
+			<biblScope unit="page" from="654" to="670" />
+			<date type="published" when="2002" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Pattern matching for clone and concept detection</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><forename type="middle">A</forename><surname>Kontogiannis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Demori</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">E</forename><surname>Merlo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Galler</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Bernstein</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Reverse engineering</title>
+		<imprint>
+			<publisher>Springer</publisher>
+			<date type="published" when="1996" />
+			<biblScope unit="page" from="77" to="108" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">Cp-miner: Finding copy-paste and related bugs in large-scale software code</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Z</forename><surname>Li</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Lu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Myagmar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Zhou</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">IEEE Transactions on software Engineering</title>
+		<imprint>
+			<biblScope unit="volume">32</biblScope>
+			<biblScope unit="issue">3</biblScope>
+			<biblScope unit="page" from="176" to="192" />
+			<date type="published" when="2006" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">Identification of high-level concept clones in source code</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Marcus</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><forename type="middle">I</forename><surname>Maletic</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings. 16th Annual International Conference on</title>
+		<meeting>16th Annual International Conference on</meeting>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2001" />
+			<biblScope unit="page" from="107" to="114" />
+		</imprint>
+	</monogr>
+	<note>Automated Software Engineering</note>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Detection of recurring software vulnerabilities</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><forename type="middle">H</forename><surname>Pham</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">T</forename><surname>Nguyen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><forename type="middle">A</forename><surname>Nguyen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">N</forename><surname>Nguyen</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the IEEE/ACM international conference on Automated software engineering</title>
+		<meeting>the IEEE/ACM international conference on Automated software engineering</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="447" to="456" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">Addresssanitizer: A fast address sanity checker</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Serebryany</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Bruening</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Potapenko</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">D</forename><surname>Vyukov</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. USENIX Annual Technical Conference (ATC)</title>
+		<meeting>USENIX Annual Technical Conference (ATC)</meeting>
+		<imprint>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="28" to="28" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Driller: Augmenting fuzzing through selective symbolic execution</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><surname>Stephens</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Grosen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Salls</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Dutcher</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">R</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">J</forename><surname>Corbetta</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><surname>Shoshitaishvili</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">C</forename><surname>Kruegel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Vigna</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Network and Distributed System Security Symposium</title>
+		<meeting>the Network and Distributed System Security Symposium</meeting>
+		<imprint>
+			<date type="published" when="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Generalized vulnerability extrapolation using abstract syntax trees</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Yamaguchi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">M</forename><surname>Lottmann</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Rieck</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 28th Annual Computer Security Applications Conference</title>
+		<meeting>the 28th Annual Computer Security Applications Conference</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="359" to="368" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Automatic inference of search patterns for taint-style vulnerabilities</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">F</forename><surname>Yamaguchi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Maier</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">H</forename><surname>Gascon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">K</forename><surname>Rieck</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Security and Privacy (SP), 2015 IEEE Symposium on</title>
+		<imprint>
+			<publisher>IEEE</publisher>
+			<date type="published" when="2015" />
+			<biblScope unit="page" from="797" to="812" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

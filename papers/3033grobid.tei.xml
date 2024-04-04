@@ -1,0 +1,1019 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:58+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">In support of workload-aware streaming state management</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author role="corresp">
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vasiliki</forename><surname>Kalavri</surname></persName>
+							<email>vkalavri@bu.edu</email>
+							<affiliation key="aff0">
+								<orgName type="institution">Boston University</orgName>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><surname>Liagouris</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">Boston University</orgName>
+							</affiliation>
+							<affiliation key="aff1">
+								<orgName type="institution">Hariri Institute for Computing</orgName>
+							</affiliation>
+						</author>
+						<title level="a" type="main">In support of workload-aware streaming state management</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Modern distributed stream processors predominantly rely on LSM-based key-value stores to manage the state of long-running computations. We question the suitability of such general-purpose stores for streaming workloads and argue that they incur unnecessary overheads in exchange for state management capabilities. Since streaming operators are instantiated once and are long-running, state types, sizes, and access patterns, can either be inferred at compile time or learned during execution. This paper surfaces the limitations of established practices for streaming state management and advocates for configurable streaming backends, tailored to the state requirements of each operator. Using workload-aware state management, we achieve an order of magnitude improvement in p99 latency and 2x higher throughput.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Any non-trivial streaming computation maintains and continuously updates state: rolling aggregations, synopses, window contents, triggers and timers. To support larger-than-memory state, streaming dataflow systems rely on data partitioning and (embedded) persistent key-value stores. The most prominent store is RocksDB <ref type="bibr" target="#b2">[4]</ref>, used by open-source systems such as Apache Spark Structured Streaming <ref type="bibr" target="#b7">[9]</ref>, Apache Flink <ref type="bibr" target="#b11">[13]</ref>, Apache Kafka <ref type="bibr" target="#b0">[2]</ref>, and Apache Samza <ref type="bibr" target="#b26">[27]</ref>, as well as Facebook's Stylus <ref type="bibr" target="#b16">[17]</ref>. RocksDB has been widely adopted by many stream processors due to its solid performance on SSDs, incremental checkpointing capabilities, robustness, and active community. However, it was not designed with streaming workloads in mind.</p><p>We argue that the state management capabilities generalpurpose stores provide to streaming applications come at considerable cost. The established monolithic approach to streaming state management is problematic: one type of state store (either RocksDB or in-memory) manages the state of all dataflow operators. Some operators, such as joins, accumulate large state and benefit form efficient range scans, while others, such as rolling counters, store small state and need efficient inplace updates. Yet, state requests are served by stores which are configured in a manner oblivious to each operator's state types, sizes, and access patterns.</p><p>With this paper, we advocate for workload-aware state management. The central idea is to exploit the fact that streaming dataflow operators are instantiated once and are long-running. Thus, their access patterns and state size bounds are largely known in advance. We believe that streaming systems would greatly benefit from novel configurable state stores, supporting different physical layouts and data types, and capable of leveraging knowledge about operator state characteristics.</p><p>As a proof of concept in support of workload-aware state management, we build a testbed that allows defining custom state stores per operator and we use it to compare state management strategies. As an alternative to RocksDB, we experiment with FASTER <ref type="bibr" target="#b13">[15]</ref>, a recent key-value store backed by a cache-optimized hash index with efficient in-place updates and support for custom data types. Our testbed is implemented on top of Timely dataflow <ref type="bibr" target="#b18">[19]</ref>, a high-performance streaming dataflow engine written in Rust.</p><p>To quantify the benefits of workload-aware state management, we compare RocksDB and FASTER on window operators and stateful queries from a streaming benchmark suite. Our evaluation shows that not one store fits all when it comes to streaming workloads. Although FASTER's in-place updates favor some queries, RocksDB's lazy evaluation is superior for others. Using FASTER instances with explicit type information and tailored to the needs of individual operators, we achieve an order of magnitude improvement in p99 latency and 2x higher throughput.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">State management in streaming dataflows</head><p>We first revisit the fundamentals of dataflow stream processing and then describe established practices for streaming state management. The dataflow model described below applies with minor variations to the majority of distributed stream processors supporting data-parallelism and local state, such as Apache Flink, Kafka, Samza, and Timely dataflow. Stream processors with external state management are briefly discussed in Section 2.2.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">The dataflow programming model</head><p>A dataflow stream processor executes data-parallel computations on shared-nothing architectures. A program is represented as a logical directed graph G = (V, E), where vertices in V denote operators and edges in E are data dependencies. Upon deployment, the logical graph is translated to a physical execution plan, G = (V , E ), which maps dataflow operators to provisioned workers. We call vertices in V tasks of an operator in V and edges in E physical data channels. One or more tasks of the same or different operators can be assigned to the same worker, and the assignment strategy is systemspecific. The assignment is computed at deployment time and remains static throughout job execution, unless a reconfiguration occurs. Tasks are scheduled once and are long-running. <ref type="figure" target="#fig_0">Figure 1</ref> shows the logical graph and corresponding physical plan for Nexmark Q4 <ref type="bibr" target="#b1">[3,</ref><ref type="bibr" target="#b31">31]</ref>. The query joins a stream of auctions and a stream of bids and outputs a rolling average of winning bid prices for each auction category. The provisioned workers, w1, w2, execute parallel tasks as indicated by the enclosing rectangles, and each owns an embedded store to manage state. The join and average operators are stateful and data-parallel, so that each worker operates on disjoint partitions of the input streams.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">State management</head><p>A streaming application can define and maintain different types of state throughout its lifetime, including partial results, sketches, buffered tuples in window buckets, triggers, timers, and notifications. A state backend defines the physical location where streaming state resides. The backend type determines how state is organized into data structures, its maximum supported size, and whether it is guarded against failures. For instance, an in-memory backend keeps working state in memory and, thus, the maximum supported state size is limited. A database backend keeps working state in an embedded key-value store and leverages the disk to support larger-than-memory state.</p><p>Users interact with state through APIs provided by the stream processor. Those allow defining state primitives of different types, such as lists, maps, and arbitrary values. Most dataflow programming models assume a key-value schema for input records <ref type="bibr" target="#b7">[9,</ref><ref type="bibr" target="#b11">13,</ref><ref type="bibr" target="#b12">14,</ref><ref type="bibr" target="#b19">20,</ref><ref type="bibr" target="#b24">25]</ref> and always associate state with a key. The API also enforces state scopes, which determine the accessibility of state through the application.</p><p>The assignment of tasks to worker threads shown in <ref type="figure" target="#fig_0">Fig- ure 1</ref> has significant implications to state scoping. The runtime guarantees that input records with the same key will be processed by the same task. As a result, any state associated with a particular key is read and modified by a single worker at any point in time. By employing data parallelism, the dataflow model provides single-writer isolation to state. Thus, it is crucial that any key-value store used as a streaming backend provides excellent single-thread performance.</p><p>External state management. An alternative to managing state inside the stream processor is essentially making all operators stateless and externalizing all intermediate data. While this design simplifies fault-tolerance and re-configuration, it induces higher latency and presumes access to a highly available and scalable external state store. Some systems that follow this approach include Storm <ref type="bibr" target="#b30">[30]</ref>, which can spill state to HDFS or Cassandra <ref type="bibr" target="#b4">[6]</ref>, and MillWheel <ref type="bibr" target="#b6">[8]</ref> that uses BigTable <ref type="bibr" target="#b14">[16]</ref>. For further details, we refer interested readers to a recent survey on streaming state management <ref type="bibr" target="#b28">[29]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3">Flaws of monolithic state management</head><p>Stream processors use embedded stores as out-of-the-box solutions for state management. This straw man approach restricts applications to using one type of backend, which is configured globally for all dataflow operators, regardless of their state requirements 1 . In this section, we summarize the drawbacks of this monolithic design.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.1">Unnecessary data marshalling</head><p>An evident issue with storing multiple operator states in the same store is the requirement to manage keys and values of different types. To support arbitrary types, RocksDB maintains all in-memory and disk-resident data as byte arrays. This eager de/serialization approach means that every state access includes one or more data marshalling operations, all of which are on the critical path of the request. A recent study <ref type="bibr" target="#b22">[23]</ref> finds that Flink spends 20% of execution time de/serializing RocksDB data of non-primitive types (e.g., Vec&lt;String&gt;), while similar results are shown in other works as well <ref type="bibr" target="#b5">[7]</ref>. Samza tries to mitigate this overhead by maintaining a cache <ref type="bibr" target="#b27">[28]</ref>.</p><p>While a well-designed cache policy can avoid some data marshalling, we believe this task must be the responsibility of the state store. State types in streaming dataflow applications are known at compile time and do not change during execution. If each primitive is backed by a dedicated store, in-memory data can be kept in their native format, incurring de/serialization only when fetching or flushing pages from/to disk, asynchronously.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.2">Oblivious store configuration</head><p>The second major issue with monolithic state management is that all state stores in a streaming job use the same configuration, regardless of the access patterns and size requirements of the operators they serve. This is problematic, as operators in a dataflow can have vastly different behavior in terms of state. For example, in the query of <ref type="figure" target="#fig_0">Fig. 1</ref>, the join is write-heavy and can potentially accumulate large state, while the aggregation performs two read-modify-write operations per input event and its state can fit in memory. A write-optimized store capable of spilling state to disk is suitable for managing the join state, while a hash-based in-memory store with in-place updates would fit the rolling aggregation better.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="3.3">Unnecessary store features</head><p>Streaming backends do not need all sophisticated features of general-purpose key-value stores. In case we use one backend per operator task or state primitive, there is no need to support concurrent external requests within the backend, since dataflow systems already guarantee single-thread access to state. Although concurrency control does not affect singlethread performance in practice, it introduces unnecessary complexity and maintenance overhead. Similar simplifications are also possible for other features of existing key-value stores. For instance, the performance of deletes can be significantly improved by leveraging the knowledge of streaming operators. In the case of windows, the backend can simply purge the entire window state when it expires.</p><p>The following operations are handled by dataflow systems already and need not be implemented in state backends:</p><p>State partitioning is performed according to the input data partitioning functions used by shuffling operators. State scoping is enforced by the dataflow state APIs, which abstract store operations and provide access to per-key local state only. Per-key read/write isolation is guaranteed by the dataflow model. Worker threads process disjoint data partitions, thus, each key will always be accessed by a single thread.</p><p>Checkpointing is coordinated by the streaming runtime which uses locks and synchronization mechanisms to copy the state. Stream processors implement global snapshot algorithms <ref type="bibr" target="#b11">[13]</ref> and do not rely on key-value stores for fault-tolerance.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">A flexible testbed for state management</head><p>To explore the potentials of a more flexible state management approach, we have implemented a testbed on top of the Timely Dataflow stream processor <ref type="bibr" target="#b18">[19]</ref>. Timely is a Rust implementation of Naiad <ref type="bibr" target="#b25">[26]</ref> and allows for a fair performance evaluation, free from runtime and JNI overheads or other incompatibility issues present in JVM-based systems. For example, Flink's JNI bridge to RocksDB imposes a maximum key-value pair size of 2.2GB 2 . This limit may be too restrictive in some cases. A window operator can represent its state as a key-value pair, where the key is the start or end timestamp and the value contains the window contents, whose size may exceed 2.2GB (cf. Section 5.1). Further, custom merge comparators are not supported in Java, as RocksDB expects C++ code. Custom merge comparators are used by RocksDB for lazy evaluation in the merge operator. Merging is semantically equivalent to a Read-Modify-Write operation: each time a key-value pair is added to the database using merge, the pair is appended to the mutable mem-table and the actual value update is performed "lazily" during compaction (if any) or upon a get for the respective key, by calling the comparator function. Our testbed does not have any of the above restrictions, it minimizes the FFI overhead when interacting with the key-value store, and allows defining custom RocksDB comparators directly in Rust. Currently, the testbed supports three types of backends: inmemory, RocksDB, and FASTER. We use a wrapper around FASTER's C++ library <ref type="bibr">[1]</ref> to expose its interface for accessing the key-value store and performing internal operations. For the integration with RocksDB, we use the Rust wrapper <ref type="bibr" target="#b3">[5]</ref>. We also provide a versatile API so that users can define basic state primitives in their streaming dataflows, including ManagedCount (for counters), ManagedValue (for arbitrary values), and ManagedMap (for maps) <ref type="bibr" target="#b9">[11]</ref>. <ref type="figure" target="#fig_1">Figure 2</ref> illustrates how users can take advantage of flexible state management with our API and testbed. Each operator can define one or more individually configured state stores, instantiated with specific types. Store configuration is currently manual, but we are working on automating this process by leveraging knowledge about the computation.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Experimental evaluation</head><p>We present a set of evaluation results with RocksDB and FASTER using our state management testbed <ref type="bibr" target="#b1">3</ref> . The evaluation does not aim to thoroughly compare RocksDB with FASTER but to showcase that not one store fits all streaming workloads. We demonstrate the effect of a backend's data layout when evaluating window operators in § 5.1 and the effect of leveraging knowledge about types, state sizes, and state accesses in § 5.2. The evaluation is focused on tail latency, as the major performance metric for real-time streaming applications, and on single-thread performance, as the dataflow model guarantees per-key read/write isolation ( § 3.3). To provide a clear picture of tail latency, we use complementary CDFs (CCDFs): a (x, y) point indicates that y% of records have at least x ms end-to-end latency. Thus, the lines at y = 10 −1 and y = 10 −2 correspond to p90 and p99 latency, respectively. We briefly discuss throughput and multi-worker dataflows in § 5.2.</p><p>Benchmarks. We use the Nexmark streaming benchmark <ref type="bibr" target="#b31">[31,</ref><ref type="bibr" target="#b32">32]</ref>. Queries include an incremental join (Q3), window joins (Q4, Q6, Q8), and custom window aggregations (Q5, Q7).</p><p>Experimental setup. We use Timely 0.9.0, compiled with Rust 1.37.0, the latest FASTER C++ version from <ref type="bibr">[1]</ref>, and the RocksDB Rust wrapper (0.12.4) <ref type="bibr" target="#b3">[5]</ref>. We configure FASTER with a 128MB hash index and 8GB in-memory log, where 10% (resp. 90%) is given to the immutable (resp. mutable) region, as in the FASTER paper <ref type="bibr" target="#b13">[15]</ref>. RocksDB is <ref type="bibr" target="#b1">3</ref> Available at https://github.com/jliagouris/wassm configured with 128KB block size, 2 mem-tables of 4GB each, a 256MB LRU cache, and a 100MB hash block index. We use c5d.2xlarge and r5d.12xlarge instances on Amazon EC2, for single-thread and multi-thread experiments, respectively. </p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.1">The effect of data layout on windows</head><p>Any streaming state management backend needs to efficiently support windows, as they are perhaps the most common streaming operators. Windows enable evaluation of blocking computations, such as aggregations and joins on streams, and provide continuous fresh results to applications. For the purpose of this paper, we consider fixed windows which can be identified by their start and end timestamps. Windowing splits unbounded inputs into a series of bounded sets of records and we say that a window triggers when the system's notion of time arrives at its end timestamp. At this point, the window produces results and deletes its state. Window evaluation functions can be applied eagerly, upon receiving a new record that belongs to the window, or lazily, on trigger.</p><p>We evaluated various strategies and window functions and concluded that there is no clear winner between LSM-based and hash-based approaches. Nevertheless, we identified the parameters which affect performance and can guide the design of a configurable, workload-aware store. Our results indicate that FASTER performs better than RocksDB across configurations for eager aggregations, especially for large sliding windows. As for holistic aggregations, RocksDB's merge performs best across configurations and, it is the only approach that can keep up with high input rates. In the interest of space, we discuss only one representative experiment.</p><p>We evaluate RANK, a holistic aggregation that fetches the entire window contents on trigger, and COUNT, which can be eagerly computed to maintain a single value per window. We run each experiment for 10 minutes in an open loop and measure the end-to-end latency per record. The input rate was set to 1K rec/s for RANK and 10K rec/s for COUNT. In both operators, the state is organized as follows: the key is the window start timestamp and the value is the window content (a vector of integers in RANK and a single integer in COUNT). <ref type="figure" target="#fig_2">Figure 3</ref> plots the latency CCDF for a sliding and a tumbling window. For every input record, the operator performs one read-modify-write operation for each active window state <ref type="bibr" target="#b2">4</ref> . While FASTER supports in-place updates, RocksDB issues either a pair of get + put operations or a merge, depending on the implementation. On trigger, the operator retrieves the window contents with one get operation and then purges state. FASTER performs best for COUNT (100× lower p99 latency than RocksDB MERGE) as it can leverage fast lookups with in-place updates. For RANK, FASTER and RocksDB with PUT/GET continuously remove and reinsert growing vectors of integers, while lazy evaluation with RocksDB MERGE pays off (p99 latency is orders of magnitude lower than FASTER's).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5.2">State types, sizes, and access patterns</head><p>To showcase the additional benefits of workload-aware store configuration, we use carefully configured implementations of Nexmark queries that leverage knowledge about (i) k-v types (to reduce de/serialization), and (ii) state size and access patterns. FASTER was superior to RocksDB in all these queries, thus, our implementations use FASTER; in particular, one instance per primitive configured according to <ref type="table" target="#tab_1">Table 2</ref>. The monolithic baseline uses one FASTER instance per worker configured as described in the experimental setup. We use 1M rec/s input rate for Q3, Q7 and Q8, and 10K rec/s for Q4-6.</p><p>The first set of experiments evaluates single-thread latency for monolithic and workload-aware configurations. Then, we evaluate scaling with respect to the input rate (throughput) and the number of parallel workers.</p><p>Single-thread latency. <ref type="figure" target="#fig_3">Figure 4</ref> shows the latency CCDFs for Q3, Q4, Q5, and Q7 run with a single worker thread (Q6 has almost identical behavior to that of Q4, and Q8 accumulates Query Configuration Q3 1GB (people), 7GB (auctions) Q4 6GB (bids), 1.5GB (auctions), 512MB (average) Q5 6GB (additions), 1GB (deletions) 512MB (accumulations), 512MB (hot items) Q6 6GB (bids), 1.5GB (auctions), 512MB (average) Q7 6GB (pre-reduce), 2GB (all-reduce) Q8 4GB (people), 4GB (auctions)  negligible state). <ref type="table">Table 1</ref> summarizes the p99 latency and speedup for all queries and state management approaches. The workload-aware implementation achieves significant p99 latency speedups for many queries: 14× for Q5 and 6× for Q4, Q6. Q3 has a 10× speedup as well, for higher percentiles.</p><p>To understand the source of performance improvements, we describe how our workload-aware implementations compare to the monolithic ones. Primitives that can grow arbitrarily and accumulate larger-than-memory state are backed by a dedicated FASTER store that is instantiated with the respective data types. For example, each of the two join inputs in Q3 (people and auction streams) has its own FASTER instance. The instances are typed after the stream they manage and their configuration is shown in <ref type="table" target="#tab_1">Table 2</ref>. In Q3, most of the available memory is allocated to the auctions state, as auctions accumulate faster than people. As shown in <ref type="figure" target="#fig_3">Fig. 4a</ref>, this optimization pays off for the tail latency, where we see more than 10× speedup. The benefit is more evident for Q4 <ref type="figure" target="#fig_3">(Fig. 4b)</ref> and Q7 <ref type="figure" target="#fig_3">(Fig. 4d)</ref>. In Q5, we split state further and use two more primitives with dedicated FASTER backends for auction counts and hot items (cf. <ref type="table" target="#tab_1">Table 2</ref>). Small state with bounded size, such as the computation progress in Q8, is kept in memory.</p><p>Throughput vs latency. <ref type="figure" target="#fig_4">Fig. 5a</ref> plots the median per-record latency for Q7 for increasing input rates. We vary the input rate from 100K rec/s up to 2M rec/s, on a single thread. The latency of the workload-aware implementation scales better with increasing throughput and remains below 1ms for up to 1M rec/s. Further, with the workload-aware implementation, a single thread can comfortably sustain a 2M rec/s input rate with a median latency of 1.3ms. That is 2× higher throughput than the monolithic approaches, which cannot keep up with input rates over 1M rec/s.</p><p>Multiple worker threads. To confirm that the benefits of workload-aware implementation persist in multi-worker dataflows, we run Q7 with an increasing number of worker threads <ref type="bibr">(1)</ref><ref type="bibr" target="#b0">(2)</ref><ref type="bibr" target="#b1">(3)</ref><ref type="bibr" target="#b2">(4)</ref><ref type="bibr" target="#b3">(5)</ref><ref type="bibr" target="#b4">(6)</ref><ref type="bibr" target="#b5">(7)</ref><ref type="bibr" target="#b6">(8)</ref><ref type="bibr" target="#b7">(9)</ref><ref type="bibr" target="#b8">(10)</ref><ref type="bibr" target="#b9">(11)</ref><ref type="bibr" target="#b10">(12)</ref><ref type="bibr" target="#b11">(13)</ref><ref type="bibr" target="#b12">(14)</ref><ref type="bibr" target="#b13">(15)</ref><ref type="bibr" target="#b14">(16)</ref>, in an open-loop setting, with input rate fixed at 1M rec/s. Note that the dataflow model still ensures singlethread isolation to state, however, the number of key-value store instances sharing the resources of the same machine increases significantly. The monolithic approach uses one FASTER instance per worker, whereas the workload-aware uses two (cf. <ref type="table" target="#tab_1">Table 2</ref>). <ref type="figure" target="#fig_4">Fig. 5b</ref> plots the median per-record latency. The workload-aware implementation scales similarly to the monolithic and remains consistently better as we increase the number of workers.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="6">Conclusion</head><p>Workload-aware streaming state management can boost performance, beyond avoiding data marshalling costs. A careful assignment of state backends to primitives not only reduces latency but also improves throughput and scalability. Our results motivate the need for configurable streaming backends, in the spirit of the recent developments on designing data structures tailored around a particular workload <ref type="bibr" target="#b20">[21,</ref><ref type="bibr" target="#b21">22]</ref>.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="7">Discussion</head><p>One store that fits all or many? An open question towards implementing workload-aware state management for a production-ready stream processor is whether it is worth designing a new stream-optimized key-value store from scratch. One could argue that a selected set of existing key-value stores can be plugged-in via a flexible API like the one we discuss in Section 4. It certainly appears that a store like RocksDB could serve range queries and lazy evaluation whereas a store like FASTER could be used for operators with frequent point lookups and in-place updates. However, this approach introduces undesirable project dependencies for the streaming system and does not account for changes in state characteristics (e.g. due to increased input rates) that might make pre-configured backends unsuitable over time.</p><p>Streaming state benchmarks. Despite the fact that keyvalue stores are an integral component of streaming systems and crucial to their performance, their suitability for streaming state management has not been studied prior to this paper. In fact, no benchmark exists that captures the workload characteristics and temporal locality of streaming applications.</p><p>Existing key-value store evaluations <ref type="bibr" target="#b8">[10,</ref><ref type="bibr" target="#b13">15,</ref><ref type="bibr" target="#b23">24]</ref> focus on multi-threaded performance and use request-driven benchmarks, such as YCSB <ref type="bibr" target="#b17">[18]</ref>, which is oblivious to key-space locality <ref type="bibr" target="#b10">[12]</ref>. Such benchmarks and metrics cannot provide reliable results for data-parallel stream processors, which instead execute continuous queries, perform single-thread state access, and issue frequent deletions (e.g. for windows).</p><p>Fault-tolerance and re-configuration. Even though stream processors that implement their own checkpointing mechanisms do not rely on key-value stores for providing exactlyonce guarantees upon failures, certain store features are still desirable. Besides reads and writes in regular processing, a streaming engine must also support efficient state operations for fault-tolerance and re-configuration. Those include quick copies, incremental checkpointing, state migration upon repartitioning, and bulk loads for quick recovery. For example, although RocksDB supports incremental checkpoints (at the SST level) by leveraging key order, hash-based stores, such as FASTER, do not. How to support all these operations efficiently within the same key-value store is an open question.</p><p>Extracting and/or learning state characteristics. The queries of Section 5 use built-in operators, however, most real streaming computations include operators with UDFs. One option to infer state access patterns in UDFs is to use static code analysis. This approach can be further combined with online learning techniques to infer data-dependent access patterns and changes in state characteristics. Learning access patterns with temporal dependencies in a streaming setting is an interesting direction for future research.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: Logical and physical dataflow plans. Each parallel worker executes one or more stateful tasks and manages their state via an embedded k-v store instance.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_1"><head>Figure 2 :</head><label>2</label><figDesc>Figure 2: With flexible state management, each task can define multiple state stores of different types and configurations. Each instance of the join operator has two backends, one for each of its input streams.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_2"><head>Figure 3 :</head><label>3</label><figDesc>Figure 3: RocksDB vs FASTER latency CCDFs for (a) a sliding window of 30s length and 1s slide with incremental aggregation and (b) a tumbling window of 30s length with holistic aggregation.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_3"><head>Figure 4 :</head><label>4</label><figDesc>Figure 4: Latency CCDFs for monolithic vs. workload-aware implementation of Nexmark queries using FASTER.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_4"><head>Figure 5 :</head><label>5</label><figDesc>Figure 5: Q7 latency with monolithic and workload-aware state management over (a) throughput and (b) varying number of workers.</figDesc></figure>
+<figure xmlns="http://www.tei-c.org/ns/1.0" type="table" xml:id="tab_1" validated="false"><head>Table 2 :</head><label>2</label><figDesc></figDesc><table>Memory given to FASTER instances in workload-aware 
+implementations of the Nexmark queries from [32]. 
+
+0 
+
+0.5 
+
+1 
+
+1.5 
+
+2 
+
+0 
+500 
+1000 
+1500 
+2000 
+
+Latency [ms] 
+
+Throughput [Krec/s] 
+
+FASTER 
+RocksDB 
+Workload-aware 
+
+(a) Median latency vs throughput 
+
+0 
+
+0.5 
+
+1 
+
+1.5 
+
+2 
+
+2 
+4 
+6 
+8 
+10 
+12 
+14 
+16 
+
+Latency [ms] 
+
+#workers 
+
+FASTER 
+RocksDB 
+Workload-aware 
+
+</table></figure>
+
+			<note place="foot" n="1"> Flink&apos;s recent release (1.10) provides some flexibility, as it allows users to partially configure RocksDB column families (one per state primitive).</note>
+
+			<note place="foot" n="2"> https://ci.apache.org/projects/flink/ flink-docs-release-1.10/ops/state/state_backends.html# the-rocksdbstatebackend</note>
+
+			<note place="foot" n="4"> Note that several windows can be active (open) at the same time, as stream processors support asynchronous execution and out-of-order streams.</note>
+		</body>
+		<back>
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<monogr>
+		<title level="m" type="main">Kafka Streams Internal Data Management</title>
+		<ptr target="https://cwiki.apache.org/confluence/display/KAFKA/Kafka+Streams+Internal+Data+Management.LastAccess" />
+		<imprint>
+			<date type="published" when="2020-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Nexmark Benchmark Suite</surname></persName>
+		</author>
+		<ptr target="https://beam.apache.org/documentation/sdks/java/testing/nexmark/.Lastaccess" />
+		<imprint>
+			<date type="published" when="2020-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Rocksdb</surname></persName>
+		</author>
+		<ptr target="https://rocksdb.org/.Lastaccess" />
+		<imprint>
+			<date type="published" when="2020-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Rocksdb Rust Wrapper</surname></persName>
+		</author>
+		<ptr target="https://github.com/rust-rocksdb/rust-rocksdb.Lastaccess" />
+		<imprint>
+			<date type="published" when="2020-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Apache</forename><surname>Cassandra</surname></persName>
+		</author>
+		<ptr target="http://cassandra.apache.org,2020.Lastaccess" />
+		<imprint>
+			<date type="published" when="2020-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title level="a" type="main">Fast key-value stores: An idea whose time has come and gone</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Atul</forename><surname>Adya</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><surname>Grandl</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Daniel</forename><surname>Myers</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Henry</forename><surname>Qin</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the Workshop on Hot Topics in Operating Systems, HotOS &apos;19</title>
+		<meeting>the Workshop on Hot Topics in Operating Systems, HotOS &apos;19<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2019" />
+			<biblScope unit="page" from="113" to="119" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<analytic>
+		<title level="a" type="main">MillWheel: Fault-tolerant Stream Processing at Internet Scale</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tyler</forename><surname>Akidau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Alex</forename><surname>Balikov</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kaya</forename><surname>Bekiro˘ Glu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Slava</forename><surname>Chernyak</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Josh</forename><surname>Haberman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Reuven</forename><surname>Lax</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sam</forename><surname>Mcveety</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Daniel</forename><surname>Mills</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Paul</forename><surname>Nordstrom</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sam</forename><surname>Whittle</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the the VLDB Endowment</title>
+		<meeting>the the VLDB Endowment</meeting>
+		<imprint>
+			<date type="published" when="2013-08" />
+			<biblScope unit="volume">6</biblScope>
+			<biblScope unit="page" from="1033" to="1044" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Structured streaming: A declarative api for real-time applications in apache spark</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Armbrust</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tathagata</forename><surname>Das</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Joseph</forename><surname>Torres</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Burak</forename><surname>Yavuz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shixiong</forename><surname>Zhu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Reynold</forename><surname>Xin</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ali</forename><surname>Ghodsi</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2018 International Conference on Management of Data, SIGMOD &apos;18</title>
+		<meeting>the 2018 International Conference on Management of Data, SIGMOD &apos;18<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="601" to="613" />
+		</imprint>
+	</monogr>
+	<note>Ion Stoica, and Matei Zaharia</note>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<analytic>
+		<title level="a" type="main">SILK: Preventing latency spikes in log-structured merge key-value stores</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Oana</forename><surname>Balmau</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Florin</forename><surname>Dinu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Willy</forename><surname>Zwaenepoel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Karan</forename><surname>Gupta</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ravishankar</forename><surname>Chandhiramoorthi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Diego</forename><surname>Didona</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">2019 USENIX Annual Technical Conference (USENIX ATC 19)</title>
+		<meeting><address><addrLine>Renton, WA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2019-07" />
+			<biblScope unit="page" from="753" to="766" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">Faster state management for timely dataflow</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matthew</forename><surname>Brookes</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vasiliki</forename><surname>Kalavri</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><surname>Liagouris</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of Real-Time Business Intelligence and Analytics</title>
+		<meeting>Real-Time Business Intelligence and Analytics</meeting>
+		<imprint>
+			<date type="published" when="2019" />
+			<biblScope unit="page" from="1" to="3" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">Characterizing, modeling, and benchmarking rocksdb key-value workloads at facebook</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Zhichao</forename><surname>Cao</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Siying</forename><surname>Dong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sagar</forename><surname>Vemuri</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><forename type="middle">H C</forename><surname>Du</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">18th USENIX Conference on File and Storage Technologies (FAST 20)</title>
+		<meeting><address><addrLine>Santa Clara, CA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2020-02" />
+			<biblScope unit="page" from="209" to="223" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">State management in Apache Flink R : Consistent Stateful Distributed Stream Processing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Paris</forename><surname>Carbone</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stephan</forename><surname>Ewen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gyula</forename><surname>Fóra</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Seif</forename><surname>Haridi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stefan</forename><surname>Richter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kostas</forename><surname>Tzoumas</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the VLDB Endowment</title>
+		<meeting>the VLDB Endowment</meeting>
+		<imprint>
+			<date type="published" when="2017-08" />
+			<biblScope unit="volume">10</biblScope>
+			<biblScope unit="page" from="1718" to="1729" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Integrating Scale out and Fault Tolerance in Stream Processing Using Operator State Management</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Raul</forename><surname>Castro Fernandez</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matteo</forename><surname>Migliavacca</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Evangelia</forename><surname>Kalyvianaki</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Peter</forename><surname>Pietzuch</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2013 ACM SIGMOD International Conference on Management of Data, SIGMOD &apos;13</title>
+		<meeting>the 2013 ACM SIGMOD International Conference on Management of Data, SIGMOD &apos;13<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2013" />
+			<biblScope unit="page" from="725" to="736" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<analytic>
+		<title level="a" type="main">and Mike Barnett. FASTER: A Concurrent Key-Value Store with In-Place Updates</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Badrish</forename><surname>Chandramouli</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Guna</forename><surname>Prasaad</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Donald</forename><surname>Kossmann</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Justin</forename><surname>Levandoski</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">James</forename><surname>Hunter</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2018 International Conference on Management of Data, SIGMOD &apos;18</title>
+		<meeting>the 2018 International Conference on Management of Data, SIGMOD &apos;18<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="275" to="290" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Fay</forename><surname>Chang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeffrey</forename><surname>Dean</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanjay</forename><surname>Ghemawat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wilson</forename><forename type="middle">C</forename><surname>Hsieh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Deborah</forename><forename type="middle">A</forename><surname>Wallach</surname></persName>
+		</author>
+		<imprint>
+			<pubPlace>Mike Burrows, Tushar</pubPlace>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Bigtable: A distributed storage system for structured data</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrew</forename><surname>Chandra</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Robert</forename><forename type="middle">E</forename><surname>Fikes</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Gruber</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceeding of the 7th Symposium on Operating Systems Design and Implementation</title>
+		<meeting>eeding of the 7th Symposium on Operating Systems Design and Implementation</meeting>
+		<imprint>
+			<date type="published" when="2006" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<analytic>
+		<title level="a" type="main">Realtime data processing at facebook</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jerry</forename><surname>Guoqiang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Janet</forename><forename type="middle">L</forename><surname>Chen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shridhar</forename><surname>Wiener</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Anshul</forename><surname>Iyer</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ran</forename><surname>Jaiswal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nikhil</forename><surname>Lei</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wei</forename><surname>Simha</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kevin</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tim</forename><surname>Wilfong</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Serhat</forename><surname>Williamson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Yilmaz</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2016 International Conference on Management of Data</title>
+		<meeting>the 2016 International Conference on Management of Data</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2016" />
+			<biblScope unit="page" from="1087" to="1098" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Benchmarking Cloud Serving Systems with YCSB</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Brian</forename><forename type="middle">F</forename><surname>Cooper</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Adam</forename><surname>Silberstein</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Erwin</forename><surname>Tam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Raghu</forename><surname>Ramakrishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Russell</forename><surname>Sears</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 1st ACM Symposium on Cloud Computing, SoCC &apos;10</title>
+		<meeting>the 1st ACM Symposium on Cloud Computing, SoCC &apos;10<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="143" to="154" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<monogr>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Frank</forename><forename type="middle">Timely</forename><surname>Mcsherry</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Dataflow</surname></persName>
+		</author>
+		<ptr target="https://github.com/TimelyDataflow/timely-dataflow.LastAc-cess" />
+		<imprint>
+			<date type="published" when="2020-03" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">Megaphone: Latency-conscious state migration for distributed streaming dataflows</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Moritz</forename><surname>Hoffmann</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrea</forename><surname>Lattuada</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Frank</forename><surname>Mcsherry</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vasiliki</forename><surname>Kalavri</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><surname>Liagouris</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Timothy</forename><surname>Roscoe</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Proceedings of the VLDB Endowment</title>
+		<imprint>
+			<biblScope unit="volume">12</biblScope>
+			<biblScope unit="issue">9</biblScope>
+			<date type="published" when="2019" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<analytic>
+		<title level="a" type="main">From auto-tuning one size fits all to self-designed and learned data-intensive systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stratos</forename><surname>Idreos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tim</forename><surname>Kraska</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">ACM SIGMOD</title>
+		<imprint>
+			<date type="published" when="2019" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">The data calculator: Data structure design and cost synthesis from first principles and learned cost models</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Stratos</forename><surname>Idreos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kostas</forename><surname>Zoumpatianos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Brian</forename><surname>Hentschel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">S</forename><surname>Michael</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Demi</forename><surname>Kester</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Guo</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2018 International Conference on Management of Data</title>
+		<meeting>the 2018 International Conference on Management of Data</meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2018" />
+			<biblScope unit="page" from="535" to="550" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">High-performance stateful stream processing on solid-state drives</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Gyewon</forename><surname>Lee</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeongyoon</forename><surname>Eo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jangho</forename><surname>Seo</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Taegeon</forename><surname>Um</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Byung-Gon</forename><surname>Chun</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 9th Asia-Pacific Workshop on Systems, APSys &apos;18</title>
+		<meeting>the 9th Asia-Pacific Workshop on Systems, APSys &apos;18<address><addrLine>New York, NY, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>ACM</publisher>
+			<date type="published" when="2018" />
+			<biblScope unit="volume">9</biblScope>
+			<biblScope unit="page" from="1" to="9" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">Mica: A holistic approach to fast in-memory key-value storage</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hyeontaek</forename><surname>Lim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dongsu</forename><surname>Han</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><forename type="middle">G</forename><surname>Andersen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Kaminsky</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 11th USENIX Conference on Networked Systems Design and Implementation, NSDI&apos;14</title>
+		<meeting>the 11th USENIX Conference on Networked Systems Design and Implementation, NSDI&apos;14<address><addrLine>Berkeley, CA, USA</addrLine></address></meeting>
+		<imprint>
+			<publisher>USENIX Association</publisher>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="429" to="444" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">Differential dataflow</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Frank</forename><surname>Mcsherry</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Derek</forename><forename type="middle">Gordon</forename><surname>Murray</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rebecca</forename><surname>Isaacs</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Isard</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">CIDR</title>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b25">
+	<analytic>
+		<title level="a" type="main">Naiad: a timely dataflow system</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">G</forename><surname>Derek</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Frank</forename><surname>Murray</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Rebecca</forename><surname>Mcsherry</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Isaacs</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Paul</forename><surname>Isard</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Martín</forename><surname>Barham</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Abadi</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">SOSP &apos;13: Proceedings of the Twenty-Fourth ACM Symposium on Operating Systems Principles</title>
+		<imprint>
+			<date type="published" when="2013" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b26">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kartik</forename><surname>Shadi A Noghabi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yi</forename><surname>Paramasivam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Navina</forename><surname>Pan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jon</forename><surname>Ramesh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Indranil</forename><surname>Bringhurst</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Roy H</forename><surname>Gupta</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Campbell</surname></persName>
+		</author>
+		<title level="m">Samza: stateful scalable stream processing at linkedin. Proceedings of the VLDB Endowment</title>
+		<imprint>
+			<date type="published" when="2017" />
+			<biblScope unit="volume">10</biblScope>
+			<biblScope unit="page" from="1634" to="1645" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b27">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">A</forename><surname>Shadi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kartik</forename><surname>Noghabi</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yi</forename><surname>Paramasivam</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Navina</forename><surname>Pan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jon</forename><surname>Ramesh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Indranil</forename><surname>Bringhurst</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Roy</forename><forename type="middle">H</forename><surname>Gupta</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Campbell</surname></persName>
+		</author>
+		<title level="m">Samza: Stateful scalable stream processing at linkedin. Proc. VLDB Endow</title>
+		<imprint>
+			<date type="published" when="2017-08" />
+			<biblScope unit="volume">10</biblScope>
+			<biblScope unit="page" from="1634" to="1645" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b28">
+	<monogr>
+		<title level="m" type="main">A survey of state management in big data processing systems</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Quoc-Cuong</forename><surname>To</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Juan</forename><surname>Soto</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Volker</forename><surname>Markl</surname></persName>
+		</author>
+		<imprint/>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b29">
+	<analytic>
+		<title/>
+	</analytic>
+	<monogr>
+		<title level="j">The VLDB Journal</title>
+		<imprint>
+			<biblScope unit="volume">27</biblScope>
+			<biblScope unit="issue">6</biblScope>
+			<biblScope unit="page" from="847" to="872" />
+			<date type="published" when="2018-12" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b30">
+	<analytic>
+		<title level="a" type="main">Nikunj Bhagat, Sailesh Mittal, and Dmitriy Ryaboy. Storm @Twitter</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ankit</forename><surname>Toshniwal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Siddarth</forename><surname>Taneja</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amit</forename><surname>Shukla</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Karthik</forename><surname>Ramasamy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jignesh</forename><forename type="middle">M</forename><surname>Patel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sanjeev</forename><surname>Kulkarni</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jason</forename><surname>Jackson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Krishna</forename><surname>Gade</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Maosong</forename><surname>Fu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jake</forename><surname>Donham</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proceedings of the 2014 ACM SIG-MOD international conference on Management of data (SIGMOD &apos;14)</title>
+		<meeting>the 2014 ACM SIG-MOD international conference on Management of data (SIGMOD &apos;14)</meeting>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b31">
+	<monogr>
+		<title level="m" type="main">NEXMark-A Benchmark for Queries over Data Streams</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pete</forename><surname>Tucker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kristin</forename><surname>Tufte</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vassilis</forename><surname>Papadimos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Maier</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2002" />
+		</imprint>
+		<respStmt>
+			<orgName>OGI School of Science &amp; Engineering at OHSU</orgName>
+		</respStmt>
+	</monogr>
+<note type="report_type">Technical report</note>
+</biblStruct>
+
+<biblStruct xml:id="b32">
+	<monogr>
+		<title level="m" type="main">Nexmark Benchmark Suite</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pete</forename><surname>Tucker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kristin</forename><surname>Tufte</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vassilis</forename><surname>Papadimos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Maier</surname></persName>
+		</author>
+		<imprint>
+			<date type="published" when="2002" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>

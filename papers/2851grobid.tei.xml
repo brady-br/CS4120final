@@ -1,0 +1,739 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" 
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+xsi:schemaLocation="http://www.tei-c.org/ns/1.0 /Users/atharsefid/Desktop/grobid-0.5.3/grobid-home/schemas/xsd/Grobid.xsd"
+ xmlns:xlink="http://www.w3.org/1999/xlink">
+	<teiHeader xml:lang="en">
+		<encodingDesc>
+			<appInfo>
+				<application version="0.5.3" ident="GROBID" when="2020-09-29T02:54+0000">
+					<ref target="https://github.com/kermitt2/grobid">GROBID - A machine learning software for extracting information from scholarly documents</ref>
+				</application>
+			</appInfo>
+		</encodingDesc>
+		<fileDesc>
+			<titleStmt>
+				<title level="a" type="main">Inferring the Network Latency Requirements of Cloud Tenants</title>
+			</titleStmt>
+			<publicationStmt>
+				<publisher/>
+				<availability status="unknown"><licence/></availability>
+			</publicationStmt>
+			<sourceDesc>
+				<biblStruct>
+					<analytic>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeffrey</forename><forename type="middle">C</forename><surname>Mogul</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">Kompella -Google Inc</orgName>
+								<address>
+									<settlement>Mountain View</settlement>
+									<region>CA</region>
+								</address>
+							</affiliation>
+						</author>
+						<author>
+							<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ramana</forename><surname>Rao</surname></persName>
+							<affiliation key="aff0">
+								<orgName type="institution">Kompella -Google Inc</orgName>
+								<address>
+									<settlement>Mountain View</settlement>
+									<region>CA</region>
+								</address>
+							</affiliation>
+						</author>
+						<title level="a" type="main">Inferring the Network Latency Requirements of Cloud Tenants</title>
+					</analytic>
+					<monogr>
+						<imprint>
+							<date/>
+						</imprint>
+					</monogr>
+				</biblStruct>
+			</sourceDesc>
+		</fileDesc>
+		<profileDesc>
+			<abstract>
+				<p>Cloud IaaS and PaaS tenants rely on cloud providers to provide network infrastructures that make the appropriate tradeoff between cost and performance. This can include mechanisms to help customers understand the performance requirements of their applications. Previous research (e.g., Proteus and Cicada) has shown how to do this for network-bandwidth demands, but cloud tenants may also need to meet latency objectives, which in turn may depend on reliable limits on network latency, and its variance, within the cloud providers infrastructure. On the other hand, if network latency is sufficient for an application, further decreases in latency might add cost without any benefit. Therefore, both tenant and provider have an interest in knowing what network latency is good enough for a given application. This paper explores several options for a cloud provider to infer a tenants network-latency demands, with varying tradeoffs between requirements for tenant participation, accuracy of inference, and instrumentation overhead. In particular, we explore the feasibility of a hypervisor-only mechanism, which would work without any modifications to tenant code, even in IaaS clouds.</p>
+			</abstract>
+		</profileDesc>
+	</teiHeader>
+	<text xml:lang="en">
+		<body>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="1">Introduction</head><p>Tenants of Infrastructure-as-a-Service (IaaS) and Platform-as-a-Service (PaaS) cloud providers rely on these providers to provide network infrastructure to connect the various components of their applications. In such environments, both providers and their tenants face critical tradeoffs between cost and performance. Underprovisioned applications fail to meet their System Level Objectives (SLOs); overprovisioned applications add costs for either or both parties.</p><p>While some tenants deeply understand their own network performance needs, many do not. Some lack the technical sophistication to know how their SLO depends on various aspects of infrastructure performance; others just want to spend their efforts focusing on other challenges (e.g., adding new features). The relationship between application performance and network performance can be quite complex <ref type="bibr" target="#b12">[14,</ref><ref type="bibr" target="#b22">24,</ref><ref type="bibr" target="#b24">26]</ref>. Also, cloud providers usually hide the details of the underlying infrastructure, so that they can evolve it without being locked into outdated design decisions (and to avoid revealing their trade secrets). Enterprises that are accustomed to designing around specific network hardware structures cannot easily transfer these experiences to opaque cloud platforms.</p><p>In addition, one oft-stated justification for the use of cloud platforms is that they support rapid flexing of resources in response to varying demands. These variations in demand and in the amount of computational resources allocated to a tenant can complicate the relationship between SLOs and network provisioning. Given these impediments to client-specified network performance requirements, a provider can do a better job of optimizing both customer happiness and infrastructure utilization if the provider can estimate the customer's actual demand, rather than requiring the customer to specify it explicitly. Accurately and dynamically choosing the right level of network provisioning could become part of the "undifferentiated heavy lifting" 1 that a cloud provider offers to its tenants.</p><p>Previous research (e.g., Proteus <ref type="bibr" target="#b23">[25]</ref> and Cicada <ref type="bibr" target="#b15">[17]</ref>) has shown how to do this for network-bandwidth demands. Proteus profiles the bandwidth demands of MapReduce jobs, with the goal of overlapping their use of a shared network during future runs of the same jobs. Cicada uses VM-to-VM bandwidth measurements of long-running cloud applications to drive a machinelearning predictor of future bandwidth requirements, including time-varying requirements typical of user-facing applications; these predictions can then be used for admission control and/or VM placement decisions, to maximize the number of tenants whose demands can be met on a given infrastructure.</p><p>However, many cloud tenants might also need to meet service-level latency objectives, that in turn depend on reliably low network latency within the provider's infrastructure. User-facing applications, in particular, typically must meet "tail-latency" SLOs <ref type="bibr" target="#b8">[10]</ref>, and can suffer significant business impact from high or highly-varying network latencies. On the other hand latency decreases below a certain threshold might add cost without any substantial application-level benefit. Therefore, both tenant and provider have an interest in knowing what network latency is "good enough" for a given application.</p><p>Existing bandwidth-prediction methods cannot directly reveal a cloud application's network latency requirements. In this paper, we explore several options for a cloud provider to infer a tenant's network-latency demands. These options vary in their tradeoffs between requirements for tenant participation, accuracy of inference, and instrumentation overhead. In particular, we explore the feasibility of a hypervisor-only mechanism, which would work without any modifications to tenant code, even in IaaS clouds.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2">Motivation and background</head><p>The thesis of this paper is that cloud providers should infer the network latency demands of their tenants. This depends on several premises: 1. Cloud application performance (sometimes) depends on internal network latency: This premise is well-established, especially for applications where "tail latency" matters <ref type="bibr" target="#b0">[2,</ref><ref type="bibr" target="#b1">3,</ref><ref type="bibr" target="#b8">10,</ref><ref type="bibr" target="#b11">13]</ref>. 2. Network latency within a cloud infrastructure can vary significantly: Several previous papers have reported measurements of cloud-internal network latencies. For example, Wang &amp; Ng reported large variations in EC2 network latencies <ref type="bibr">[23, §IV-B]</ref>; Barker &amp; Shenoy also reported EC2 latencies, but without formally quantifying the variations <ref type="bibr" target="#b4">[6]</ref>. We are unaware of more detailed or recent studies ( <ref type="bibr" target="#b4">[6,</ref><ref type="bibr" target="#b21">23]</ref> are both from 2010), so in §3 we report our own measurements. 3. Cloud providers can control latency: A provider can use one or more of several known mechanisms to control latency. For example, High-bandwidth Ultra-Low Latency (HULL) <ref type="bibr" target="#b1">[3]</ref> uses a form of active switch-queue management, DCTCP <ref type="bibr" target="#b0">[2]</ref>, and sender-based packet pacing, trading a small amount of bandwidth for "dramatically" lower average and tail latencies. Silo <ref type="bibr" target="#b13">[15]</ref> improves on HULL by combining sender-based packet placing and careful VM placement, avoiding the need for either DCTCP (i.e., guest modifications) or switch modifications. Silo also supports a combination of guarantees for both bandwidth and latency. Providers can also leverage enhanced hardware, such multiplequeue QoS support available in many switches, by setting DSCP headers in packets to assign latencysensitive traffic to lightly-loaded queues <ref type="bibr" target="#b11">[13]</ref>. One might also hope for deployment of NICs, such as SENIC <ref type="bibr" target="#b19">[21]</ref>, with scalable hardware support for pacing. 4. Tenant developers do not understand their own network latency requirements: Systems such as Silo assume that the latency-guarantee requirements are known to the tenant. Similarly, systems such as Oktopus <ref type="bibr" target="#b3">[5]</ref> assume that tenants know what bandwidth guarantees to request for their applications. However, our discussions with cloud operators suggest that they do not believe that most tenants actually know what network guarantees to ask for; therefore, most clouds do not provide any way to request network-performance guarantees. (EC2 does support HPC clusters with lowlatency networking, but coupling low-latency networking with the other HPC features yields an inflexible tradeoff between resources.) Based on these premises, we argue that a cloud provider should infer network-latency demands for its tenants. What remains to be shown is whether a cloud provider can infer latency demands. We address this in §4.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.1">Who benefits from latency inference?</head><p>Who would benefit from inference of latency demands, and how? Providers presumably want to find a Pareto-optimal operating point, which maximizes both a provider's own profit and that of its tenants (since happy tenants are more likely to continue as customers). Different tenants are likely to have different tradeoffs between latency demands and bandwidth demands, so a provider that knows these demands can allocate its resources so as to balance them appropriately, while making the most efficient use of its infrastructure (i.e., serving as many tenants as possible using a given set of resources).</p><p>A provider that knows whether a tenant's performance problems are attributable to network latency can also do better at responding to complaints about performance. Tenants want to understand if and how they need to improve their applications or purchase more resources. Latency inference can help them understand the relationship between network latency and their application's SLO. (Wu et al. have proposed Virtual Network Diagnosis as a Service <ref type="bibr" target="#b22">[24]</ref> as a step in this direction).</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="2.2">Using inferred latency demands</head><p>A provider can use several different methods for balancing resource allocations between tenants. It can do admission control, to avoid overloading its infrastructure. It can change VM placement (as in Oktopus and Silo) to improve network locality or reduce interference. It can reduce the sending pace of latency-insensitive VMs, so as to provide better latency to latency-sensitive VMs (as in HULL and Silo). It can change DSCP settings, to shift flows between switch queues. It can use this information for planning infrastructure upgrades and expansions.</p><p>A provider may want to to adjust the relative prices of VMs, bandwidth guarantees, and latency guarantees, to optimize the profit it makes from its resources, while offering customers an opportunity to pay for better application performance. Latency-insensitive tenants would not pay for premium service, and so would experience higher network latency -but would not care.</p><p>For example, the provider could say "you currently are paying us for 99th %ile network-level latency SLO of x usec, which appears to be causing your application to have a 99th %ile latency SLO of y msec. If you wish to pay us for network latency x ′ &lt; x, we predict your 99th %ile application latency will decline to y ′ &lt; y."  Methodology Due to documented issues with using "ping" (ICMP ECHO) for measuring IaaS latencies <ref type="bibr" target="#b21">[23]</ref>, we measured TCP latencies using the TCP RR (requestresponse) function of the netperf tool. We used unmodified netperf-2.6.0, but compiled to enable histogram support for TCP RR latencies 2 . We used the default 1-byte message length, and ran 60-second trials every 15 minutes over a period of several days.</p><p>We ran our tests on several IaaS providers, anonymized as A, B, and C. (We do not wish anyone to use these results to compare between specific providers, since they are hardly definitive.) On each provider, we rented two VMs (the smallest dedicated-core instances available), running stock Ubuntu 14.04 or 14.10.</p><p>For each trial, we post-processed the histogram to obtain 50th, 90th, 99th, and 99.9th-%tile latencies. <ref type="figure" target="#fig_0">Fig. 1</ref> shows the time series for providers A and B. (We did not try to measure exactly the same period for all providers. The results for C were too boring to include, and most of the high-latency samples for C might be spurious, because we may have failed to obtain dedicated cores.)</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Results</head><p>The results of our simple study suggest that, while 90th-percentile latencies are typically close to the median, the 99th percentile is often significantly larger, and at least for Provider B, can vary tremendously from hour to hour. (Note that since we experimented with only two VMs per provider, this does not mean such variations do not exist for other providers.) For Providers A and B, the 99.9th percentile (which might be significant for applications sensitive to tail latency) is typically on the order of a few msec.</p><p>The study therefore suggests that tail-latency-sensitive tenants could benefit from a provider that can detect this sensitivity and re-balance resources in response.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4">Using correlation for latency inference</head><p>Our goal is to infer the causal relationship between network latency and application-level latency (i.e., the application's latency SLO). In particular, we would like to find the threshold (if any) below which any decreases in network latency would give no further SLO improvements. We might also want to know how dramatically application latency increases when the network latency exceeds this threshold -that is, is application latency highly sensitive to small increases in network latency, or can the application tolerate these increases without userperceived slowdowns? (For example, an application with poorly-chosen timeouts could seriously magnify a slight change in network latency.)</p><p>One could run controlled experiments (similar to what Proteus <ref type="bibr" target="#b23">[25]</ref> did for bandwidth) that measure application-level latency, as the network latency is explicitly varied across a chosen range; the shape of the resulting curve would reveal the latency threshold(s). Alternatively, these experiments could vary another parameter under the provider's control, such as packet priorities (set, as described in §2, using DSCP headers). We would then need to apply statistical methods to establish whether an observed correlation between network and application latencies is real (i.e., high-confidence) or accidental, and to extract the latency thresholds from possibly noisy samples. Prior work by Cohen et al. <ref type="bibr" target="#b7">[9]</ref> suggests that such a correlation-based approach can be made to work.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.1">Challenges for latency inference</head><p>In order to use statistical correlation to discover how network latency affects an application's latency SLO, we need to solve several practical problems. Solving these problems in an IaaS system, without requiring changes to tenant code -that is, primarily within the hypervisorpresents challenges:</p><p>• Measuring network latency: The hypervisor can record when a guest sends and receives packets, but without additional meta-information, converting these timestamps to round-trip times (RTTs) is tricky. We also need to be able to separate network latencies from service latencies, either at a tenant VM or at a provider's service (such as a storage system).</p><p>• Measuring application-level performance effects:</p><p>How can we measure effects on an application's performance? Is there a way for a provider to measure these effects without any modifications to a tenant's code? • Perturbing network latency: If the natural variation in network latency is too small to establish a correlation, how can the hypervisor inject more latency? How much latency should it inject, and how often? • Attributing network latency to the correct SLOrelated events: Assuming that the hypervisor can measure both network latencies and application latencies, for complex applications (with multiple tiers and perhaps multiple entry points), how does the provider connect these measurements? <ref type="figure">Figure 2</ref> illustrates how solutions to these problems, and others, fit together into an overall design.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head>Figure 2: System design for latency correlation</head><p>We now describe some approaches to these challenges.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.2">Obtaining network-latency variation data</head><p>We need to generate a time series of the networklatency variations experienced by a VM, sampled often enough to detect relatively rare latency spikes, without imposing a lot of overhead. To do this without any tenant cooperation, we considered several options, including:</p><p>• Round-trip timestamps: Since IaaS providers typically encapsulate tenant packets using protocols such as GRE (RFC 2784) or VXLAN (RFC 7348), one could add a pair of timestamp fields to the encapsulation headers. The sending hypervisor would set a "sent timestamp" field, which would be echoed by the remote hypervisor in a "received timestamp" field on the next packet sent by the same tenant from the remote side. The sender can thus calculate delays without additional per-packet state; however, this does add overhead 3 , and if the receiving VM has nothing to send for a while, the measured RTT could be inflated.</p><p>• Monitoring TCP headers: For tenants using TCP (without IP-level encryption), the hypervisor could monitor TCP headers and run the same RTT estimator as a typical TCP stack. This avoids any on-thewire overheads, but requires per-flow (rather than per-VM-pair) state in the hypervisor. (Experience with vSnoop <ref type="bibr" target="#b14">[16]</ref> suggests that TCP-snooping in the hypervisor actually scales fairly well.) While TCP-snooping measures stack-to-stack RTTs, without any confounding latencies from the tenants or services, it could be tricky to filter out the effects of TCP's delayed ACK. While simply measuring network delays can yield a time series, the available techniques all have drawbacks -es-pecially if a given VM sees little natural variation.</p><p>However, we do not need to restrict ourselves to measurements! Recall that our goal is to find the correlation between network delays and application delays; therefore, one other approach is:</p><p>• Injecting a detectable pattern of latency increases and decreases: the provider can correlate against this pattern, rather than a measured time series. Assume that the hypervisor can delay tenant-transmitted packets (as we discuss in §4.3) either by 0 or D msec, and can change between 0 and D every T msec, in a known pattern of length L. This pattern is (in effect) a L-bit binary number; if it is properly chosen, it should be uncorrelated with the actual variations in network delay, and so if the added delay has any effect on application SLO, this effect should be detectable by a correlator that knows the pattern, in much the same way that a GPS receiver detects GPS satellites. (GPS uses pseudo-random codes, also called 'pseudo-noise" or "PN" sequences <ref type="bibr">[1]</ref>.) The hypervisor might need to vary D and T to discover the threshold at which network latency has an effect on SLO, for any given application.</p><p>The PN codes can be chosen, as for GPS, to be unique to each latency injection point, and with minimal correlation between codes (they should be "highly orthogonal") <ref type="bibr" target="#b2">4</ref> . This solves the problem of how to attribute SLO variations to network latencies, since it allows the correlation-calculator to attribute SLO variations to a specific latency injector. PN-coding also should allow us to separate network latencies from service latencies.</p><p>Therefore, we believe that injecting latency changes using PN codes is the most useful way to obtain a known, varying time series of network latencies. It would be useful to couple this with TCP-snooping measurements, which can establish a baseline for latency and its variability between each pair of VMs; this may help with debugging, and to set the values for D and T .</p><p>How much delay do we need to inject, and at what "bit-rate"? We do not yet know; we speculate that the rate cannot be higher than the usual 1KHz clock tick rate, and the fall-time for removing X msec of added delay could be as high as X. For applications that act as lowpass filters, the useful bit rate could be even lower.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.3">Network-latency injection mechanisms</head><p>We would like a scalable way for a hypervisor to inject network delays on the packets sent by specific VMs, and with reasonably accuracy. Existing software components, such as dummynet <ref type="bibr" target="#b5">[7]</ref>, can achieve reasonably accurate delays at granularities based on the clock-interrupt resolution (for Linux, typically 1 msec). This does require buffering delayed packets in the hypervisor; at 10 Gbps, delaying all packets by 10 msec requires up to 12.5</p><p>Mbytes of extra buffer space (although we do not expect to delay all packets at any given time).</p><p>The provider can also inject latency indirectly, using any of the knobs it can use to favor or dis-favor specific traffic. E.g., we can represent PN codes using one DSCP (priority) setting for "on" bits, and another for "off" bits. Changing priorities, instead of explicitly delaying packets, also allows finer-grained manipulation of network delays, but perhaps with less-predictable values.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.4">Monitoring application latency</head><p>Our most difficult challenge is to measure application latency for IaaS tenants. If we assume that the tenant application and OS cannot be modified, how do we know what events to measure? The options include:</p><p>• Passive network-based measurements: For example, many cloud customers use provider-supplied loadbalancer (LB) services (e.g., <ref type="bibr" target="#b18">[20]</ref>), at which the provider can measure high-level latencies directly.</p><p>(However, not all applications use a provider's LB: e.g., those that have only one front-end, or that use Direct Server Return, which bypasses the LB for responses.) Another possible approach is to measure the tenant's network traffic (bits/sec), since an application waiting for message arrivals might handle fewer requests/sec, reducing its traffic. This is especially true for "chatty" applications <ref type="bibr" target="#b10">[12]</ref>, but perhaps not as applicable to others (e.g., applications that use several sessions in parallel). Cloud providers already measure network traffic, because they typically bill for it at relatively high prices.</p><p>• Hypervisor-based measurements: Typically, when an application VM blocks waiting for a network response, the guest OS will issue a reserved instruction (such as HLT or MWAIT <ref type="bibr" target="#b20">[22]</ref>) to release the CPU core.</p><p>The resulting "vmexit" is handled by the hypervisor, which can easily measure the time spent in this state using the cycle-counter. We can therefore use blocked-VM time as a proxy for application-level delay.</p><p>In conjunction with the use of PN-coded delay injection, this approach should work even if the VM that blocks is not the VM where the delay is injected. For example, we can correlate blocked-VM time at the application's front-end VM, even if the delays are being inserted primarily in lower tiers of the application.</p><p>However, this approach will not identify application stalls if the available parallelism in the workload keeps all of the application cores busy, even while end-to-end latency is intolerable. While passive network-based and hypervisor-based measurements might suffice for some applications, we do not see a zero-modification approach that would work in all cases. Further, while these techniques might allow the provider to measure the correlation between network latency and application latency, they cannot tell the provider what top-level latencies are tolerable (that is, what constitutes an SLO violation).</p><p>Therefore, for full generality, we may be forced to use some explicit application modification to support latency inference. This can be quite simple and low-cost; for example, a library linked with the application that provides API calls to record start and end timestamps for application-identified operations. These timestamps can be forwarded to the provider (e.g., via UDP packets to a reserved address) for further processing. Commercial middleware that does a much more sophisticated version of this (for example, AppDynamics <ref type="bibr" target="#b2">[4]</ref>, which does automatic code injection) is widely used, suggesting that many cloud customers do not just tolerate these modifications, they are willing to pay for them.</p><p>With customer approval, but no code modification, the provider can also inject dummy requests into the application to measure its latency. Cloud customers already use probing systems to measure operation latency <ref type="bibr" target="#b6">[8]</ref>.</p><p>Note that some applications that use a partitionaggregate method may set a top-level latency target, and if some underlying RPCs are delayed too long, may return reduced-accuracy results, rather than exceeding their latency SLO. For this applications, we would have to correlate network delays with an accuracy metric, rather than a top-level latency metric; accuracy metrics are obviously application-specific.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="4.5">Validation</head><p>The next step is to validate our approach. We need to validate some assumptions: to experiment on real cloud applications to learn how significantly network latency affects SLOs; to characterize, using the various options we have discussed, how well a provider can control network latency, and how well it can measure SLOs. We need to understand how to choose PN codes and their amplitudes. Finally, we must validate the overall approach to show that it produces useful insights.</p></div>
+<div xmlns="http://www.tei-c.org/ns/1.0"><head n="5">Conclusion</head><p>We assert that cloud platforms should infer how tenant applications depend on network latency, as part of the "undifferentiated heavy lifting" that makes the cloud valuable to enterprises, and that PN codes may enable this. As with any inference-based system, many challenges remain to be addressed before it is practical and real; prior experience does suggest that it is plausible.</p></div><figure xmlns="http://www.tei-c.org/ns/1.0" xml:id="fig_0"><head>Figure 1 :</head><label>1</label><figDesc>Figure 1: Latency measurements (log-scaled Y -axis)</figDesc></figure>
+
+			<note place="foot" n="1"> A phrase from Jeff Bezos [18].</note>
+
+			<note place="foot" n="3"> A simple latency-measurement study Since we found no recent studies that quantify network latency variation across multiple providers, we conducted our own small-scale measurement study. Our limited study probably does not reflect either the typical or worst-case latency variations in current clouds. We did not design this study as a basis for comparing providers.</note>
+
+			<note place="foot" n="2"> Note that this histogram uses logarithmic decades, each divided into 10 linear buckets, resulting in a factor-of-2 worst-case uncertainty. E.g., one bucket covers all samples between 1 and 2 msec, while another covers all samples between 800 and 900 usec.</note>
+
+			<note place="foot" n="3"> On-the-wire overhead could be reduced using MGRP, which &quot;transparently piggybacks application packets inside the often significant amounts of empty padding contained in typical probes&quot; [19].</note>
+
+			<note place="foot" n="4"> Techniques exist for generating orthogonal PN codes [11], but we have not yet found a description of their computational costs.</note>
+		</body>
+		<back>
+
+			<div type="acknowledgement">
+			</div>
+
+			<div type="references">
+
+				<listBibl>
+
+<biblStruct xml:id="b0">
+	<analytic>
+		<title level="a" type="main">Balaji Prabhakar, Sudipta Sengupta, and Murari Sridharan. Data Center TCP (DCTCP)</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mohammad</forename><surname>Alizadeh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Albert</forename><surname>Greenberg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><surname>Maltz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jitendra</forename><surname>Padhye</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Parveen</forename><surname>Patel</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. SIGCOMM</title>
+		<meeting>SIGCOMM</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b1">
+	<analytic>
+		<title level="a" type="main">Less is More: Trading a Little Bandwidth for Ultra-low Latency in the Data Center</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Mohammad</forename><surname>Alizadeh</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Abdul</forename><surname>Kabbani</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Tom</forename><surname>Edsall</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Balaji</forename><surname>Prabhakar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amin</forename><surname>Vahdat</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Masato</forename><surname>Yasuda</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. NSDI</title>
+		<meeting>NSDI</meeting>
+		<imprint>
+			<date type="published" when="2012" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b2">
+	<monogr>
+		<title level="m" type="main">Application Performance Management &amp; Monitoring</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Appdynamics</surname></persName>
+		</author>
+		<ptr target="http://http://www.appdynamics.com/.Accessed" />
+		<imprint>
+			<biblScope unit="page" from="2015" to="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b3">
+	<analytic>
+		<title level="a" type="main">Towards Predictable Datacenter Networks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hitesh</forename><surname>Ballani</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Paolo</forename><surname>Costa</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Thomas</forename><surname>Karagiannis</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ant</forename><surname>Rowstron</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. SIGCOMM</title>
+		<meeting>SIGCOMM</meeting>
+		<imprint>
+			<date type="published" when="2011" />
+			<biblScope unit="page" from="242" to="253" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b4">
+	<analytic>
+		<title level="a" type="main">Empirical Evaluation of Latency-sensitive Application Performance in the Cloud</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kenneth</forename><surname>Sean</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Prashant</forename><surname>Barker</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Shenoy</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. MMSys</title>
+		<meeting>MMSys</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="35" to="46" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b5">
+	<analytic>
+		<title/>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Marta</forename><surname>Carbone</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Luigi</forename><surname>Rizzo</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Dummynet Revisited. SIGCOMM Comput. Commun. Rev</title>
+		<imprint>
+			<biblScope unit="volume">40</biblScope>
+			<biblScope unit="issue">2</biblScope>
+			<biblScope unit="page" from="12" to="20" />
+			<date type="published" when="2010-04" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b6">
+	<monogr>
+		<title level="m" type="main">Using Probes For Monitoring</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Cloudify</surname></persName>
+		</author>
+		<ptr target="http://getcloudify.org/guide/2.7/pluginsandprobes/probes.html.Accessed" />
+		<imprint>
+			<biblScope unit="page" from="2015" to="2016" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b7">
+	<analytic>
+		<title level="a" type="main">Correlating Instrumentation Data to System States: A Building Block for Automated Diagnosis and Control</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ira</forename><surname>Cohen</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Moises</forename><surname>Goldszmidt</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Terence</forename><surname>Kelly</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Julie</forename><surname>Symons</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeffrey</forename><forename type="middle">S</forename><surname>Chase</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. OSDI</title>
+		<meeting>OSDI</meeting>
+		<imprint>
+			<date type="published" when="2004" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b8">
+	<monogr>
+				<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeffrey</forename><surname>Dean</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Luiz André</forename><surname>Barroso</surname></persName>
+		</author>
+		<title level="m">The Tail at Scale. CACM</title>
+		<imprint>
+			<date type="published" when="2013-02" />
+			<biblScope unit="volume">56</biblScope>
+			<biblScope unit="page" from="74" to="80" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b9">
+	<analytic>
+		<title level="a" type="main">A New Method for Generating Sets of Orthogonal Sequences for a Synchronous CDMA System</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Helen</forename><surname>Donelan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Timothy O&amp;apos;</forename><surname>Farrell</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Cryptography and Coding</title>
+		<editor>Michael Walker</editor>
+		<meeting><address><addrLine>Berlin Heidelberg</addrLine></address></meeting>
+		<imprint>
+			<publisher>Springer</publisher>
+			<date type="published" when="1999" />
+			<biblScope unit="volume">1746</biblScope>
+			<biblScope unit="page" from="56" to="62" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b10">
+	<analytic>
+		<title level="a" type="main">You don&apos;t know jack about network performance</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Kevin</forename><surname>Fall</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steve</forename><surname>Mccanne</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="j">Queue</title>
+		<imprint>
+			<biblScope unit="volume">3</biblScope>
+			<biblScope unit="issue">4</biblScope>
+			<biblScope unit="page" from="54" to="59" />
+			<date type="published" when="2005-05" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b11">
+	<analytic>
+		<title level="a" type="main">Queues don&apos;t matter when you can JUMP them!</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Matthew</forename><forename type="middle">P</forename><surname>Grosvenor</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Malte</forename><surname>Schwarzkopf</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ionel</forename><surname>Gog</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">N</forename><forename type="middle">M</forename><surname>Robert</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Andrew</forename><forename type="middle">W</forename><surname>Watson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Steven</forename><surname>Moore</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jon</forename><surname>Hand</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Crowcroft</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. NSDI</title>
+		<meeting>NSDI</meeting>
+		<imprint>
+			<date type="published" when="2015-05" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b12">
+	<analytic>
+		<title level="a" type="main">Performance Analysis of High Performance Computing Applications on the Amazon Web Services Cloud</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Keith</forename><forename type="middle">R</forename><surname>Jackson</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lavanya</forename><surname>Ramakrishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Krishna</forename><surname>Muriki</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shane</forename><surname>Canon</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Shreyas</forename><surname>Cholia</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">John</forename><surname>Shalf</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Harvey</forename><forename type="middle">J</forename><surname>Wasserman</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Nicholas</forename><forename type="middle">J</forename><surname>Wright</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. CLOUDCOM</title>
+		<meeting>CLOUDCOM</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="159" to="168" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b13">
+	<monogr>
+		<title level="m" type="main">Silo: Predictable Message Completion Time in the Cloud</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Keon</forename><surname>Jang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Justine</forename><surname>Sherry</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hitesh</forename><surname>Ballani</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Toby</forename><surname>Moncaster</surname></persName>
+		</author>
+		<idno>MSR- TR-2013-95</idno>
+		<imprint>
+			<date type="published" when="2013" />
+			<pubPlace>Microsoft Research</pubPlace>
+		</imprint>
+	</monogr>
+<note type="report_type">Technical Report</note>
+</biblStruct>
+
+<biblStruct xml:id="b14">
+	<analytic>
+		<title level="a" type="main">vSnoop: Improving TCP Throughput in Virtualized Environments via Acknowledgement Offload</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ardalan</forename><surname>Kangarlou</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Sahan</forename><surname>Gamage</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ramana</forename><surname>Rao Kompella</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dongyan</forename><surname>Xu</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. SC</title>
+		<meeting>SC</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="1" to="11" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b15">
+	<analytic>
+		<title level="a" type="main">Cicada: Introducing Predictive Guarantees for Cloud Networks</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Katrina</forename><surname>Lacurts</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jeffrey</forename><forename type="middle">C</forename><surname>Mogul</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hari</forename><surname>Balakrishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yoshio</forename><surname>Turner</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. HotCloud</title>
+		<meeting>HotCloud</meeting>
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b16">
+	<monogr>
+		<title level="m" type="main">Transcript of interview with Jeff Bezos</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">O&amp;apos;</forename><surname>Tim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Reilly</surname></persName>
+		</author>
+		<ptr target="http://archive.oreilly.com/network/2006/12/20/web-20-bezos.html" />
+		<imprint>
+			<date type="published" when="2006" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b17">
+	<analytic>
+		<title level="a" type="main">Passive Aggressive Measurement with MGRP</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Pavlos</forename><surname>Papageorge</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Justin</forename><surname>Mccann</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Michael</forename><surname>Hicks</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. SIGCOMM</title>
+		<meeting>SIGCOMM</meeting>
+		<imprint>
+			<date type="published" when="2009" />
+			<biblScope unit="page" from="279" to="290" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b18">
+	<analytic>
+		<title level="a" type="main">Ananta: Cloud Scale Load Balancing</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Parveen</forename><surname>Patel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Deepak</forename><surname>Bansal</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lihua</forename><surname>Yuan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ashwin</forename><surname>Murthy</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Albert</forename><surname>Greenberg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">David</forename><forename type="middle">A</forename><surname>Maltz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Randy</forename><surname>Kern</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hemant</forename><surname>Kumar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Marios</forename><surname>Zikos</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Hongyu</forename><surname>Wu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Changhoon</forename><surname>Kim</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Naveen</forename><surname>Karri</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. SIGCOMM</title>
+		<meeting>SIGCOMM</meeting>
+		<imprint>
+			<date type="published" when="2013" />
+			<biblScope unit="page" from="207" to="218" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b19">
+	<analytic>
+		<title level="a" type="main">SENIC: Scalable NIC for Endhost Rate Limiting</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Yilong</forename><surname>Sivasankar Radhakrishnan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Vimalkumar</forename><surname>Geng</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Abdul</forename><surname>Jeyakumar</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">George</forename><surname>Kabbani</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Amin</forename><surname>Porter</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Vahdat</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. NSDI</title>
+		<meeting>NSDI</meeting>
+		<imprint>
+			<date type="published" when="2014" />
+			<biblScope unit="page" from="475" to="488" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b20">
+	<monogr>
+		<title level="m" type="main">Handling of Guest-Mode MON-ITOR and MWAIT</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">L</forename><surname>Gabriel</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Somlo</surname></persName>
+		</author>
+		<ptr target="http://www.contrib.andrew.cmu.edu/∼somlo/OSXKVM/mwait.html" />
+		<imprint>
+			<date type="published" when="2014" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b21">
+	<analytic>
+		<title level="a" type="main">The Impact of Virtualization on Network Performance of Amazon EC2 Data Center</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Guohui</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">T</forename><forename type="middle">S Eugene</forename><surname>Ng</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. INFOCOM</title>
+		<meeting>INFOCOM</meeting>
+		<imprint>
+			<date type="published" when="2010" />
+			<biblScope unit="page" from="1163" to="1171" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b22">
+	<analytic>
+		<title level="a" type="main">Virtual Network Diagnosis As a Service</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Wenfei</forename><surname>Wu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Guohui</forename><surname>Wang</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Aditya</forename><surname>Akella</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Anees</forename><surname>Shaikh</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. SOCC</title>
+		<meeting>SOCC</meeting>
+		<imprint>
+			<date type="published" when="2013" />
+			<biblScope unit="volume">9</biblScope>
+			<biblScope unit="page">15</biblScope>
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b23">
+	<analytic>
+		<title level="a" type="main">The Only Constant is Change: Incorporating Time-varying Network Reservations in Data Centers</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Di</forename><surname>Xie</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Y</forename><forename type="middle">Charlie</forename><surname>Ning Ding</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Ramana</forename><surname>Hu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><surname>Kompella</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. SIGCOMM</title>
+		<meeting>SIGCOMM</meeting>
+		<imprint>
+			<date type="published" when="2012" />
+			<biblScope unit="page" from="199" to="210" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+<biblStruct xml:id="b24">
+	<analytic>
+		<title level="a" type="main">Profiling Network Performance for Multi-tier Data Center Applications</title>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Minlan</forename><surname>Yu</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Albert</forename><surname>Greenberg</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Dave</forename><surname>Maltz</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Jennifer</forename><surname>Rexford</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Lihua</forename><surname>Yuan</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Srikanth</forename><surname>Kandula</surname></persName>
+		</author>
+		<author>
+			<persName xmlns="http://www.tei-c.org/ns/1.0"><forename type="first">Changhoon</forename><surname>Kim</surname></persName>
+		</author>
+	</analytic>
+	<monogr>
+		<title level="m">Proc. NSDI</title>
+		<meeting>NSDI</meeting>
+		<imprint>
+			<date type="published" when="2011" />
+			<biblScope unit="page" from="57" to="70" />
+		</imprint>
+	</monogr>
+</biblStruct>
+
+				</listBibl>
+			</div>
+		</back>
+	</text>
+</TEI>
